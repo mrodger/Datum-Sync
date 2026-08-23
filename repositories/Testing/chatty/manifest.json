@@ -1,0 +1,9 @@
+{
+  "name": "chatty",
+  "description": "Integration fixture: emits log lines continuously.",
+  "version": "0.1.0",
+  "parameters": [{"name": "COUNT", "type": "INTEGER", "default": 400}],
+  "outputs": [{"name": "out", "type": "text/plain", "primary": true}],
+  "services": ["job_submitter"],
+  "timeout_seconds": 120
+}

@@ -22,7 +22,7 @@ from typing import Any
 
 import asyncpg
 
-from datum_sync import config, jobs
+from datum_sync import config, jobs, uploads
 from datum_sync.runner import Runner
 
 POLL_SECONDS = 5.0
@@ -145,6 +145,15 @@ class Worker:
                 await jobs.finish(conn, job_id, "failed", error=str(e))
                 return
 
+            try:
+                params = uploads.resolve_params(
+                    manifest, json.loads(job["params"])
+                )
+            except uploads.UploadError as e:
+                # The upload was swept between submit and claim.
+                await jobs.finish(conn, job_id, "failed", error=str(e))
+                return
+
             ws_path = (
                 config.REPOSITORIES_PATH / job["repository"] / job["workspace"]
             )
@@ -156,7 +165,7 @@ class Worker:
             runner = Runner(
                 workspace_path=ws_path,
                 manifest=manifest,
-                params=json.loads(job["params"]),
+                params=params,
                 artifact_dir=artifact_dir,
                 sink=sink,
             )

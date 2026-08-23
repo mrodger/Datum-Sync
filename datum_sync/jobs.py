@@ -35,6 +35,14 @@ class JobError(Exception):
     """Job cannot be submitted as asked."""
 
 
+class WorkspaceNotFound(JobError):
+    """No published workspace by that name.
+
+    Separate from JobError so the API can answer 404 rather than 400 without
+    matching on the message text.
+    """
+
+
 def _truncate(text: str) -> str:
     if len(text) <= _MAX_NOTIFY_TEXT:
         return text
@@ -66,7 +74,7 @@ async def load_manifest_for(
         workspace,
     )
     if row is None:
-        raise JobError(f"no published workspace {repository}/{workspace}")
+        raise WorkspaceNotFound(f"no published workspace {repository}/{workspace}")
     return Manifest.model_validate(json.loads(row["manifest"]))
 
 
@@ -197,13 +205,22 @@ async def log(
 ) -> None:
     if level not in ("debug", "info", "warn", "error"):
         level = "info"
-    await conn.execute(
-        "INSERT INTO job_log (job_id, level, message) VALUES ($1, $2, $3)",
+    # The row id travels in the notification so an SSE reader can tell a
+    # notification it already replayed from job_log from a new one. Without it
+    # the reader has to choose between dropping events and duplicating them:
+    # it must LISTEN before reading history (or it loses whatever lands in
+    # between), which means the first notifications it sees are usually ones
+    # the history read also returns.
+    log_id = await conn.fetchval(
+        """
+        INSERT INTO job_log (job_id, level, message)
+        VALUES ($1, $2, $3) RETURNING id
+        """,
         job_id,
         level,
         message,
     )
-    await notify(conn, job_id, event="log", level=level, message=message)
+    await notify(conn, job_id, event="log", id=log_id, level=level, message=message)
 
 
 async def progress(

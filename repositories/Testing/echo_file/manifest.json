@@ -1,0 +1,12 @@
+{
+  "name": "echo_file",
+  "description": "Integration fixture: echoes an uploaded file back as an artifact.",
+  "version": "0.1.0",
+  "parameters": [
+    {"name": "INPUT_FILE", "type": "FILE", "required": true},
+    {"name": "LABEL", "type": "STRING", "default": "none"}
+  ],
+  "outputs": [{"name": "echoed", "type": "text/plain", "primary": true}],
+  "services": ["job_submitter", "data_upload"],
+  "timeout_seconds": 60
+}

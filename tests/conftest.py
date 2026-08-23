@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 
 from datum_sync import config
+from datum_sync.worker import WORKER_LOCK
 
 TEST_REPO = "_pytest"
 
@@ -40,6 +41,24 @@ async def db():
         await conn.close()
         pytest.skip(f"{busy} live job(s) in the queue; refusing to disturb them")
 
+    # The reverse hazard: a running worker claims the jobs these tests submit
+    # and fails them against the fixture's /nonexistent path, so a test
+    # asserting on a job it queued sees 'failed' for reasons of its own making.
+    # Read pg_locks rather than trying the lock -- taking it, even briefly,
+    # would make a worker starting in that instant exit.
+    worker = await conn.fetchval(
+        """
+        SELECT count(*) FROM pg_locks
+        WHERE locktype = 'advisory' AND granted
+          AND classid = $1 AND objid = $2
+        """,
+        WORKER_LOCK >> 32,
+        WORKER_LOCK & 0xFFFF_FFFF,
+    )
+    if worker:
+        await conn.close()
+        pytest.skip("a worker is running; it would claim these tests' jobs")
+
     try:
         yield conn
     finally:
@@ -61,6 +80,10 @@ async def workspace(db):
             {"name": "LOUD", "type": "BOOLEAN", "default": False},
         ],
         "outputs": [{"name": "out", "type": "text/plain", "primary": True}],
+        # job_submitter only: the API tests rely on this workspace *not*
+        # publishing data_streaming, so the service gate has something real to
+        # refuse.
+        "services": ["job_submitter"],
         "timeout_seconds": 20,
     }
     repo_id = await db.fetchval(

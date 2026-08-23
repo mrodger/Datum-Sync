@@ -1,0 +1,9 @@
+{
+  "name": "slow",
+  "description": "Integration fixture: logs and reports progress while sleeping.",
+  "version": "0.1.0",
+  "parameters": [{"name": "SECONDS", "type": "INTEGER", "default": 30}],
+  "outputs": [{"name": "out", "type": "text/plain", "primary": true}],
+  "services": ["job_submitter", "data_streaming"],
+  "timeout_seconds": 120
+}
