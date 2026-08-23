@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+*.env
+
+# Database
+*.db
+*.sqlite
+
+# Secrets
+*.key
+*.pem
+*.p12
+
+# Logs
+logs/
+*.log
+*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Uploads / artifacts (runtime data, not source)
+data/uploads/
+data/artifacts/
+repositories/*/*/runs/
+
+# Hosted service builds
+serve/
