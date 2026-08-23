@@ -296,7 +296,10 @@ GET  /docs
 **Standard additions over naive REST:**
 - `Idempotency-Key` header on job submission — safe to retry
 - Consistent error envelope: `{"status": 400, "code": "INVALID_PARAMETER", "message": "...", "detail": {}}`
-- Per-service-account rate limiting
+- Per-service-account rate limiting — *not yet built*, and a resource quota when
+  it is. Not to be confused with the consent-screen login limit under Tokens
+  below, which exists and guards a guessable secret rather than a share of
+  capacity.
 - Bulk job submission: `POST /rest/v1/transformations/submit-bulk`
 
 ---
@@ -354,12 +357,45 @@ Required by Claude.ai and easy to leave out:
   in at the consent screen.
 - **RFC 8707 audience binding.** Tokens are minted for `PUBLIC_URL + /mcp` and
   refused anywhere else, so a compromised downstream server cannot replay its
-  tokens here. `PUBLIC_URL` must be set explicitly in the environment: it is the
-  audience, and `.env` loses to an exported variable of the same name.
+  tokens here. `PUBLIC_URL` is the audience *and* the issuer, so the server
+  **refuses to start without it** rather than defaulting to a localhost guess:
+  a wrong value serves discovery happily and mints tokens no client can use,
+  and the failure then surfaces at the client as an opaque authorization error
+  with nothing pointing back at the setting. The resolved value is logged at
+  startup for the same reason — set-but-wrong fails exactly like correct until
+  a client tries to use a token. Note `.env` loses to an exported variable of
+  the same name.
 - **Refresh rotation with reuse detection** (OAuth 2.1 §4.14.2). A credential
   presented twice means someone else has a copy, so the whole grant family is
   revoked — not just the second presentation refused, because the first one
   already produced a working token.
+
+The consent screen is the only place a *guessable* secret is accepted, so it is
+the only place rate-limited: five failures for a given account name inside 15
+minutes returns 429 with `Retry-After`. Three things about that limit are
+deliberate.
+
+- It is keyed on the **submitted account name, not the client address**. Behind
+  a tunnel or reverse proxy every request arrives from one address, so an
+  address-keyed limit either locks out all clients at once or does nothing —
+  and trusting `X-Forwarded-For` instead would let the caller choose its own key
+  and opt out entirely.
+- It is checked **before the database is consulted**, so a locked-out name that
+  does not exist behaves identically to one that does. A limiter that only
+  counted real accounts would answer 429 for a name that exists and 401 for one
+  that does not, turning a defence into account enumeration.
+- It lives in `auth.authenticate_password` rather than in the route, so it
+  cannot be left off a second caller.
+
+Separately, a semaphore bounds *concurrent* argon2 verifications. Argon2 is
+deliberately expensive and an unknown account still pays for a full hash (so the
+form does not leak which names exist), which makes the login a cheap way to burn
+CPU. The aim there is that the rest of the server stays responsive, not that any
+login is refused — so it is a concurrency bound, not a second rate limit.
+
+Bearer tokens are not rate-limited. They are 32 random bytes; there is no
+dictionary, so a lockout would add a denial-of-service without removing an
+attack that exists.
 
 OAuth endpoints return RFC 6749 §5.2 errors (`{"error": "invalid_grant", ...}`)
 rather than the project's error envelope. One envelope everywhere is the rule;

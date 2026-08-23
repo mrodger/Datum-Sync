@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -38,6 +39,20 @@ from starlette.datastructures import UploadFile
 from datum_sync import auth, config, db, errors, events, execute, jobs, mcp, oauth, uploads
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
+
+log = logging.getLogger("datum_sync")
+
+# uvicorn configures its own loggers and leaves the root alone, so a record
+# logged here propagates to a root with no handler and is discarded. Found by
+# launching the server and seeing the startup line simply absent -- no test
+# catches this, because nothing under ASGITransport runs the lifespan. A
+# diagnostic that silently prints nothing is worse than none at all, so attach a
+# handler when, and only when, nothing upstream would have printed it.
+if not log.handlers and not logging.getLogger().handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
 
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
@@ -67,6 +82,12 @@ PUBLIC_PATHS = frozenset(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Before the pool, so a misconfigured server fails on the setting rather
+    # than on whatever the setting later breaks. Logged even when valid: a
+    # PUBLIC_URL that is set but wrong fails exactly like one that is right,
+    # until a client tries to use the token, so the resolved value needs to be
+    # visible at startup rather than inferred from a failure.
+    log.info("public URL: %s", config.require_public_url())
     await db.init_pool()
     try:
         yield

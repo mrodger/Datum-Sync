@@ -410,16 +410,32 @@ async def authorize_submit(
         except OAuthError as exc:
             return _error_redirect(redirect_uri, exc.error, exc.description, state)
 
-        account = await auth.authenticate_password(conn, username, password)
+        hidden = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code_challenge": code_challenge,
+            "resource": audience,
+            "state": state,
+            "scope": scope,
+        }
+        try:
+            account = await auth.authenticate_password(conn, username, password)
+        except auth.TooManyAttempts as exc:
+            # Re-rendered rather than redirected: the user is still mid-consent,
+            # and an error redirect would hand the client an OAuth failure it
+            # would reasonably respond to by starting again -- the one reaction
+            # that cannot help.
+            return HTMLResponse(
+                _consent_page(
+                    client["client_name"],
+                    hidden,
+                    f"Too many failed attempts. "
+                    f"Try again in {exc.retry_after} seconds.",
+                ),
+                status_code=429,
+                headers={"Retry-After": str(exc.retry_after)},
+            )
         if account is None:
-            hidden = {
-                "client_id": client_id,
-                "redirect_uri": redirect_uri,
-                "code_challenge": code_challenge,
-                "resource": audience,
-                "state": state,
-                "scope": scope,
-            }
             return HTMLResponse(
                 _consent_page(
                     client["client_name"], hidden, "Incorrect account or password."

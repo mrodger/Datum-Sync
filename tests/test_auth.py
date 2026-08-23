@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -931,3 +932,177 @@ def test_the_input_schema_mirrors_the_manifest():
     assert schema["properties"]["LOUD"]["type"] == "boolean"
     assert schema["properties"]["N"]["type"] == "integer"
     assert schema["properties"]["MODE"]["enum"] == ["a", "b"]
+
+
+# -- login rate limiting ---------------------------------------------------
+#
+# The consent screen is the only place a guessable secret is accepted, and it is
+# reachable by anyone who can reach the server. argon2 makes each guess slow,
+# which bounds the guessing rate but also makes the form a cheap way to burn
+# CPU -- an unknown account still pays for a full hash, deliberately, so that
+# the form does not enumerate names.
+
+
+async def wrong_login(
+    client, client_id, username=TEST_ACCOUNT, password="wrong", challenge=None
+):
+    if challenge is None:
+        _, challenge = pkce()
+    return await client.post(
+        "/oauth/authorize",
+        data={
+            "username": username,
+            "password": password,
+            "client_id": client_id,
+            "redirect_uri": REDIRECT_URI,
+            "code_challenge": challenge,
+            "resource": auth.MCP_RESOURCE,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_repeated_wrong_passwords_lock_the_account_out(client, account_password):
+    """And the *right* password is refused too, which is what proves it.
+
+    A test that only counts 401s cannot tell a lockout from a form that was
+    always going to reject. The tell is that the same request which succeeds in
+    `test_a_login_below_the_limit_is_not_refused` returns 429 here.
+    """
+    client_id = await register_client(client)
+    for i in range(config.PASSWORD_MAX_ATTEMPTS):
+        r = await wrong_login(client, client_id)
+        assert r.status_code == 401, f"attempt {i} was not a plain refusal: {r.text}"
+
+    r = await wrong_login(client, client_id)
+    assert r.status_code == 429
+    assert "Too many failed attempts" in r.text
+    # Without Retry-After the client has to guess, and guessing means retrying,
+    # which extends the lockout.
+    assert int(r.headers["Retry-After"]) > 0
+
+    _, challenge = pkce()
+    r = await client.post(
+        "/oauth/authorize",
+        data={
+            "username": TEST_ACCOUNT,
+            "password": account_password,
+            "client_id": client_id,
+            "redirect_uri": REDIRECT_URI,
+            "code_challenge": challenge,
+            "resource": auth.MCP_RESOURCE,
+        },
+    )
+    assert r.status_code == 429, "the correct password got through a lockout"
+
+
+@pytest.mark.asyncio
+async def test_a_login_below_the_limit_is_not_refused(client, account_password):
+    """The other half: the limiter does not break an ordinary fumbled login."""
+    client_id = await register_client(client)
+    for _ in range(config.PASSWORD_MAX_ATTEMPTS - 1):
+        assert (await wrong_login(client, client_id)).status_code == 401
+
+    _, challenge = pkce()
+    code = await get_code(client, client_id, challenge, account_password)
+    assert code
+
+
+@pytest.mark.asyncio
+async def test_a_successful_login_clears_the_counter(client, account_password):
+    """Otherwise failures accumulate across weeks and lock out a real user."""
+    client_id = await register_client(client)
+    for _ in range(config.PASSWORD_MAX_ATTEMPTS - 1):
+        assert (await wrong_login(client, client_id)).status_code == 401
+
+    _, challenge = pkce()
+    await get_code(client, client_id, challenge, account_password)
+
+    # If the counter had survived the success, the first of these would be the
+    # one that trips the limit.
+    for i in range(config.PASSWORD_MAX_ATTEMPTS - 1):
+        r = await wrong_login(client, client_id)
+        assert r.status_code == 401, f"counter was not cleared (attempt {i})"
+
+
+@pytest.mark.asyncio
+async def test_the_lockout_does_not_reveal_whether_an_account_exists(
+    client, account_password
+):
+    """The limit is checked before the database, so it cannot be an oracle.
+
+    A limiter that only counted real accounts would answer 429 for a name that
+    exists and 401 for one that does not -- turning a defence into account
+    enumeration.
+    """
+    client_id = await register_client(client)
+    unknown = f"no-such-account-{uuid.uuid4().hex[:8]}"
+    # One challenge for every request here: it is echoed into the form as a
+    # hidden field, so a fresh one per call would make the two pages differ for
+    # a reason that has nothing to do with the account. Holding it equal leaves
+    # the username as the only difference, which is the point of the comparison.
+    _, challenge = pkce()
+
+    for _ in range(config.PASSWORD_MAX_ATTEMPTS):
+        r = await wrong_login(client, client_id, username=unknown, challenge=challenge)
+        assert r.status_code == 401
+
+    locked_unknown = await wrong_login(
+        client, client_id, username=unknown, challenge=challenge
+    )
+    assert locked_unknown.status_code == 429
+
+    for _ in range(config.PASSWORD_MAX_ATTEMPTS):
+        await wrong_login(client, client_id, challenge=challenge)
+    locked_real = await wrong_login(client, client_id, challenge=challenge)
+
+    assert locked_real.status_code == locked_unknown.status_code
+
+    # The countdown is normalised out before comparing. It legitimately differs
+    # -- the two lockouts started a few hundred milliseconds apart, and the
+    # value is truncated to whole seconds, so the pages disagree whenever a
+    # second boundary falls between them. That is a function of when guessing
+    # began, which the caller already knows; it says nothing about the account.
+    # Comparing the raw bodies made this test fail about one run in five.
+    countdown = re.compile(r"\d+ seconds")
+    assert countdown.search(locked_unknown.text), "no countdown to normalise"
+    assert countdown.sub("N seconds", locked_real.text) == countdown.sub(
+        "N seconds", locked_unknown.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_lockout_expires(client, account_password, monkeypatch):
+    """A lockout that never lifts is a denial of service on the real user."""
+    client_id = await register_client(client)
+    for _ in range(config.PASSWORD_MAX_ATTEMPTS):
+        await wrong_login(client, client_id)
+    assert (await wrong_login(client, client_id)).status_code == 429
+
+    # Rather than sleep for the real window: the failures already recorded fall
+    # outside a zero-length window, so the next attempt is judged on an empty
+    # history -- the same state the passage of time produces.
+    monkeypatch.setattr(config, "PASSWORD_WINDOW_SECONDS", 0)
+    r = await wrong_login(client, client_id)
+    assert r.status_code == 401, "the lockout outlived its window"
+
+
+# -- PUBLIC_URL ------------------------------------------------------------
+
+
+def test_an_unset_public_url_refuses_to_start(monkeypatch):
+    """It is the issuer, the advertised origin and the token audience.
+
+    A guessed default serves discovery happily and mints tokens no client can
+    use, so the failure appears at the client as an opaque authorization error
+    with nothing in the log pointing back here. Better to refuse at startup.
+    """
+    monkeypatch.setattr(config, "PUBLIC_URL_CONFIGURED", False)
+    with pytest.raises(RuntimeError, match="PUBLIC_URL is not set"):
+        config.require_public_url()
+
+
+def test_a_configured_public_url_is_returned(monkeypatch):
+    monkeypatch.setattr(config, "PUBLIC_URL_CONFIGURED", True)
+    monkeypatch.setattr(config, "PUBLIC_URL", "https://sync.example.com")
+    assert config.require_public_url() == "https://sync.example.com"

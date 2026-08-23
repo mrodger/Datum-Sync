@@ -21,8 +21,10 @@ Passwords are the opposite case and use argon2 below.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -265,19 +267,98 @@ async def require_auth(request: Request) -> Principal:
         return await resolve(conn, token)
 
 
+class TooManyAttempts(Exception):
+    """Raised by `authenticate_password` when a name is locked out.
+
+    Distinct from returning None so the caller can answer 429 instead of
+    re-rendering the form as though the password were merely wrong: a client
+    that cannot tell those apart keeps retrying and stays locked out.
+    """
+
+    def __init__(self, retry_after: int):
+        self.retry_after = retry_after
+        super().__init__(f"too many failed attempts; retry in {retry_after}s")
+
+
+# Failure timestamps per submitted account name. In-memory on purpose: there is
+# one process, and a restart clearing the counters is not something an attacker
+# can reach. Move it to the database when a second process appears and not
+# before -- a write on every login attempt buys nothing today.
+_attempts: dict[str, list[float]] = {}
+
+# Keys come from the request body, so the caller chooses them. The semaphore
+# below bounds how fast failures can be recorded, which bounds this dict in
+# normal operation; the cap covers the case where that reasoning is wrong.
+_ATTEMPTS_MAX_KEYS = 10_000
+
+_verify_slots = asyncio.Semaphore(config.PASSWORD_MAX_CONCURRENT)
+
+
+def _locked_for(name: str, now: float) -> int:
+    """Seconds until `name` may try again, or 0 if it may try now."""
+    window = config.PASSWORD_WINDOW_SECONDS
+    recent = [t for t in _attempts.get(name, []) if now - t < window]
+    if recent:
+        _attempts[name] = recent
+    else:
+        _attempts.pop(name, None)
+    if len(recent) < config.PASSWORD_MAX_ATTEMPTS:
+        return 0
+    return max(1, int(window - (now - recent[0])))
+
+
+def _record_failure(name: str, now: float) -> None:
+    if name not in _attempts and len(_attempts) >= _ATTEMPTS_MAX_KEYS:
+        window = config.PASSWORD_WINDOW_SECONDS
+        for key, times in list(_attempts.items()):
+            if all(now - t >= window for t in times):
+                del _attempts[key]
+    _attempts.setdefault(name, []).append(now)
+
+
+def reset_attempts() -> None:
+    """Drop every recorded failure. For tests; nothing in the app calls it."""
+    _attempts.clear()
+
+
 async def authenticate_password(
     conn: asyncpg.Connection, name: str, password: str
 ) -> asyncpg.Record | None:
-    """The consent screen's login. Returns the account row, or None."""
-    row = await conn.fetchrow(
-        "SELECT * FROM service_accounts WHERE name = $1", name
-    )
-    stored = row["password_hash"] if row is not None else None
-    # verify_password is called even when the name is unknown, so a wrong name
-    # and a wrong password cost the same and the form does not enumerate
-    # accounts.
-    if not verify_password(stored, password):
+    """The consent screen's login. Returns the account row, or None.
+
+    Raises `TooManyAttempts` once a name has failed
+    `config.PASSWORD_MAX_ATTEMPTS` times within the window. The lockout is
+    checked *before* the database is consulted, so a locked-out unknown name
+    behaves exactly like a locked-out real one and the limit does not become an
+    account oracle.
+
+    The limit lives here rather than in the route so it cannot be left off a
+    second caller. This is the only place a guessable secret is accepted --
+    bearer tokens are 32 random bytes, so rate-limiting those would add a
+    lockout to abuse without removing an attack that exists.
+    """
+    now = time.monotonic()
+    retry_after = _locked_for(name, now)
+    if retry_after:
+        raise TooManyAttempts(retry_after)
+
+    # Bounds concurrent argon2 work rather than the attempt rate: the hash runs
+    # even for an unknown account, so without this the form is a CPU sink that
+    # costs the caller nothing to drive.
+    async with _verify_slots:
+        row = await conn.fetchrow(
+            "SELECT * FROM service_accounts WHERE name = $1", name
+        )
+        stored = row["password_hash"] if row is not None else None
+        # verify_password is called even when the name is unknown, so a wrong
+        # name and a wrong password cost the same and the form does not
+        # enumerate accounts.
+        ok = verify_password(stored, password)
+
+    if not ok or row["disabled"]:
+        # A disabled account counts as a failure: it is still a name whose
+        # password someone is guessing.
+        _record_failure(name, now)
         return None
-    if row["disabled"]:
-        return None
+    _attempts.pop(name, None)
     return row

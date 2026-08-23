@@ -141,7 +141,52 @@ CASES = [
         "        if False:\n            continue",
         "tests/test_auth.py::test_tools_list_respects_repository_scope",
     ),
+    (
+        "the login lockout",
+        "datum_sync/auth.py",
+        "    if retry_after:\n        raise TooManyAttempts(retry_after)",
+        "    if False:\n        raise TooManyAttempts(retry_after)",
+        "tests/test_auth.py::test_repeated_wrong_passwords_lock_the_account_out",
+    ),
+    (
+        "the lockout's window (a lockout that never lifts)",
+        "datum_sync/auth.py",
+        "    recent = [t for t in _attempts.get(name, []) if now - t < window]",
+        "    recent = list(_attempts.get(name, []))",
+        "tests/test_auth.py::test_the_lockout_expires",
+    ),
+    (
+        "clearing the counter on a successful login",
+        "datum_sync/auth.py",
+        "    _attempts.pop(name, None)\n    return row",
+        "    return row",
+        "tests/test_auth.py::test_a_successful_login_clears_the_counter",
+    ),
+    (
+        "counting failures for names that do not exist (enumeration)",
+        "datum_sync/auth.py",
+        # The plausible version of this bug: only bother counting attempts
+        # against accounts that are real. It reads like an optimisation and it
+        # turns the limiter into an account oracle.
+        "        _record_failure(name, now)",
+        "        if row is not None:\n            _record_failure(name, now)",
+        "tests/test_auth.py::test_the_lockout_does_not_reveal_whether_an_account_exists",
+    ),
+    (
+        "PUBLIC_URL must be configured, not guessed",
+        "datum_sync/config.py",
+        "    if not PUBLIC_URL_CONFIGURED:",
+        "    if False:",
+        "tests/test_auth.py::test_an_unset_public_url_refuses_to_start",
+    ),
 ]
+
+# Not covered here, and deliberately not faked: the semaphore bounding
+# concurrent argon2 work. It changes how *fast* the login form can burn CPU,
+# not whether a request is allowed, so a functional test either asserts nothing
+# or asserts a timing threshold that will flake on a loaded machine. Left as
+# reasoning in `auth.authenticate_password` rather than a test that would only
+# look like proof.
 
 
 def run(test: str) -> bool:

@@ -127,3 +127,18 @@ async def workspace(db):
         json.dumps(manifest),
     )
     return TEST_REPO, "fixture"
+
+
+@pytest.fixture(autouse=True)
+def _clear_password_attempts():
+    """Reset the login rate limiter between tests.
+
+    `auth._attempts` is module-level state shared by every test in the process,
+    so without this a test that submits a wrong password leaves a failure behind
+    and the lockout tests pass or fail according to collection order. Autouse
+    because the coupling is invisible at the call site -- a test does not have
+    to mention the limiter to be affected by it.
+    """
+    auth.reset_attempts()
+    yield
+    auth.reset_attempts()
