@@ -45,16 +45,26 @@ class ApiError(Exception):
         code: str,
         message: str,
         detail: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
         self.detail = detail or {}
+        # Some failures are only actionable through a header: a 401 carries the
+        # RFC 9728 `WWW-Authenticate` challenge that tells an MCP client where
+        # to discover the authorization server. The body is no substitute --
+        # the client reads the header.
+        self.headers = headers or {}
 
 
 def envelope(
-    status: int, code: str, message: str, detail: dict[str, Any] | None = None
+    status: int,
+    code: str,
+    message: str,
+    detail: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status,
@@ -64,13 +74,14 @@ def envelope(
             "message": message,
             "detail": detail or {},
         },
+        headers=headers,
     )
 
 
 def install(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
-        return envelope(exc.status, exc.code, exc.message, exc.detail)
+        return envelope(exc.status, exc.code, exc.message, exc.detail, exc.headers)
 
     @app.exception_handler(WorkspaceNotFound)
     async def _not_found(_: Request, exc: WorkspaceNotFound) -> JSONResponse:

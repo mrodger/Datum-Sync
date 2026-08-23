@@ -310,40 +310,82 @@ GET  /docs
 | Scripts, REST API, automation | Bearer token (service account) |
 | MCP clients (Claude.ai, ChatGPT, Copilot) | OAuth 2.0 PKCE |
 
+Both resolve to the same `Principal`, because an OAuth grant is *bound to a
+service account* rather than carrying permissions of its own. `max_tier`,
+`repo_scope` and `connection_grants` therefore have exactly one home.
+
 **Bearer tokens:**
 - Opaque 32-byte random, stored as `sha256(token)` — raw value never persisted
 - Optional TTL; `null` = non-expiring
 - Scopes inherit from service account (max_tier, repo scope, connection grants)
-- Rotation: `POST /rest/v1/security/accounts/{id}/rotate` — atomic swap
+- Rotation: `python -m datum_sync.accounts token <name>` — replaces the hash,
+  the old value stops working. There is deliberately no HTTP route that creates
+  an account: the first one has nobody to authenticate it, so a bootstrap
+  endpoint would be either open or seeded with a secret that has to be
+  delivered somehow. A shell on the box is already the trust boundary.
 
-**OAuth 2.0 (MCP clients):**
+sha256 and not argon2: these are 32 random bytes, so there is no dictionary to
+attack, and the hash sits on the lookup path of every request. Passwords are the
+opposite case and use argon2.
 
-Library: `authlib` on FastAPI.
+**OAuth 2.1 + PKCE (MCP clients):**
 
-Endpoints:
+Hand-rolled, not `authlib`. What is actually needed is one grant type with one
+client type, and the parts that matter — audience binding, refresh rotation with
+reuse detection, exact redirect-URI matching — are the parts a library makes
+harder to see rather than easier.
+
 ```
-GET  /.well-known/oauth-authorization-server   ← MCP client discovery
+GET  /.well-known/oauth-protected-resource      ← RFC 9728, what a 401 points at
+GET  /.well-known/oauth-authorization-server    ← RFC 8414, AS metadata
+POST /oauth/register                            ← RFC 7591 dynamic registration
 GET  /oauth/authorize                           ← consent screen
-POST /oauth/token                               ← code exchange + PKCE verify
-POST /oauth/revoke                              ← token revocation
+POST /oauth/authorize                           ← consent screen posts back
+POST /oauth/token                               ← code exchange + refresh rotation
+POST /oauth/revoke                              ← RFC 7009
 ```
 
-An OAuth grant mints a scoped service account token. No separate permission model.
+Required by Claude.ai and easy to leave out:
+- **A 401 must carry `WWW-Authenticate: Bearer resource_metadata="..."`.** A
+  client that has never seen this server has nothing else to go on.
+- **Dynamic registration is unauthenticated** and has to be: the client has no
+  id before it first reaches us. What that gets an attacker is a client id,
+  which grants nothing on its own — every token still requires a human to sign
+  in at the consent screen.
+- **RFC 8707 audience binding.** Tokens are minted for `PUBLIC_URL + /mcp` and
+  refused anywhere else, so a compromised downstream server cannot replay its
+  tokens here. `PUBLIC_URL` must be set explicitly in the environment: it is the
+  audience, and `.env` loses to an exported variable of the same name.
+- **Refresh rotation with reuse detection** (OAuth 2.1 §4.14.2). A credential
+  presented twice means someone else has a copy, so the whole grant family is
+  revoked — not just the second presentation refused, because the first one
+  already produced a working token.
 
-**Service account record:**
-```sql
-CREATE TABLE service_accounts (
-    id              SERIAL PRIMARY KEY,
-    name            TEXT NOT NULL UNIQUE,
-    token_hash      TEXT,
-    token_expires   TIMESTAMPTZ,
-    max_tier        INTEGER DEFAULT 1,
-    repo_scope      TEXT[],         -- null = all repos
-    connection_grants TEXT[],       -- explicit connection name grants
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    last_used_at    TIMESTAMPTZ
-);
-```
+OAuth endpoints return RFC 6749 §5.2 errors (`{"error": "invalid_grant", ...}`)
+rather than the project's error envelope. One envelope everywhere is the rule;
+a wire format we do not own is the exception, and it stops at that module.
+
+**MCP endpoint:** `POST /mcp`, Streamable HTTP, protocol `2025-06-18`, stateless
+(no SSE channel, no session id). Each published workspace becomes one tool named
+`<repo>__<workspace>`, with an input schema derived from its manifest
+parameters. Two deliberate mappings:
+- A workspace appears only if it publishes **`data_streaming`** — `tools/call`
+  runs it and returns the output, which is exactly what that service means.
+- A workspace with a **required FILE parameter is hidden.** An MCP client cannot
+  perform the upload that produces an upload id, so the tool could only ever
+  fail; advertising it trades a missing tool for one the model keeps retrying.
+
+A workspace that fails returns `isError: true` with the log, not a JSON-RPC
+error — the model has to see it to react to it.
+
+**Service account record:** see `migrations/001_core.sql` and `002_auth.sql`.
+`002` adds `password_hash` (argon2, consent screen only), `is_admin`, and the
+`oauth_clients` / `oauth_codes` / `oauth_tokens` tables.
+
+**Verification.** `tests/break_the_guard.py` removes each of the 13 security
+checks in turn and requires the test named for it to fail. A test asserting 403
+passes just as well against a route that is broken for an unrelated reason, and
+a gate that has never been seen to fail is not a gate.
 
 ---
 

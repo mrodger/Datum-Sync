@@ -29,18 +29,25 @@ from datum_sync.manifest import Manifest
 
 
 @pytest_asyncio.fixture
-async def client(db):
-    """An HTTP client bound to the app, sharing the test database.
+async def client(db, token):
+    """An authenticated HTTP client bound to the app, sharing the test database.
 
     Depends on `db` so the repository and job rows these tests create are
-    cleaned up by that fixture's teardown.
+    cleaned up by that fixture's teardown, and on `token` so every request
+    carries a credential.
+
+    The bearer header is a *default*, not a floor: `client.get(...,
+    headers={"authorization": ...})` overrides it, which is how the tests that
+    prove the guard works send a bad credential through the same app.
     """
     # The ASGI transport does not run the app's lifespan, so the pool that the
     # routes acquire from has to be opened here.
     await db_module.init_pool()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver"
+        transport=transport,
+        base_url="http://testserver",
+        headers={"authorization": f"Bearer {token}"},
     ) as c:
         yield c
     await db_module.close_pool()

@@ -13,10 +13,11 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-from datum_sync import config
+from datum_sync import auth, config
 from datum_sync.worker import WORKER_LOCK
 
 TEST_REPO = "_pytest"
+TEST_ACCOUNT = "_pytest"
 
 
 @pytest_asyncio.fixture
@@ -67,6 +68,32 @@ async def db():
         await conn.execute("DELETE FROM jobs WHERE repository = $1", TEST_REPO)
         await conn.execute("DELETE FROM repositories WHERE name = $1", TEST_REPO)
         await conn.close()
+
+
+@pytest_asyncio.fixture
+async def token(db):
+    """A service account token that reaches everything.
+
+    Unscoped (`repo_scope` NULL) and admin on purpose: this fixture exists so
+    the *other* tests are authenticated, not to test authorisation. A test that
+    cares about scope narrows it itself, and the tests that care about a
+    missing or wrong credential send their own -- see test_auth.py.
+    """
+    raw = auth.new_token()
+    await db.execute("DELETE FROM service_accounts WHERE name = $1", TEST_ACCOUNT)
+    await db.execute(
+        """
+        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
+        VALUES ($1, $2, 4, true)
+        """,
+        TEST_ACCOUNT,
+        auth.hash_token(raw),
+    )
+    try:
+        yield raw
+    finally:
+        # oauth_tokens/oauth_codes reference the account; cascade takes them.
+        await db.execute("DELETE FROM service_accounts WHERE name = $1", TEST_ACCOUNT)
 
 
 @pytest_asyncio.fixture
