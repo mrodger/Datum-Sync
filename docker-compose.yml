@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: datum-sync-db
+    # Shared default bridge: this host has exhausted Docker's default address
+    # pools (32 project networks). Avoids creating a 33rd.
+    network_mode: bridge
+    environment:
+      POSTGRES_USER: datumsync
+      POSTGRES_PASSWORD: datumsync_local
+      POSTGRES_DB: datumsync
+    ports:
+      - "5435:5432"
+    volumes:
+      - datum-sync-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datumsync -d datumsync"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  datum-sync-pgdata:
