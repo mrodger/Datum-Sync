@@ -1,0 +1,36 @@
+{
+  "name": "site_plan",
+  "description": "Generates a geotechnical site plan summary for a Stratum job.",
+  "version": "0.1.0",
+  "parameters": [
+    {
+      "name": "JOB_ID",
+      "type": "STRING",
+      "required": true,
+      "description": "Stratum job number (e.g. 70023)",
+      "group": "Input"
+    },
+    {
+      "name": "OUTPUT_FORMAT",
+      "type": "LOOKUP_CHOICE",
+      "default": "HTML",
+      "choices": ["HTML", "JSON"],
+      "description": "Format of the primary output",
+      "group": "Output"
+    },
+    {
+      "name": "INCLUDE_NOTES",
+      "type": "BOOLEAN",
+      "default": false,
+      "description": "Include surveyor notes in the report",
+      "group": "Output"
+    }
+  ],
+  "outputs": [
+    {"name": "report", "type": "text/html", "primary": true},
+    {"name": "summary", "type": "application/json"}
+  ],
+  "services": ["job_submitter", "data_streaming", "data_download"],
+  "connections": [],
+  "timeout_seconds": 120
+}
