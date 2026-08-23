@@ -418,8 +418,9 @@ error — the model has to see it to react to it.
 `002` adds `password_hash` (argon2, consent screen only), `is_admin`, and the
 `oauth_clients` / `oauth_codes` / `oauth_tokens` tables.
 
-**Verification.** `tests/break_the_guard.py` removes each of the 13 security
-checks in turn and requires the test named for it to fail. A test asserting 403
+**Verification.** `tests/break_the_guard.py` removes each security check in turn
+and requires the test named for it to fail; it prints the count it proved, which
+is why one is not written here. A test asserting 403
 passes just as well against a route that is broken for an unrelated reason, and
 a gate that has never been seen to fail is not a gate.
 
@@ -471,6 +472,47 @@ Status badges follow Flow's colour convention mapped to Datum palette:
 - Complete → green
 - Failed → red
 - Queued → muted grey
+
+Fonts and icons are **not fetched from a CDN.** A self-hosted runner may sit on a
+network with no route to the internet and must still render its own sign-in page,
+and every third-party origin on the page is one that could serve script into a
+session. Font families are named with system fallbacks; icons are inline SVG.
+
+### Implementation notes
+
+**Built:** Repositories, Repository, Workspace detail, Jobs, Job detail, Admin.
+Schedules, Automations, Connections, Resources and Services render an empty state
+naming the build step that will fill them — an empty table is indistinguishable
+from a broken backend, so the screen says which it is.
+
+**`innerHTML` is banned outright.** There is no framework escaping here, the page
+is built entirely from API data (repository names, workspace descriptions, job
+errors, account names), and a runner exists to execute code other people
+published — so "it is only our own data" is false by design. Every node is built
+with `el()`, which appends strings as text. `tests/test_ui.py` greps the source
+for `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write`: with no
+build step there is nothing between what is written and what a browser runs, so
+the source is the only place the property can be checked.
+
+**Credential.** The shell and its assets are public — they contain no data and
+ask `/rest/v1/whoami` who the viewer is. Everything else rides the session cookie
+(`HttpOnly`, `SameSite=Lax`), accepted only on `/rest/v1/` and `/ui/`. The job
+log stream is the reason the cookie exists at all: `EventSource` cannot set an
+`Authorization` header.
+
+**The job detail screen is driven by the stream, not by polling.** Status, log,
+progress, artifacts and the error banner all move on SSE frames. Two things this
+forced: `claim()` now announces `queued -> running` (it did not, so a watcher saw
+QUEUED for the whole run and then COMPLETE), and every status frame is built from
+the row rather than from the notification, so one event name has one shape.
+Progress is drawn only while it is arriving — it is announced and never stored,
+so there is nothing to restore it from after a reload, and a bar frozen at 87%
+beside a COMPLETE badge would be a worse answer than no bar.
+
+**`POST /rest/v1/uploads`** mints an upload id for FILE parameters. Distinct from
+`POST /upload/{repo}/{ws}`, which takes files and submits a job in one request: a
+parameters form needs the id *before* it can submit, and a browser cannot reach
+the service paths regardless.
 
 ---
 

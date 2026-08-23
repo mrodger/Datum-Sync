@@ -352,6 +352,70 @@ async def test_sse_on_a_finished_job_replays_and_closes(db, workspace):
 
 
 @pytest.mark.asyncio
+async def test_every_status_frame_carries_the_same_fields(db, workspace):
+    """A subscriber watches the stream so it does not have to poll the job.
+
+    That only works if a status frame says everything the job row would. The
+    non-terminal frame used to be built from the NOTIFY payload instead of the
+    row, so `error`, `artifacts`, `started_at` and `completed_at` were present
+    on the last frame and absent from the ones before it -- one event name with
+    two shapes. The UI showed the consequence: a job reading COMPLETE with no
+    finish time, because it had rendered the timestamps once and had nothing to
+    update them from.
+
+    Looking for the `running` frame turned up the larger half: there was no
+    such frame. `claim` set the status and started_at and announced neither, so
+    a watcher saw QUEUED for the whole run and then COMPLETE.
+    """
+    repo, ws = workspace
+    job_id = await jobs.submit(db, repo, ws, {"WHO": "shape"})
+
+    writer = await asyncpg.connect(config.DATABASE_URL, timeout=3)
+
+    async def drive() -> None:
+        try:
+            await asyncio.sleep(0.05)
+            # claim() takes the oldest queued job, not a named one. The suite
+            # runs with no worker and the fixture cleans up after each test, so
+            # the only queued job is this one -- asserted rather than assumed.
+            claimed = await jobs.claim(writer)
+            assert claimed is not None and claimed["id"] == job_id
+            await asyncio.sleep(0.05)
+            await jobs.finish(writer, job_id, "complete")
+        finally:
+            await writer.close()
+
+    reader = await asyncpg.connect(config.DATABASE_URL, timeout=3)
+    try:
+        task = asyncio.create_task(drive())
+        frames = await asyncio.wait_for(
+            _collect(events.job_events(reader, job_id)), timeout=5
+        )
+        await task
+    finally:
+        await reader.close()
+
+    payloads = [
+        json.loads(line[6:])
+        for frame in frames
+        for line in frame.splitlines()
+        if line.startswith("data: ") and "status" in json.loads(line[6:])
+    ]
+    expected = {"job_id", "status", "error", "artifacts",
+                "started_at", "completed_at"}
+    assert len(payloads) >= 2, "expected a frame before the terminal one"
+    for payload in payloads:
+        assert set(payload) == expected, payload
+
+    assert payloads[-1]["status"] == "complete"
+    assert payloads[-1]["completed_at"] is not None
+    # The frame that reported `running` already knew when it started, which is
+    # the field a watcher cannot obtain any other way.
+    running = [p for p in payloads if p["status"] == "running"]
+    assert running and running[-1]["started_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_sse_resumes_from_last_event_id(db, workspace):
     """A browser reconnecting sends Last-Event-ID; it must not be re-sent rows."""
     repo, ws = workspace
@@ -379,3 +443,51 @@ async def test_sse_resumes_from_last_event_id(db, workspace):
 
 async def _collect(generator) -> list[str]:
     return [frame async for frame in generator]
+
+
+# --------------------------------------------------------------------------
+# the job queue listing
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_job_listing_returns_a_submitted_job(client, workspace):
+    repo, ws = workspace
+    submit = await client.post(
+        f"/rest/v1/transformations/submit/{repo}/{ws}", json={"params": {"WHO": "x"}}
+    )
+    job_id = submit.json()["id"]
+
+    r = await client.get("/rest/v1/transformations/jobs")
+    assert r.status_code == 200
+    listed = {j["id"]: j for j in r.json()["items"]}
+    assert job_id in listed
+    assert listed[job_id]["workspace"] == ws
+    assert listed[job_id]["artifact_count"] == 0
+    # The summary deliberately omits params: the queue table does not show them
+    # and they are unbounded in size.
+    assert "params" not in listed[job_id]
+
+
+@pytest.mark.asyncio
+async def test_the_job_listing_filters_by_status(client, workspace):
+    repo, ws = workspace
+    submit = await client.post(
+        f"/rest/v1/transformations/submit/{repo}/{ws}", json={"params": {"WHO": "x"}}
+    )
+    job_id = submit.json()["id"]
+
+    queued = await client.get("/rest/v1/transformations/jobs?status=queued")
+    assert job_id in {j["id"] for j in queued.json()["items"]}
+
+    done = await client.get("/rest/v1/transformations/jobs?status=complete")
+    assert job_id not in {j["id"] for j in done.json()["items"]}
+
+
+@pytest.mark.asyncio
+async def test_the_job_listing_rejects_an_unknown_status(client):
+    """Rather than silently returning everything, which is what `WHERE status =
+    $1` with an unmatched value looks like from the outside: an empty list."""
+    r = await client.get("/rest/v1/transformations/jobs?status=finished")
+    assert r.status_code == 400
+    assert r.json()["code"] == "INVALID_PARAMETER"
+    assert "queued" in r.json()["detail"]["valid"]

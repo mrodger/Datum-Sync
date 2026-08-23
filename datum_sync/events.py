@@ -40,6 +40,10 @@ def _sse(event: str, data: dict[str, Any], event_id: int | None = None) -> str:
 
 
 def _status_event(row: asyncpg.Record) -> str:
+    def when(key: str) -> str | None:
+        value = row[key]
+        return value.isoformat() if value is not None else None
+
     return _sse(
         "status",
         {
@@ -47,6 +51,10 @@ def _status_event(row: asyncpg.Record) -> str:
             "status": row["status"],
             "error": row["error"],
             "artifacts": json.loads(row["artifacts"]),
+            # Carried because a subscriber has no other way to learn them:
+            # the whole point of watching the stream is not to poll the job.
+            "started_at": when("started_at"),
+            "completed_at": when("completed_at"),
         },
     )
 
@@ -119,15 +127,20 @@ async def job_events(
                 yield _sse("progress", {"pct": body.get("pct"),
                                         "message": body.get("message", "")})
             elif kind == "status":
-                if body.get("status") in jobs.TERMINAL:
-                    # Re-read rather than trust the payload: artifacts are too
-                    # large for a NOTIFY and are not in it.
-                    final = await jobs.get(conn, job_id)
-                    if final is not None:
-                        yield _status_event(final)
+                # Re-read rather than trust the payload, on every transition
+                # and not only the last: artifacts are too large for a NOTIFY
+                # and the timestamps are not in it either. Emitting a thinner
+                # event for the non-terminal case also meant `error`,
+                # `artifacts` and `started_at` appeared and disappeared from
+                # the same event name depending on which branch produced it.
+                # A status change happens two or three times in a job's life,
+                # so the extra read is not worth avoiding.
+                current = await jobs.get(conn, job_id)
+                if current is None:
                     return
-                yield _sse("status", {"job_id": wanted,
-                                      "status": body.get("status")})
+                yield _status_event(current)
+                if current["status"] in jobs.TERMINAL:
+                    return
     finally:
         with contextlib.suppress(Exception):
             await conn.remove_listener(jobs.CHANNEL, on_notify)

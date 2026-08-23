@@ -187,7 +187,7 @@ async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
         )
         if row is None:
             return None
-        return await conn.fetchrow(
+        claimed = await conn.fetchrow(
             """
             UPDATE jobs SET status = 'running', started_at = now()
             WHERE id = $1
@@ -195,6 +195,15 @@ async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
             """,
             row["id"],
         )
+        # queued -> running is the one transition that was silent. `submit`
+        # announces queued and `finish` announces the terminal status, so a
+        # subscriber saw a job sit at QUEUED for its whole run and then jump
+        # straight to COMPLETE -- and never learned started_at, which exists
+        # only from here. Inside the transaction on purpose: NOTIFY is
+        # delivered on commit, so nobody is told the job is running before the
+        # row says so.
+        await notify(conn, claimed["id"], event="status", status="running")
+        return claimed
 
 
 async def log(

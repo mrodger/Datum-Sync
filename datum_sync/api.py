@@ -6,10 +6,11 @@ Programmatic endpoints live under `/rest/v1/`. The three service paths
 (`/stream`, `/download`, `/upload`) sit at the root because they are the URLs
 handed to end users and embedded in other people's applications.
 
-Every route requires a bearer token except the handful in `PUBLIC_PATHS`, and
+Every route requires a credential except the handful in `PUBLIC_PATHS`, and
 every route naming a repository checks the caller is scoped to it. The check is
 a middleware rather than a per-route dependency; the reasoning is at
-`PUBLIC_PATHS` below.
+`PUBLIC_PATHS` below. The credential is a bearer token everywhere, plus a
+session cookie on the paths the web UI calls -- see `COOKIE_PATHS`.
 
 The synchronous services do not run anything themselves: they submit to the
 same queue the async endpoint uses and wait for the result. Executing a
@@ -36,7 +37,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 # an ordinary text field.
 from starlette.datastructures import UploadFile
 
-from datum_sync import auth, config, db, errors, events, execute, jobs, mcp, oauth, uploads
+from datum_sync import (
+    auth, config, db, errors, events, execute, jobs, mcp, oauth, ui, uploads,
+)
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 
@@ -76,8 +79,30 @@ PUBLIC_PATHS = frozenset(
         # lists still refuses an unauthenticated call.
         "/docs",
         "/openapi.json",
+        # The web UI shell and its sign-in. The shell is markup and script with
+        # no data in it: it asks /rest/v1/whoami who the viewer is and renders a
+        # sign-in form if the answer is 401. Sign-in obviously cannot require the
+        # session it exists to mint, and sign-out must work on an expired one.
+        "/ui",
+        "/ui/login",
+        "/ui/logout",
     }
 )
+
+# Prefix-matched, for the UI's own assets. Separate from PUBLIC_PATHS because a
+# prefix is a blunter instrument -- everything beneath it is public -- so the
+# two are not worth blurring into one set.
+PUBLIC_PREFIXES = ("/ui/static/",)
+
+# Where a session cookie is accepted. Everything else requires a bearer token
+# even when a valid cookie is attached.
+#
+# The service paths are excluded deliberately. `GET /stream/{repo}/{ws}` and
+# `GET /download/{repo}/{ws}` *execute a workspace*, and SameSite=Lax sends
+# cookies on top-level navigation, so accepting the cookie there would let any
+# page on the internet run someone's workspace by linking to it. Those URLs are
+# for programmatic callers, which have tokens.
+COOKIE_PATHS = ("/rest/v1/", "/ui/")
 
 
 @asynccontextmanager
@@ -104,22 +129,26 @@ app = FastAPI(
 )
 errors.install(app)
 oauth.install(app)
+ui.install(app)
 app.include_router(mcp.router)
 
 
 @app.middleware("http")
 async def authenticate(request: Request, call_next):
-    """Fail closed: no bearer token, no route.
+    """Fail closed: no credential, no route.
 
     The envelope is built here rather than raised, because middleware sits
     *outside* Starlette's exception middleware -- an ApiError raised at this
     point would surface as a bare 500 with the WWW-Authenticate challenge
     stripped, which is precisely the header an MCP client needs.
     """
-    if request.url.path in PUBLIC_PATHS:
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     try:
-        request.state.principal = await auth.require_auth(request)
+        request.state.principal = await auth.require_auth(
+            request, allow_cookie=path.startswith(COOKIE_PATHS)
+        )
     except ApiError as exc:
         return errors.envelope(
             exc.status, exc.code, exc.message, exc.detail, exc.headers
@@ -194,6 +223,18 @@ async def health() -> dict[str, Any]:
             503, "SERVICE_UNAVAILABLE", f"database unreachable: {e}"
         ) from None
     return {"status": "ok", "database": "ok", "worker": "running" if worker else "down"}
+
+
+@app.get("/rest/v1/whoami")
+async def whoami(caller: Principal = Caller) -> dict[str, Any]:
+    """Who the presented credential belongs to.
+
+    The UI's first call: a 401 here is how it knows to draw a sign-in form, and
+    `is_admin` and `repo_scope` are what it needs to decide which nav items are
+    worth showing. Hiding a control is presentation, not enforcement -- every
+    route behind it still checks for itself.
+    """
+    return auth.principal_json(caller)
 
 
 @app.get("/rest/v1/engines")
@@ -311,6 +352,90 @@ async def submit(
     return {"id": str(job_id), "status": "queued"}
 
 
+JOB_STATUSES = ("queued", "running", "complete", "failed", "cancelled")
+
+
+@app.get("/rest/v1/transformations/jobs")
+async def list_jobs(
+    status: str | None = Query(default=None),
+    repository: str | None = Query(default=None),
+    workspace: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    caller: Principal = Caller,
+) -> dict[str, Any]:
+    """The job queue, newest first. `status` is one of JOB_STATUSES, or absent
+    for all of them; `repository` and `workspace` narrow it to one workspace's
+    run history.
+
+    Every filter is applied in SQL rather than to the result, because filtering
+    afterwards applies LIMIT first. For scope that is a security bug -- a caller
+    restricted to one quiet repository would page through empty results while
+    the queue was busy elsewhere, and could count the rows they were not allowed
+    to see. For `repository`/`workspace` it is the same mistake with a milder
+    consequence: a workspace's recent runs disappearing whenever the queue is
+    busy. There is no reason to write it correctly once and carelessly twice.
+    """
+    if status is not None and status not in JOB_STATUSES:
+        raise ApiError(
+            400,
+            "INVALID_PARAMETER",
+            f"unknown status {status!r}",
+            {"valid": list(JOB_STATUSES)},
+        )
+
+    async with db.pool().acquire() as conn:
+        allowed: list[str] | None = None
+        if caller.repo_scope is not None:
+            # From the jobs themselves, not the repositories table: `repository`
+            # on a job is denormalised text that outlives the repository being
+            # removed, and a job in a deleted repository still must not leak.
+            names = await conn.fetch("SELECT DISTINCT repository FROM jobs")
+            allowed = [r["repository"] for r in names if caller.allows_repo(r["repository"])]
+            if not allowed:
+                return {"items": [], "count": 0}
+
+        rows = await conn.fetch(
+            """
+            SELECT id, repository, workspace, status, submitted_by, error,
+                   submitted_at, started_at, completed_at,
+                   jsonb_array_length(artifacts) AS artifact_count
+              FROM jobs
+             WHERE ($1::text IS NULL OR status = $1)
+               AND ($2::text[] IS NULL OR repository = ANY($2))
+               AND ($3::text IS NULL OR repository = $3)
+               AND ($4::text IS NULL OR workspace = $4)
+             ORDER BY submitted_at DESC
+             LIMIT $5
+            """,
+            status,
+            allowed,
+            repository,
+            workspace,
+            limit,
+        )
+
+    def when(row, key):
+        value = row[key]
+        return value.isoformat() if value is not None else None
+
+    items = [
+        {
+            "id": str(r["id"]),
+            "repository": r["repository"],
+            "workspace": r["workspace"],
+            "status": r["status"],
+            "submitted_by": r["submitted_by"],
+            "error": r["error"],
+            "artifact_count": r["artifact_count"],
+            "submitted_at": when(r, "submitted_at"),
+            "started_at": when(r, "started_at"),
+            "completed_at": when(r, "completed_at"),
+        }
+        for r in rows
+    ]
+    return {"items": items, "count": len(items)}
+
+
 @app.get("/rest/v1/transformations/jobs/id/{raw_id}")
 async def get_job(raw_id: str, caller: Principal = Caller) -> dict[str, Any]:
     async with db.pool().acquire() as conn:
@@ -418,6 +543,135 @@ async def get_artifact(
         media_type=artifact["type"],
         filename=artifact["file"],
     )
+
+
+# -- uploads ---------------------------------------------------------------
+
+
+@app.post("/rest/v1/uploads", status_code=201)
+async def create_upload(request: Request, caller: Principal = Caller) -> dict[str, Any]:
+    """Store one file and return the upload id a FILE parameter carries.
+
+    Distinct from `POST /upload/{repo}/{ws}`, which takes files and submits a
+    job in the same request. A parameters form needs the id *before* it can
+    submit anything -- it has other fields to send with it -- and the browser
+    cannot reach the service path regardless: a session cookie is not accepted
+    there (COOKIE_PATHS in this module).
+
+    No repository scope check, deliberately. An upload id is not access to
+    anything: the only thing it can be spent on is a submit, and that checks
+    scope against the workspace it names. Requiring a repository here would
+    mean the caller had to decide where a file was going before choosing the
+    workspace, and would still not be a stronger check.
+    """
+    form = await request.form()
+    try:
+        files = [v for _, v in form.multi_items() if isinstance(v, UploadFile)]
+        if len(files) != 1:
+            raise ApiError(
+                400,
+                "INVALID_PARAMETER",
+                f"expected exactly one file part, got {len(files)}",
+            )
+        data = await files[0].read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise ApiError(
+                413,
+                "PAYLOAD_TOO_LARGE",
+                f"{len(data)} bytes exceeds the {MAX_UPLOAD_BYTES} byte limit",
+            )
+        upload_id = uploads.save(files[0].filename, data)
+        stored = uploads.safe_name(files[0].filename)
+    finally:
+        await form.close()
+
+    log.info("upload %s stored for %s as %s", upload_id, caller.name, stored)
+    return {"id": upload_id, "filename": stored, "bytes": len(data)}
+
+
+# -- administration --------------------------------------------------------
+# Read-only, plus revocation. Creating accounts and minting tokens stays in the
+# `accounts` CLI: those are the operations that hand out credentials, and an
+# account that can create accounts through the API is one XSS away from being
+# every account. Revocation is the opposite -- it only ever removes access, so
+# the worst an attacker gains is the ability to log people out.
+
+
+@app.get("/rest/v1/accounts")
+async def list_accounts(caller: Principal = Caller) -> dict[str, Any]:
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT a.id, a.name, a.max_tier, a.repo_scope, a.is_admin,
+                   a.disabled, a.created_at, a.last_used_at,
+                   a.token_hash IS NOT NULL AS has_token,
+                   a.password_hash IS NOT NULL AS has_password,
+                   count(t.id) FILTER (
+                       WHERE t.kind = 'session' AND t.revoked_at IS NULL
+                         AND t.expires_at > now()
+                   ) AS sessions,
+                   count(t.id) FILTER (
+                       WHERE t.kind = 'refresh' AND t.revoked_at IS NULL
+                         AND t.rotated_to IS NULL
+                   ) AS grants
+              FROM service_accounts a
+              LEFT JOIN oauth_tokens t ON t.account_id = a.id
+             GROUP BY a.id
+             ORDER BY a.name
+            """
+        )
+    return {
+        "items": [
+            {
+                "name": r["name"],
+                "max_tier": r["max_tier"],
+                "repo_scope": r["repo_scope"],
+                "is_admin": r["is_admin"],
+                "disabled": r["disabled"],
+                # Never the hashes, nor a prefix of them: the point of storing
+                # sha256(token) is that the database cannot give the token back.
+                "has_token": r["has_token"],
+                "has_password": r["has_password"],
+                "sessions": r["sessions"],
+                "grants": r["grants"],
+                "created_at": r["created_at"].isoformat(),
+                "last_used_at": (
+                    r["last_used_at"].isoformat() if r["last_used_at"] else None
+                ),
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.delete("/rest/v1/accounts/{name}/grants")
+async def revoke_grants(name: str, caller: Principal = Caller) -> dict[str, Any]:
+    """Revoke every OAuth token and session for an account. Sign out everywhere.
+
+    Includes the caller's own if they name themselves, deliberately: an admin
+    who suspects their session is compromised needs to be able to end it, and
+    an exemption would be a hole exactly where it matters.
+    """
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        account_id = await conn.fetchval(
+            "SELECT id FROM service_accounts WHERE name = $1", name
+        )
+        if account_id is None:
+            raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+        revoked = await conn.fetchval(
+            """
+            WITH hit AS (
+                UPDATE oauth_tokens SET revoked_at = now()
+                 WHERE account_id = $1 AND revoked_at IS NULL
+             RETURNING 1
+            )
+            SELECT count(*) FROM hit
+            """,
+            account_id,
+        )
+    return {"account": name, "revoked": revoked}
 
 
 # -- service paths ---------------------------------------------------------

@@ -71,6 +71,12 @@ REFRESH_TOKEN_TTL_SECONDS = int(
 )
 AUTH_CODE_TTL_SECONDS = int(os.getenv("AUTH_CODE_TTL_SECONDS", "600"))
 
+# A web UI session. Longer than an access token because there is no refresh
+# mechanism behind it -- expiry means signing in again -- and shorter than the
+# refresh token because a browser is a shared and easily-walked-away-from
+# device. One working day.
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", str(12 * 3600)))
+
 # Consent-screen password attempts. Keyed by the submitted account name, not by
 # client address: behind a tunnel or reverse proxy every request arrives from
 # one address, so an address-keyed limit either locks out all clients at once or

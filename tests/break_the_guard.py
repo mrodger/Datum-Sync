@@ -106,7 +106,7 @@ CASES = [
     (
         "the bearer guard itself (allowlist everything)",
         "datum_sync/api.py",
-        "    if request.url.path in PUBLIC_PATHS:",
+        "    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):",
         "    if True:",
         "tests/test_auth.py::test_an_unknown_token_is_refused",
     ),
@@ -178,6 +178,201 @@ CASES = [
         "    if not PUBLIC_URL_CONFIGURED:",
         "    if False:",
         "tests/test_auth.py::test_an_unset_public_url_refuses_to_start",
+    ),
+    (
+        "the session cookie is not accepted on the service paths (CSRF)",
+        "datum_sync/api.py",
+        # The plausible mistake: the UI wants to link to a download, so someone
+        # adds the service paths to the list. `GET /stream/...` runs a
+        # workspace, and Lax sends the cookie on top-level navigation.
+        'COOKIE_PATHS = ("/rest/v1/", "/ui/")',
+        'COOKIE_PATHS = ("/rest/v1/", "/ui/", "/stream/", "/download/")',
+        "tests/test_auth.py::test_the_session_cookie_is_refused_on_the_service_paths",
+    ),
+    (
+        "a session is not a bearer token (the two kinds must not cross)",
+        "datum_sync/auth.py",
+        "         WHERE t.token_hash = $1 AND t.kind = 'access'",
+        "         WHERE t.token_hash = $1 AND t.kind IN ('access', 'session')",
+        "tests/test_auth.py::test_a_session_is_not_usable_as_a_bearer_token",
+    ),
+    (
+        "sign-out revokes server-side, not only in the browser",
+        "datum_sync/ui.py",
+        "    raw = request.cookies.get(auth.SESSION_COOKIE)\n"
+        "    if raw:\n"
+        "        async with db.pool().acquire() as conn:\n"
+        "            await auth.revoke_session(conn, raw)\n"
+        "    response = JSONResponse({\"status\": \"signed out\"})",
+        "    response = JSONResponse({\"status\": \"signed out\"})",
+        "tests/test_auth.py::test_signing_out_revokes_the_session_and_not_only_the_cookie",
+    ),
+    (
+        "a disabled account is rejected on every request, not just at sign-in",
+        "datum_sync/auth.py",
+        "    # Checked on every request, not only at sign-in: disabling an account has to\n"
+        "    # take effect against sessions already in flight, or the control does\n"
+        "    # nothing for up to SESSION_TTL_SECONDS.\n"
+        "    if row[\"disabled\"]:\n"
+        "        raise _unauthenticated(\"account is disabled\", \"ACCOUNT_DISABLED\")\n",
+        "",
+        "tests/test_auth.py::test_disabling_an_account_kills_a_session_already_in_flight",
+    ),
+    (
+        "session expiry",
+        "datum_sync/auth.py",
+        "    if row[\"expires_at\"] is not None and row[\"expires_at\"] < _now():\n"
+        "        raise _unauthenticated(\"session has expired\", \"TOKEN_EXPIRED\")\n",
+        "",
+        "tests/test_auth.py::test_an_expired_session_is_refused",
+    ),
+    (
+        "scope on the job listing",
+        "datum_sync/api.py",
+        "               AND ($2::text[] IS NULL OR repository = ANY($2))",
+        "               AND ($2::text[] IS NULL OR true)",
+        "tests/test_auth.py::test_the_job_listing_hides_jobs_outside_scope",
+    ),
+    (
+        "scope applied before LIMIT, not after",
+        "datum_sync/api.py",
+        # Filter the result instead of the query. This still hides the rows --
+        # the case above stays green -- so the only test that can tell the
+        # difference is the one that checks a scoped caller is not paged out of
+        # their own jobs.
+        "               AND ($2::text[] IS NULL OR repository = ANY($2))\n"
+        "               AND ($3::text IS NULL OR repository = $3)\n"
+        "               AND ($4::text IS NULL OR workspace = $4)\n"
+        "             ORDER BY submitted_at DESC\n"
+        "             LIMIT $5\n"
+        "            \"\"\",\n"
+        "            status,\n"
+        "            allowed,\n"
+        "            repository,\n"
+        "            workspace,\n"
+        "            limit,\n"
+        "        )",
+        "               AND ($2::text IS NULL OR repository = $2)\n"
+        "               AND ($3::text IS NULL OR workspace = $3)\n"
+        "             ORDER BY submitted_at DESC\n"
+        "             LIMIT $4\n"
+        "            \"\"\",\n"
+        "            status,\n"
+        "            repository,\n"
+        "            workspace,\n"
+        "            limit,\n"
+        "        )\n"
+        "        rows = [r for r in rows if allowed is None or r[\"repository\"] in allowed]",
+        "tests/test_auth.py::test_the_job_listing_applies_scope_before_the_limit",
+    ),
+    (
+        "admin gate on the accounts listing",
+        "datum_sync/api.py",
+        "    auth.require_admin(caller)\n"
+        "    async with db.pool().acquire() as conn:\n"
+        "        rows = await conn.fetch(\n"
+        "            \"\"\"\n"
+        "            SELECT a.id, a.name, a.max_tier, a.repo_scope, a.is_admin,",
+        "    async with db.pool().acquire() as conn:\n"
+        "        rows = await conn.fetch(\n"
+        "            \"\"\"\n"
+        "            SELECT a.id, a.name, a.max_tier, a.repo_scope, a.is_admin,",
+        "tests/test_auth.py::test_the_accounts_listing_requires_admin",
+    ),
+    (
+        # The plausible mistake, and the reason the ban is absolute: this
+        # particular use is harmless. It is also how most people spell it, and
+        # once one line in the file assigns markup the next one is no longer
+        # conspicuous. The test greps, so the guard is the absence itself.
+        "the UI never assigns markup (innerHTML ban)",
+        "datum_sync/static/app.js",
+        "    node.replaceChildren();",
+        "    node.innerHTML = '';",
+        "tests/test_ui.py::test_the_ui_never_assigns_markup",
+    ),
+    (
+        # Not the whole of safe_name: `.name` alone. _SAFE would still replace
+        # the separators, so the stored name has no slash either way -- what
+        # comes back is `_.._etc_passwd`, and the assertion that notices is the
+        # one about `..`. Removing both guards at once would prove only that
+        # one of them works.
+        "an upload's stored name is taken from the basename",
+        "datum_sync/uploads.py",
+        '    name = _SAFE.sub("_", Path(filename or "").name).lstrip(".-")',
+        '    name = _SAFE.sub("_", filename or "").lstrip(".-")',
+        "tests/test_ui.py::test_an_upload_id_is_not_a_path",
+    ),
+    (
+        # Zero files is still refused; two are silently narrowed to the first.
+        # That is the version worth breaking: the caller believes they sent a
+        # file under a parameter name the server never looked at, and gets a
+        # 201 saying so.
+        "an upload carries exactly one file, not at least one",
+        "datum_sync/api.py",
+        "        if len(files) != 1:",
+        "        if not files:",
+        "tests/test_ui.py::test_an_upload_needs_exactly_one_file",
+    ),
+    (
+        # The same mistake as the scope filter, one row down: filter the result
+        # instead of the query and LIMIT is applied first. Milder consequence
+        # -- a workspace's recent runs vanish whenever the queue is busy rather
+        # than a caller being paged out of their own jobs -- and no less wrong.
+        "the workspace filter is applied in SQL, before LIMIT",
+        "datum_sync/api.py",
+        "               AND ($3::text IS NULL OR repository = $3)\n"
+        "               AND ($4::text IS NULL OR workspace = $4)\n"
+        "             ORDER BY submitted_at DESC\n"
+        "             LIMIT $5\n"
+        "            \"\"\",\n"
+        "            status,\n"
+        "            allowed,\n"
+        "            repository,\n"
+        "            workspace,\n"
+        "            limit,\n"
+        "        )",
+        "             ORDER BY submitted_at DESC\n"
+        "             LIMIT $3\n"
+        "            \"\"\",\n"
+        "            status,\n"
+        "            allowed,\n"
+        "            limit,\n"
+        "        )\n"
+        "        rows = [\n"
+        "            r for r in rows\n"
+        "            if (repository is None or r[\"repository\"] == repository)\n"
+        "            and (workspace is None or r[\"workspace\"] == workspace)\n"
+        "        ]",
+        "tests/test_ui.py::test_the_job_listing_filters_by_workspace",
+    ),
+    (
+        # Not a security guard -- included because the harness is the only
+        # place that keeps a claim honest, and this one was silently false for
+        # five build steps: a subscriber watched a job sit at QUEUED for its
+        # whole run.
+        "the queued -> running transition is announced",
+        "datum_sync/jobs.py",
+        '        await notify(conn, claimed["id"], event="status", status="running")\n',
+        "",
+        "tests/test_api.py::test_every_status_frame_carries_the_same_fields",
+    ),
+    (
+        "a status frame is built from the row, not the notification",
+        "datum_sync/events.py",
+        "                current = await jobs.get(conn, job_id)\n"
+        "                if current is None:\n"
+        "                    return\n"
+        "                yield _status_event(current)\n"
+        "                if current[\"status\"] in jobs.TERMINAL:\n"
+        "                    return",
+        "                if body.get(\"status\") in jobs.TERMINAL:\n"
+        "                    final = await jobs.get(conn, job_id)\n"
+        "                    if final is not None:\n"
+        "                        yield _status_event(final)\n"
+        "                    return\n"
+        "                yield _sse(\"status\", {\"job_id\": wanted,\n"
+        "                                      \"status\": body.get(\"status\")})",
+        "tests/test_api.py::test_every_status_frame_carries_the_same_fields",
     ),
 ]
 

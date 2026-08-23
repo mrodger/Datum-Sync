@@ -1,6 +1,6 @@
 """Authentication: credentials in, a `Principal` out.
 
-Two credentials reach this module and both arrive as `Authorization: Bearer
+Three credentials reach this module. Two arrive as `Authorization: Bearer
 <token>`:
 
   * a **service account token**, created out of band for scripts and stored on
@@ -8,10 +8,13 @@ Two credentials reach this module and both arrive as `Authorization: Bearer
   * an **access token** minted by the OAuth flow in `oauth.py`, stored in
     `oauth_tokens`, for an MCP client such as Claude.ai.
 
-Both resolve to the same `Principal`, because an OAuth grant is *bound to a
-service account* rather than carrying permissions of its own. `max_tier`,
-`repo_scope` and `connection_grants` therefore have exactly one home and there
-is no second permission model to keep in sync.
+The third is a **session**, minted when a person signs in to the web UI and
+returned in a cookie, because a browser has no token to present.
+
+All three resolve to the same `Principal`, because an OAuth grant and a session
+are both *bound to a service account* rather than carrying permissions of their
+own. `max_tier`, `repo_scope` and `connection_grants` therefore have exactly one
+home and there is no second permission model to keep in sync.
 
 Only sha256(token) is ever stored. The raw value is returned once, at mint
 time, and cannot be recovered from the database. sha256 is the right primitive
@@ -121,6 +124,23 @@ class Principal:
         if self.repo_scope is None:
             return True
         return any(_scope_matches(p, repo) for p in self.repo_scope)
+
+
+def principal_json(p: Principal) -> dict:
+    """The caller's own identity, as the API reports it.
+
+    Lives here rather than in api.py so that ui.py can return it from sign-in
+    without importing the module that imports ui.py.
+    """
+    return {
+        "name": p.name,
+        "is_admin": p.is_admin,
+        "max_tier": p.max_tier,
+        # None means every repository (001_core.sql). Reported as null rather
+        # than as an empty list, which would read as "none".
+        "repo_scope": p.repo_scope,
+        "source": p.source,
+    }
 
 
 def _scope_matches(pattern: str, repo: str) -> bool:
@@ -258,13 +278,118 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
     )
 
 
-async def require_auth(request: Request) -> Principal:
-    """FastAPI dependency. 401 with a WWW-Authenticate challenge, or a Principal."""
+# -- browser sessions ------------------------------------------------------
+# A third credential, and the only one that is not a bearer token: a person at
+# the web UI has nothing to present, so signing in mints an opaque session and
+# returns it in a cookie. Stored in oauth_tokens with kind='session' (see
+# 003_sessions.sql), which is deliberately a *different* kind from the one
+# `resolve` accepts -- the bearer path queries kind='access' and the cookie
+# path queries kind='session', so a credential minted for one channel cannot be
+# replayed through the other.
+
+SESSION_COOKIE = "datum_session"
+
+
+def session_cookie_secure() -> bool:
+    """Whether to set the Secure flag, from the origin the *browser* sees.
+
+    Derived from PUBLIC_URL rather than from the request scheme: behind the
+    tunnel the browser is on HTTPS while this process is handed plain HTTP, so
+    asking the request would drop the flag on exactly the deployment that needs
+    it.
+    """
+    return config.PUBLIC_URL.startswith("https://")
+
+
+async def create_session(conn: asyncpg.Connection, account_id: int) -> str:
+    """Mint a session for an account. Returns the raw value, once."""
+    raw = new_token()
+    await conn.execute(
+        """
+        INSERT INTO oauth_tokens (token_hash, kind, account_id, expires_at)
+        VALUES ($1, 'session', $2, now() + make_interval(secs => $3))
+        """,
+        hash_token(raw),
+        account_id,
+        config.SESSION_TTL_SECONDS,
+    )
+    return raw
+
+
+async def revoke_session(conn: asyncpg.Connection, raw_token: str) -> None:
+    """Sign out. Idempotent, and silent about whether the session existed."""
+    await conn.execute(
+        """
+        UPDATE oauth_tokens SET revoked_at = now()
+         WHERE token_hash = $1 AND kind = 'session' AND revoked_at IS NULL
+        """,
+        hash_token(raw_token),
+    )
+
+
+async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal:
+    """Turn a session cookie into a Principal, or raise 401."""
+    row = await conn.fetchrow(
+        """
+        SELECT t.id, t.expires_at, t.revoked_at,
+               a.id AS account_id, a.name, a.max_tier, a.repo_scope,
+               a.connection_grants, a.is_admin, a.disabled
+          FROM oauth_tokens t
+          JOIN service_accounts a ON a.id = t.account_id
+         WHERE t.token_hash = $1 AND t.kind = 'session'
+        """,
+        hash_token(raw_token),
+    )
+    if row is None:
+        raise _unauthenticated("unknown or invalid session")
+    if row["revoked_at"] is not None:
+        raise _unauthenticated("session has been signed out", "TOKEN_REVOKED")
+    if row["expires_at"] is not None and row["expires_at"] < _now():
+        raise _unauthenticated("session has expired", "TOKEN_EXPIRED")
+    # Checked on every request, not only at sign-in: disabling an account has to
+    # take effect against sessions already in flight, or the control does
+    # nothing for up to SESSION_TTL_SECONDS.
+    if row["disabled"]:
+        raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
+
+    await conn.execute(
+        "UPDATE oauth_tokens SET last_used_at = now() WHERE id = $1", row["id"]
+    )
+    return Principal(
+        account_id=row["account_id"],
+        name=row["name"],
+        max_tier=row["max_tier"],
+        repo_scope=row["repo_scope"],
+        connection_grants=row["connection_grants"],
+        is_admin=row["is_admin"],
+        source="session",
+    )
+
+
+async def require_auth(request: Request, allow_cookie: bool = False) -> Principal:
+    """FastAPI dependency. 401 with a WWW-Authenticate challenge, or a Principal.
+
+    `allow_cookie` defaults to False so that a caller which has not thought
+    about it gets the stricter behaviour. Only the paths the web UI actually
+    calls pass True -- see COOKIE_PATHS in api.py for why the service paths
+    must not.
+
+    A bearer token wins over a cookie when both are present: the explicit
+    credential is the one the caller chose to send for this request, whereas the
+    cookie is attached by the browser whether or not it was meant.
+    """
     token = bearer_token(request)
-    if token is None:
-        raise _unauthenticated("missing bearer token")
-    async with db.pool().acquire() as conn:
-        return await resolve(conn, token)
+    if token is not None:
+        async with db.pool().acquire() as conn:
+            return await resolve(conn, token)
+
+    if allow_cookie:
+        cookie = request.cookies.get(SESSION_COOKIE)
+        if cookie:
+            async with db.pool().acquire() as conn:
+                return await resolve_session(conn, cookie)
+
+    raise _unauthenticated("missing bearer token")
 
 
 class TooManyAttempts(Exception):

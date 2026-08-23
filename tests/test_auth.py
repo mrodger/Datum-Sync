@@ -1106,3 +1106,318 @@ def test_a_configured_public_url_is_returned(monkeypatch):
     monkeypatch.setattr(config, "PUBLIC_URL_CONFIGURED", True)
     monkeypatch.setattr(config, "PUBLIC_URL", "https://sync.example.com")
     assert config.require_public_url() == "https://sync.example.com"
+
+
+# --------------------------------------------------------------------------
+# browser sessions (web UI)
+# --------------------------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def browser(db, token):
+    """An *unauthenticated* client that keeps cookies.
+
+    Deliberately not the `client` fixture: that one sends a bearer token on
+    every request, which would satisfy the middleware before the cookie was ever
+    consulted and make every test below pass whether sessions work or not. It
+    still depends on `token`, because that fixture is what creates the account
+    `account_password` then gives a password to -- without it the UPDATE matches
+    no rows and sign-in fails for a reason with nothing to do with sessions.
+    """
+    await db_module.init_pool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as c:
+        yield c
+    await db_module.close_pool()
+
+
+async def sign_in(browser, password: str, name: str = TEST_ACCOUNT):
+    return await browser.post("/ui/login", json={"name": name, "password": password})
+
+
+@pytest.mark.asyncio
+async def test_signing_in_returns_a_session_that_authenticates_a_rest_call(
+    browser, account_password
+):
+    """Both halves: the same request is refused before sign-in and served after."""
+    before = await browser.get("/rest/v1/whoami")
+    assert before.status_code == 401
+
+    r = await sign_in(browser, account_password)
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == TEST_ACCOUNT
+    assert browser.cookies.get(auth.SESSION_COOKIE)
+
+    after = await browser.get("/rest/v1/whoami")
+    assert after.status_code == 200
+    assert after.json() == {**r.json(), "source": "session"}
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_password_at_the_ui_mints_nothing(browser, account_password):
+    r = await sign_in(browser, "not the password")
+    assert r.status_code == 401
+    assert r.json()["code"] == "INVALID_CREDENTIALS"
+    assert browser.cookies.get(auth.SESSION_COOKIE) is None
+    assert (await browser.get("/rest/v1/whoami")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_the_ui_login_is_rate_limited_too(browser, account_password):
+    """The limiter lives in authenticate_password, so this route inherits it.
+
+    Worth asserting rather than assuming: it is exactly the kind of protection
+    that gets added to one caller and forgotten on the second.
+    """
+    for _ in range(config.PASSWORD_MAX_ATTEMPTS):
+        assert (await sign_in(browser, "wrong")).status_code == 401
+    locked = await sign_in(browser, account_password)
+    assert locked.status_code == 429
+    assert int(locked.headers["retry-after"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_the_session_cookie_is_refused_on_the_service_paths(
+    browser, account_password, workspace, token
+):
+    """CSRF. `GET /stream/...` runs a workspace, and SameSite=Lax sends the
+    cookie on top-level navigation, so any page that links here would execute
+    someone's workspace as them.
+
+    The bearer half proves the route is reachable at all: without it a 401 from
+    a misspelled path would pass just as well.
+    """
+    repo, ws = workspace
+    assert (await sign_in(browser, account_password)).status_code == 200
+
+    with_cookie = await browser.get(f"/stream/{repo}/{ws}?WHO=x")
+    assert with_cookie.status_code == 401
+    assert with_cookie.json()["code"] == "UNAUTHENTICATED"
+
+    with_token = await browser.get(f"/stream/{repo}/{ws}?WHO=x", headers=bearer(token))
+    assert with_token.status_code != 401
+
+
+@pytest.mark.asyncio
+async def test_a_session_is_not_usable_as_a_bearer_token(browser, account_password):
+    """The two channels query different `kind`s and must not cross.
+
+    Presenting the cookie's value in an Authorization header is what an attacker
+    who has read it out of a proxy log would try first, and it would sidestep
+    the service-path restriction above.
+    """
+    assert (await sign_in(browser, account_password)).status_code == 200
+    raw = browser.cookies.get(auth.SESSION_COOKIE)
+
+    r = await browser.get("/rest/v1/whoami", headers=bearer(raw))
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_signing_out_revokes_the_session_and_not_only_the_cookie(
+    browser, account_password
+):
+    """Clearing the cookie is cosmetic: a session captured before sign-out has
+    to stop working, so the test re-presents the raw value by hand."""
+    assert (await sign_in(browser, account_password)).status_code == 200
+    raw = browser.cookies.get(auth.SESSION_COOKIE)
+
+    out = await browser.post("/ui/logout")
+    assert out.status_code == 200
+    assert browser.cookies.get(auth.SESSION_COOKIE) is None
+
+    # Sent as a literal header rather than through the cookie jar: sign-out has
+    # just written an expiring Set-Cookie for this name, and putting the value
+    # back into the jar competes with that entry instead of replacing it -- the
+    # request then carries nothing and the test passes for the wrong reason. A
+    # replayed cookie is a header an attacker constructs by hand anyway.
+    browser.cookies.clear()
+    replayed = await browser.get(
+        "/rest/v1/whoami", headers={"cookie": f"{auth.SESSION_COOKIE}={raw}"}
+    )
+    assert replayed.status_code == 401
+    assert replayed.json()["code"] == "TOKEN_REVOKED"
+
+
+@pytest.mark.asyncio
+async def test_disabling_an_account_kills_a_session_already_in_flight(
+    browser, db, account_password
+):
+    """Otherwise the control does nothing for up to SESSION_TTL_SECONDS."""
+    assert (await sign_in(browser, account_password)).status_code == 200
+    assert (await browser.get("/rest/v1/whoami")).status_code == 200
+
+    await db.execute(
+        "UPDATE service_accounts SET disabled = true WHERE name = $1", TEST_ACCOUNT
+    )
+    r = await browser.get("/rest/v1/whoami")
+    assert r.status_code == 401
+    assert r.json()["code"] == "ACCOUNT_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_an_expired_session_is_refused(browser, db, account_password):
+    assert (await sign_in(browser, account_password)).status_code == 200
+    await db.execute(
+        """
+        UPDATE oauth_tokens SET expires_at = now() - interval '1 second'
+         WHERE kind = 'session'
+           AND account_id = (SELECT id FROM service_accounts WHERE name = $1)
+        """,
+        TEST_ACCOUNT,
+    )
+    r = await browser.get("/rest/v1/whoami")
+    assert r.status_code == 401
+    assert r.json()["code"] == "TOKEN_EXPIRED"
+
+
+@pytest.mark.asyncio
+async def test_the_shell_is_public_but_the_data_behind_it_is_not(browser):
+    """The shell has to be reachable signed-out or there is nowhere to sign in."""
+    assert (await browser.get("/ui")).status_code == 200
+    assert (await browser.get("/rest/v1/whoami")).status_code == 401
+
+
+# --------------------------------------------------------------------------
+# the job listing and the admin routes
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_job_listing_hides_jobs_outside_scope(client, db, workspace):
+    """Both halves: the job is listed when in scope and absent when not.
+
+    The repository the caller is narrowed to holds a job of its own, so the
+    allowed set is non-empty and the SQL filter is what hides the fixture's
+    job. Narrowing to an empty repository instead is answered by the early
+    return for an empty allowed set, which leaves the filter untested -- that
+    is what the first version of this test did, and break_the_guard caught it:
+    the filter could be replaced by `OR true` and this still passed.
+    """
+    repo, ws = workspace
+    submit = await client.post(
+        f"/rest/v1/transformations/submit/{repo}/{ws}", json={"params": {"WHO": "x"}}
+    )
+    job_id = submit.json()["id"]
+
+    listed = await client.get("/rest/v1/transformations/jobs")
+    assert job_id in {j["id"] for j in listed.json()["items"]}
+
+    # Inserted directly: what is needed is a row in another repository, not a
+    # second published workspace, and the listing reads `jobs.repository` as
+    # text regardless of how it got there. Removed by hand -- the db fixture
+    # only cleans up jobs in TEST_REPO.
+    other_id = await db.fetchval(
+        """
+        INSERT INTO jobs (repository, workspace, submitted_by)
+        VALUES ($1, $2, $3) RETURNING id
+        """,
+        "somewhere-else", "elsewhere", "someone",
+    )
+    try:
+        await set_scope(db, ["somewhere-else"])
+        hidden = await client.get("/rest/v1/transformations/jobs")
+        assert hidden.status_code == 200
+        ids = {j["id"] for j in hidden.json()["items"]}
+        assert job_id not in ids
+        # The listing was filtered, not merely empty.
+        assert str(other_id) in ids
+    finally:
+        await db.execute("DELETE FROM jobs WHERE repository = $1", "somewhere-else")
+
+
+@pytest.mark.asyncio
+async def test_the_job_listing_applies_scope_before_the_limit(client, db, workspace):
+    """A scoped caller must not be paged out of their own jobs.
+
+    Filtering the *result* of a LIMITed query is the natural way to write this
+    and is wrong: the rows the caller may not see still consume the page, so a
+    busy queue elsewhere hides their jobs entirely and the row count leaks how
+    much is going on outside their scope. limit=1 makes that difference
+    observable -- with the filter in SQL the one row returned is theirs.
+    """
+    repo, ws = workspace
+    mine = (
+        await client.post(
+            f"/rest/v1/transformations/submit/{repo}/{ws}",
+            json={"params": {"WHO": "mine"}},
+        )
+    ).json()["id"]
+    # A newer job in a repository the caller will not be scoped to. Inserted
+    # directly: submitting it would need a second published workspace, and the
+    # listing reads `jobs.repository` as text regardless of how it got there.
+    await db.execute(
+        "INSERT INTO jobs (repository, workspace, submitted_by) VALUES ($1, $2, $3)",
+        "other-repo", "elsewhere", "someone",
+    )
+    try:
+        await set_scope(db, [repo])
+        r = await client.get("/rest/v1/transformations/jobs?limit=1")
+        items = r.json()["items"]
+        assert len(items) == 1
+        assert items[0]["id"] == mine
+    finally:
+        await db.execute("DELETE FROM jobs WHERE repository = $1", "other-repo")
+
+
+@pytest.mark.asyncio
+async def test_the_accounts_listing_requires_admin(client, db):
+    """Both halves: the same request is served for an admin and refused without.
+
+    `token` is admin by default, so the refusal has to be created rather than
+    assumed. Not restored afterwards because it does not need to be: `token`
+    drops and recreates the account for every test.
+    """
+    assert (await client.get("/rest/v1/accounts")).status_code == 200
+
+    await db.execute(
+        "UPDATE service_accounts SET is_admin = false WHERE name = $1", TEST_ACCOUNT
+    )
+    r = await client.get("/rest/v1/accounts")
+    assert r.status_code == 403
+    assert r.json()["code"] == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_the_accounts_listing_never_returns_a_hash(client):
+    """Storing sha256(token) is pointless if a route hands it back: the hash is
+    the whole credential for a lookup keyed on it."""
+    r = await client.get("/rest/v1/accounts")
+    body = r.text
+    assert "token_hash" not in body and "password_hash" not in body
+    mine = next(a for a in r.json()["items"] if a["name"] == TEST_ACCOUNT)
+    assert mine["has_token"] is True
+
+
+@pytest.mark.asyncio
+async def test_revoking_grants_ends_a_live_session(browser, client, account_password):
+    """The Admin screen's one destructive control. Two-sided: the session works
+    before the revoke and not after."""
+    assert (await sign_in(browser, account_password)).status_code == 200
+    assert (await browser.get("/rest/v1/whoami")).status_code == 200
+
+    r = await client.delete(f"/rest/v1/accounts/{TEST_ACCOUNT}/grants")
+    assert r.status_code == 200
+    assert r.json()["revoked"] >= 1
+
+    after = await browser.get("/rest/v1/whoami")
+    assert after.status_code == 401
+    assert after.json()["code"] == "TOKEN_REVOKED"
+
+
+@pytest.mark.asyncio
+async def test_revoking_grants_leaves_the_service_account_token_working(
+    browser, client, account_password
+):
+    """Sessions and OAuth grants live in oauth_tokens; the account's own token
+    is a column on service_accounts and must survive. Otherwise 'sign out
+    everywhere' quietly locks every script out too."""
+    assert (await sign_in(browser, account_password)).status_code == 200
+    await client.delete(f"/rest/v1/accounts/{TEST_ACCOUNT}/grants")
+    assert (await client.get("/rest/v1/whoami")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_revoking_grants_for_an_unknown_account_is_a_404(client):
+    r = await client.delete("/rest/v1/accounts/no-such-account/grants")
+    assert r.status_code == 404
