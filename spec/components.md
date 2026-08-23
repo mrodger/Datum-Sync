@@ -351,16 +351,48 @@ CREATE TABLE service_accounts (
 
 Single-page app, vanilla JS. Talks exclusively to `/rest/v1/`.
 
-**Three sections:**
+**Layout follows FME Flow's GUI structure exactly.** Datum visual style applied throughout —
+do not invent new layout patterns; if Flow has a screen for it, mirror its structure.
 
-| Section | Contents |
+### Chrome
+
+- **Left sidebar** — collapsible, icon + label nav. Items match Flow's left nav:
+  Repositories, Jobs, Schedules, Automations, Connections, Resources, Services, Admin
+- **Top bar** — product name, active persona/account badge, notifications bell
+- **Main content area** — context-dependent per nav item
+
+### Screens (mirror Flow)
+
+| Screen | Flow equivalent | Contents |
+|---|---|---|
+| Repositories | Repositories | Repository list → workspace cards grid |
+| Workspace detail | Workspace detail | Description, published parameters form, Run button, recent jobs |
+| Jobs | Jobs | Queue table: status badge, workspace, submitted by, duration, actions |
+| Job detail | Job detail | Log stream (SSE), artifact download links, resubmit / cancel |
+| Schedules | Schedules | Table with enable/disable toggle, next run, last run, edit |
+| Automations | Automations | Table with enable/disable toggle; YAML editor on detail view |
+| Connections | Connections | Table with type icon, tier badge, scope, test button |
+| Resources | Resources | File browser tree |
+| Services | (no Flow equiv.) | Hosted service list with type badge, status indicator, URL |
+| Admin | Security | Service accounts table, OAuth grants, token rotation |
+
+### Visual style
+
+| Token | Value |
 |---|---|
-| **Workspaces** | Repository browser, workspace runner (published parameters form), recent jobs per workspace |
-| **Jobs** | Queue view, log stream, cancel, resubmit |
-| **Admin** | Connections, service accounts, OAuth grants, schedules, automations (YAML editor), hosted services |
+| Primary | Navy `#1D3A5C` |
+| Accent | Amber `#C89632` |
+| Background | Dark `#0F1923` |
+| Body font | DM Sans |
+| Heading font | Space Grotesk |
+| Mono font | JetBrains Mono |
+| Icons | Phosphor (Bold weight) |
 
-Design system: match Datum-UI conventions (Navy `#1D3A5C`, amber `#C89632`, dark `#0F1923`,
-DM Sans body, Space Grotesk headings, JetBrains Mono code, Phosphor icons).
+Status badges follow Flow's colour convention mapped to Datum palette:
+- Running → amber
+- Complete → green
+- Failed → red
+- Queued → muted grey
 
 ---
 
