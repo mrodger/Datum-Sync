@@ -39,6 +39,7 @@ Thumbs.db
 # Uploads / artifacts (runtime data, not source)
 data/uploads/
 data/artifacts/
+data/jobs/
 repositories/*/*/runs/
 
 # Hosted service builds
