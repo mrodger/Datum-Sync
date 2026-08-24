@@ -248,7 +248,7 @@ const SCREENS = {
     jobs: [screenJobs, screenJob],
     schedules: [screenSchedules, screenSchedule],
     automations: [screenAutomations, screenAutomation],
-    connections: [(view) => notBuilt(view, 'Connections', 8)],
+    connections: [screenConnections, screenConnection],
     resources: [(view) => notBuilt(view, 'Resources', null)],
     services: [(view) => notBuilt(view, 'Services', 10)],
     admin: [screenAdmin],
@@ -1229,6 +1229,293 @@ async function screenAutomation(view, id) {
                     : '\u2014'),
                 el('td', {}, el('span', { class: 'mono' }, JSON.stringify(r.results))))))
             : el('div', { class: 'empty' }, 'This automation has not fired yet.'));
+}
+
+// ---------------------------------------------------------------------------
+// connections
+// ---------------------------------------------------------------------------
+
+const CONNECTION_TYPES = ['database', 'http', 'email_smtp', 'email_imap', 'file',
+                          'oauth_client'];
+
+/* Shown as a hint, never enforced here. The server validates, and a second copy
+ * of the rule in the browser is a second copy that can disagree with it -- the
+ * failure mode being a form that refuses something the API would accept, which
+ * nobody can debug from the screen. */
+const CONFIG_HINTS = {
+    database: 'host, port, database, username',
+    http: 'base_url',
+    email_smtp: 'host, port, username',
+    email_imap: 'host, port, username',
+    file: 'root',
+    oauth_client: 'token_url, client_id',
+};
+
+function scopeSummary(c) {
+    return c.scope === 'global'
+        ? el('span', {}, 'global')
+        : el('span', {}, c.scope, ': ',
+             el('span', { class: 'mono' }, c.scope_targets.join(', ')));
+}
+
+function lastTest(c) {
+    if (!c.last_test_at) return el('span', { class: 'hint' }, 'never tested');
+    return el('span', {},
+        badge(c.last_test_ok ? 'complete' : 'failed'), ' ', when(c.last_test_at));
+}
+
+function readJson(box, label) {
+    const text = box.value.trim();
+    if (!text) return null;
+    try {
+        return JSON.parse(text);
+    } catch (err) {
+        throw new ApiError(0, 'INVALID_JSON', `${label} is not valid JSON: ${err.message}`);
+    }
+}
+
+/* One form for create and edit. They differ in three places -- the name field,
+ * the method, and where you land afterwards -- and a second near-identical form
+ * is how the two drift apart. */
+function connectionForm(c) {
+    const fresh = c === null;
+
+    const name = el('input', { type: 'text', required: true, placeholder: 'scimac-postgres' });
+    const type = el('select', {}, CONNECTION_TYPES.map((t) =>
+        el('option', { value: t, selected: !fresh && c.type === t }, t)));
+    const tier = el('select', {}, [1, 2, 3, 4].map((t) =>
+        el('option', { value: t, selected: !fresh && c.tier === t }, 'Tier ' + t)));
+    const scope = el('select', {}, ['global', 'repository', 'workspace'].map((s) =>
+        el('option', { value: s, selected: !fresh && c.scope === s }, s)));
+    const targets = el('input', {
+        type: 'text',
+        value: fresh ? '' : c.scope_targets.join(', '),
+        placeholder: 'SCIMAC, Testing',
+        disabled: fresh || c.scope === 'global',
+    });
+    const access = el('select', {}, ['read', 'write'].map((a) =>
+        el('option', { value: a, selected: !fresh && c.access === a }, a)));
+    const description = el('input', {
+        type: 'text', value: (!fresh && c.description) || '',
+    });
+    const config = el('textarea', { class: 'yaml', spellcheck: 'false', rows: 8 },
+        fresh ? '{}' : JSON.stringify(c.config, null, 2));
+    const secret = el('textarea', {
+        class: 'yaml', spellcheck: 'false', rows: 5,
+        placeholder: '{"password": "\u2026"}',
+    });
+    const configHint = el('div', { class: 'hint' });
+    const status = el('div', {});
+    const save = el('button', { type: 'submit' }, fresh ? 'Create connection' : 'Save');
+
+    function syncHints() {
+        clear(configHint).append(document.createTextNode(
+            'Non-secret fields, returned by the API and shown above. Usually: '
+            + (CONFIG_HINTS[type.value] || '\u2014')));
+        // A global connection carries no targets -- the database refuses the
+        // combination -- so the field is disabled rather than ignored.
+        targets.disabled = scope.value === 'global';
+        if (targets.disabled) targets.value = '';
+    }
+    type.addEventListener('change', syncHints);
+    scope.addEventListener('change', syncHints);
+    syncHints();
+
+    const form = el('form', { class: 'panel' },
+        el('h2', {}, fresh ? 'New connection' : 'Definition'),
+        fresh
+            ? el('div', { class: 'field' }, el('label', {}, 'Name'), name,
+                 el('div', { class: 'hint' },
+                     'Unique, and how a workspace names it in its manifest. It is '
+                     + 'also what the secret is sealed against, so it cannot be '
+                     + 'changed later.'))
+            : null,
+        el('div', { class: 'field' }, el('label', {}, 'Type'), type),
+        el('div', { class: 'field' }, el('label', {}, 'Tier'), tier,
+            el('div', { class: 'hint' },
+                'Sensitivity, 1 to 4. Recorded and displayed; not yet enforced '
+                + 'against what a service account may reach.')),
+        el('div', { class: 'field' }, el('label', {}, 'Scope'), scope),
+        el('div', { class: 'field' }, el('label', {}, 'Scope targets'), targets,
+            el('div', { class: 'hint' },
+                'Comma separated. Repository names, or Repository/Workspace pairs.')),
+        el('div', { class: 'field' }, el('label', {}, 'Access'), access),
+        el('div', { class: 'field' }, el('label', {}, 'Description'), description),
+        el('div', { class: 'field' }, el('label', {}, 'Config'), config, configHint),
+        el('div', { class: 'field' }, el('label', {}, 'Secret'), secret,
+            el('div', { class: 'hint' },
+                'Sealed on save and never returned by any route, so this box '
+                + 'starts empty even when a secret is stored. Leave it empty to '
+                + 'keep the current one.')),
+        el('div', { style: 'margin-top:1rem' }, save),
+        status);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        clear(status);
+        try {
+            const body = {
+                type: type.value,
+                tier: Number(tier.value),
+                scope: scope.value,
+                scope_targets: targets.value.split(',')
+                    .map((s) => s.trim()).filter(Boolean),
+                access: access.value,
+                description: description.value.trim() || null,
+                config: readJson(config, 'Config') || {},
+            };
+            // Absent means keep. An empty box is therefore not "clear it" --
+            // clearing is a separate, deliberate action, because the common
+            // case is editing a description on a connection whose password
+            // nobody has to hand.
+            const sealed = readJson(secret, 'Secret');
+            if (sealed !== null) body.secret = sealed;
+
+            if (fresh) {
+                body.name = name.value.trim();
+                await api('/connections', { method: 'POST', json: body });
+                go('#/connections');
+            } else {
+                await api('/connections/' + encodeURIComponent(c.name),
+                    { method: 'PATCH', json: body });
+                route();
+            }
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            save.disabled = false;
+        }
+    });
+
+    return form;
+}
+
+async function screenConnections(view) {
+    const { items, key_configured } = await api('/connections');
+    /* The create form lives on this screen behind `?new=1` rather than at
+     * #/connections/new. A connection is addressed by name, not by id as a
+     * schedule is, so a `new` path segment would make a connection actually
+     * named "new" unreachable from the UI. */
+    const creating = hashQuery().has('new');
+
+    view.append(el('div', { class: 'toolbar' },
+        el('h1', {}, 'Connections'),
+        me.is_admin && !creating
+            ? el('a', { class: 'button', href: '#/connections?new=1' }, 'New connection')
+            : null));
+
+    if (!key_configured) {
+        // Said before the fields are filled in, not as a 500 on save. Without
+        // a key nothing can be sealed and nothing already sealed can be opened.
+        view.append(el('div', { class: 'banner' },
+            el('b', {}, 'No encryption key. '),
+            'DATUM_SYNC_SECRET_KEY is not set, so a connection carrying a '
+            + 'credential will be refused and stored secrets cannot be opened.'));
+    }
+
+    if (creating) {
+        view.append(
+            connectionForm(null),
+            el('p', {}, el('a', { href: '#/connections' }, 'Cancel')));
+        return;
+    }
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty' },
+            'No connections. A connection is a credential the server holds on ',
+            'behalf of workspaces, which name it in their manifest and never ',
+            'see where it came from.'));
+        return;
+    }
+
+    view.append(table(
+        ['Name', 'Type', 'Tier', 'Scope', 'Access', 'Secret', 'Last test', ''],
+        items.map((c) => el('tr', {},
+            el('td', {}, el('a', { href: '#/connections/' + encodeURIComponent(c.name) },
+                c.name)),
+            el('td', {}, c.type),
+            el('td', {}, c.tier),
+            el('td', {}, scopeSummary(c)),
+            el('td', {}, c.access),
+            el('td', {}, c.has_secret ? 'stored' : el('span', { class: 'hint' }, 'none')),
+            el('td', {}, lastTest(c)),
+            el('td', {}, el('a', { href: '#/connections/' + encodeURIComponent(c.name) },
+                'open'))))));
+}
+
+async function screenConnection(view, name) {
+    const c = await api('/connections/' + encodeURIComponent(name));
+    const path = '/connections/' + encodeURIComponent(name);
+    const failure = el('div', {});
+
+    const test = el('button', {
+        class: 'secondary',
+        onclick: async () => {
+            test.disabled = true;
+            clear(failure);
+            try {
+                await api(path + '/test', { method: 'POST' });
+                // The outcome is recorded on the row, so re-reading the screen
+                // shows it. Rendering it here as well would give the page two
+                // answers that can disagree.
+                route();
+            } catch (err) {
+                failure.append(banner(err));
+                test.disabled = false;
+            }
+        },
+    }, 'Test');
+
+    const details = el('div', { class: 'panel' },
+        el('h2', {}, 'Details'),
+        el('dl', { class: 'kv' },
+            el('dt', {}, 'Type'), el('dd', {}, c.type),
+            el('dt', {}, 'Tier'), el('dd', {}, c.tier),
+            el('dt', {}, 'Scope'), el('dd', {}, scopeSummary(c)),
+            el('dt', {}, 'Access'), el('dd', {}, c.access),
+            el('dt', {}, 'Secret'), el('dd', {}, c.has_secret ? 'stored' : 'none'),
+            el('dt', {}, 'Last test'), el('dd', {}, lastTest(c)),
+            el('dt', {}, 'Last error'),
+            el('dd', { class: 'error' }, c.last_test_error || '\u2014'),
+            el('dt', {}, 'Created by'), el('dd', {}, c.created_by || '\u2014'),
+            el('dt', {}, 'Created'), el('dd', {}, when(c.created_at)),
+            el('dt', {}, 'Updated'), el('dd', {}, when(c.updated_at))),
+        me.is_admin
+            ? el('div', { style: 'display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap' },
+                test,
+                c.has_secret
+                    ? el('button', {
+                        class: 'secondary',
+                        onclick: async (event) => {
+                            event.target.disabled = true;
+                            await api(path, { method: 'PATCH', json: { secret: null } });
+                            route();
+                        },
+                    }, 'Clear secret')
+                    : null,
+                el('button', {
+                    class: 'danger',
+                    onclick: async (event) => {
+                        event.target.disabled = true;
+                        await api(path, { method: 'DELETE' });
+                        go('#/connections');
+                    },
+                }, 'Delete'))
+            : null,
+        failure);
+
+    view.append(
+        crumbs(['Connections', '#/connections'], [c.name]),
+        el('div', { class: 'toolbar' },
+            el('h1', {}, c.name),
+            el('span', { class: 'hint' }, c.type)),
+        // Reads are open to any signed-in caller because `config` is what a
+        // workspace author needs in order to declare the connection. Writes
+        // are admin-only at the API, so a form nobody may submit is not shown.
+        me.is_admin
+            ? el('div', { class: 'split' }, connectionForm(c), details)
+            : details);
 }
 
 // ---------------------------------------------------------------------------

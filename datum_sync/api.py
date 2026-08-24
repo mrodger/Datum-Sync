@@ -38,8 +38,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.datastructures import UploadFile
 
 from datum_sync import (
-    auth, automations, config, db, errors, events, execute, jobs, mcp, oauth,
-    schedules, ui, uploads,
+    auth, automations, config, connections, crypto, db, errors, events, execute,
+    jobs, mcp, oauth, schedules, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -1009,6 +1009,159 @@ async def automation_runs(
             for r in rows
         ]
     }
+
+
+# -- connections -----------------------------------------------------------
+#
+# Writes are admin-only, reads are not. A connection's `config` is deliberately
+# public to any authenticated caller -- it is what a workspace author needs in
+# order to declare the connection in their manifest, and withholding it means
+# they guess at names. The credential is in `secret`, which no route returns.
+#
+# There is no route that reads a secret back, deliberately. "Show me what I
+# stored" is the request that turns a credential store into a credential
+# viewer; the answer is to overwrite it, or to press Test.
+
+
+def _connection_json(row: asyncpg.Record) -> dict[str, Any]:
+    payload = connections.public(row)
+    for key in ("created_at", "updated_at", "last_test_at"):
+        value = payload[key]
+        payload[key] = value.isoformat() if value is not None else None
+    return payload
+
+
+def _secret_body(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Pull `secret` out of a request body, rejecting a non-object."""
+    secret = body.get("secret")
+    if secret is None or isinstance(secret, dict):
+        return secret
+    raise ApiError(
+        400, "INVALID_PARAMETER",
+        "'secret' is an object of credential fields, e.g. {\"password\": \"...\"}",
+    )
+
+
+def _require_key() -> None:
+    """Refuse a write that would store a credential with no key to seal it.
+
+    Checked before touching the database so the failure is one 503 rather than
+    a connection row that exists, has no secret, and looks merely incomplete.
+    """
+    if not crypto.available():
+        raise ApiError(
+            503, "SERVICE_UNAVAILABLE",
+            f"{crypto.KEY_ENV} is not configured, so connection secrets cannot "
+            f"be stored. Generate a key with `python -m datum_sync.crypto`.",
+        )
+
+
+@app.get("/rest/v1/connections")
+async def list_connections(caller: Principal = Caller) -> dict[str, Any]:
+    async with db.pool().acquire() as conn:
+        rows = await connections.listing(conn)
+    return {
+        "items": [_connection_json(r) for r in rows],
+        "key_configured": crypto.available(),
+    }
+
+
+@app.post("/rest/v1/connections", status_code=201)
+async def create_connection(
+    body: dict[str, Any] = Body(...), caller: Principal = Caller
+) -> dict[str, Any]:
+    auth.require_admin(caller)
+    for key in ("name", "type"):
+        if not isinstance(body.get(key), str) or not body[key]:
+            raise ApiError(400, "INVALID_PARAMETER", f"'{key}' is required")
+    secret = _secret_body(body)
+    if secret:
+        _require_key()
+
+    async with db.pool().acquire() as conn:
+        try:
+            row = await connections.create(
+                conn,
+                name=body["name"],
+                type_=body["type"],
+                config=body.get("config") or {},
+                secret=secret,
+                tier=int(body.get("tier", 1)),
+                scope=body.get("scope", "global"),
+                scope_targets=body.get("scope_targets") or [],
+                access=body.get("access", "read"),
+                description=body.get("description"),
+                created_by=caller.name,
+            )
+        except connections.ConnectionStoreError as e:
+            raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
+        except asyncpg.UniqueViolationError:
+            raise ApiError(
+                409, "ALREADY_EXISTS", f"a connection named {body['name']!r} exists"
+            ) from None
+    return _connection_json(row)
+
+
+@app.get("/rest/v1/connections/{name}")
+async def get_connection(name: str, caller: Principal = Caller) -> dict[str, Any]:
+    async with db.pool().acquire() as conn:
+        row = await connections.get(conn, name)
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no connection named {name!r}")
+    return _connection_json(row)
+
+
+@app.patch("/rest/v1/connections/{name}")
+async def update_connection(
+    name: str, body: dict[str, Any] = Body(...), caller: Principal = Caller
+) -> dict[str, Any]:
+    """Partial update. `name` is not patchable.
+
+    The name is the associated data the secret was sealed with, so renaming a
+    connection would leave a blob that no longer opens. Renaming is delete and
+    recreate, which also forces the credential to be supplied again -- correct,
+    since nothing can read the old one out to carry it across.
+    """
+    auth.require_admin(caller)
+    if "secret" in body:
+        _secret_body(body)
+        _require_key()
+
+    async with db.pool().acquire() as conn:
+        try:
+            row = await connections.update(conn, name, body)
+        except connections.ConnectionStoreError as e:
+            raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no connection named {name!r}")
+    return _connection_json(row)
+
+
+@app.delete("/rest/v1/connections/{name}")
+async def delete_connection(name: str, caller: Principal = Caller) -> dict[str, Any]:
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        if not await connections.delete(conn, name):
+            raise ApiError(404, "NOT_FOUND", f"no connection named {name!r}")
+    return {"name": name, "deleted": True}
+
+
+@app.post("/rest/v1/connections/{name}/test")
+async def test_connection(name: str, caller: Principal = Caller) -> dict[str, Any]:
+    """Open the connection for real and record the outcome.
+
+    Admin-only despite being read-shaped: it makes the server open an outbound
+    connection to an address of the caller's choosing, using credentials the
+    caller cannot see. That is a probe, and the response distinguishes
+    "refused" from "timed out", so an unprivileged caller could map a network
+    with it.
+    """
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        try:
+            return await connections.test(conn, name)
+        except connections.ConnectionStoreError as e:
+            raise ApiError(404, "NOT_FOUND", str(e)) from None
 
 
 # -- service paths ---------------------------------------------------------

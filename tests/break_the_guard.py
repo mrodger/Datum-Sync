@@ -610,6 +610,91 @@ CASES = [
         "            row = await automations.replace(conn, automation_id, text)",
         "tests/test_automations.py::test_scope_is_checked_against_the_new_document_not_only_the_old",
     ),
+
+    # -- connections -------------------------------------------------------
+    (
+        # The whole reason `secret` is a separate column rather than a key in
+        # `config`: no read path can emit it, because no read path selects it.
+        # Put it back in _COLUMNS and every response carries the ciphertext --
+        # not the plaintext, but the thing an offline attack is run against.
+        "the secret column is outside every read path",
+        "datum_sync/connections.py",
+        "    (secret IS NOT NULL) AS has_secret",
+        "    secret, (secret IS NOT NULL) AS has_secret",
+        "tests/test_connections.py::test_no_read_path_returns_the_secret",
+    ),
+    (
+        # Without the name as associated data, a sealed value is portable: one
+        # UPDATE moves a tier-4 production password onto a connection anyone
+        # can resolve, and every read still succeeds. GCM authenticates the
+        # ciphertext, not where it was stored.
+        "a sealed secret is bound to its connection name",
+        "datum_sync/crypto.py",
+        "    return name.encode()",
+        "    return b\"datum-sync\"",
+        "tests/test_connections.py::test_a_secret_sealed_for_one_connection_will_not_open_for_another",
+    ),
+    (
+        # `config` is returned by the API and rendered in the UI. A password
+        # accepted there is a password on screen, and no amount of care in the
+        # secret path undoes it.
+        "a credential in the readable half is refused",
+        "datum_sync/connections.py",
+        "    leaked = sorted(set(config) & _FORBIDDEN_IN_CONFIG)",
+        "    leaked = []",
+        "tests/test_connections.py::test_a_credential_in_config_is_refused",
+    ),
+    (
+        # Scope is the only thing standing between a workspace and every
+        # credential in the system. Resolution runs in the worker, which is
+        # already past authentication -- there is no second check behind this.
+        "scope is enforced at resolution, not only at display",
+        "datum_sync/connections.py",
+        "        if not matches_scope(row, repository, workspace):",
+        "        if False:",
+        "tests/test_connections.py::test_scope_decides_who_can_resolve",
+    ),
+    (
+        # asyncpg hands back jsonb as JSON *text*. Carry it through json.dumps
+        # and a patch that only touches `description` stores a JSON string
+        # where the config object was -- silently, until something reads it.
+        # This is the step-7 schedules bug, which 251 tests could not see.
+        "jsonb is decoded before it is merged and rewritten",
+        "datum_sync/connections.py",
+        "    merged[\"config\"] = json.loads(current[\"config\"])",
+        "    merged[\"config\"] = current[\"config\"]",
+        "tests/test_connections.py::test_a_patch_that_does_not_mention_config_leaves_it_an_object",
+    ),
+    (
+        # Reads are open on purpose -- `config` is what a workspace author needs
+        # to declare a connection. Writes are not: creating one is handing the
+        # server a credential to hold and deciding who may reach it.
+        "creating a connection is admin-only",
+        "datum_sync/api.py",
+        "async def create_connection(\n"
+        "    body: dict[str, Any] = Body(...), caller: Principal = Caller\n"
+        ") -> dict[str, Any]:\n"
+        "    auth.require_admin(caller)",
+        "async def create_connection(\n"
+        "    body: dict[str, Any] = Body(...), caller: Principal = Caller\n"
+        ") -> dict[str, Any]:",
+        "tests/test_connections.py::test_writes_are_admin_only_and_reads_are_not",
+    ),
+    (
+        # Test is read-shaped but makes the server dial out to whatever host the
+        # config names, with the stored credential, on request. That is a probe
+        # anyone authenticated could aim, so it sits with the writes.
+        "testing a connection is admin-only",
+        "datum_sync/api.py",
+        "    auth.require_admin(caller)\n"
+        "    async with db.pool().acquire() as conn:\n"
+        "        try:\n"
+        "            return await connections.test(conn, name)",
+        "    async with db.pool().acquire() as conn:\n"
+        "        try:\n"
+        "            return await connections.test(conn, name)",
+        "tests/test_connections.py::test_writes_are_admin_only_and_reads_are_not",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
@@ -635,7 +720,7 @@ async def _sweep() -> None:
     await db.init_pool()
     try:
         async with db.pool().acquire() as conn:
-            for table in ("automations", "schedules"):
+            for table in ("automations", "schedules", "connections"):
                 await conn.execute(f"DELETE FROM {table} WHERE name LIKE '_pytest%'")
     finally:
         await db.close_pool()

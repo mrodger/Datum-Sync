@@ -10,5 +10,8 @@ PyYAML==6.0.3
 # Runtime since automations: an http_request action is an outbound call the
 # server makes itself, so httpx is no longer only the test client.
 httpx==0.28.1
+# AES-GCM for the connection secret store. Not optional: without it the server
+# imports fine and refuses every write that carries a credential.
+cryptography==50.0.0
 pytest==8.3.4
 pytest-asyncio==0.25.0

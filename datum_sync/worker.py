@@ -27,7 +27,9 @@ from typing import Any
 
 import asyncpg
 
-from datum_sync import automations, config, jobs, schedules, uploads
+from datum_sync import (
+    automations, config, connections, crypto, jobs, schedules, uploads,
+)
 from datum_sync.runner import Runner
 
 POLL_SECONDS = 5.0
@@ -219,6 +221,22 @@ class Worker:
                 await jobs.finish(conn, job_id, "failed", error=str(e))
                 return
 
+            try:
+                resolved = await connections.resolve(
+                    conn,
+                    job["repository"],
+                    job["workspace"],
+                    [c.name for c in manifest.connections],
+                )
+            except (connections.ConnectionStoreError, crypto.CryptoError) as e:
+                # A declared connection was deleted, moved out of scope, or
+                # cannot be decrypted. Failing here rather than passing a short
+                # dict means the job's error names the connection; the
+                # alternative is a KeyError from inside the workspace that says
+                # only that some key was missing.
+                await jobs.finish(conn, job_id, "failed", error=str(e))
+                return
+
             ws_path = (
                 config.REPOSITORIES_PATH / job["repository"] / job["workspace"]
             )
@@ -233,6 +251,7 @@ class Worker:
                 params=params,
                 artifact_dir=artifact_dir,
                 sink=sink,
+                connections=resolved,
             )
             self._active[job_id] = runner
             try:

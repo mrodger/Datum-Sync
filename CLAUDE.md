@@ -11,8 +11,14 @@ Full design spec: `spec/` directory. Read `spec/overview.md` first.
 
 ## Status
 
-**Design phase.** No runnable code yet.
-Build order is in `spec/overview.md` — follow it, don't skip ahead.
+**Implementing.** Steps 1–8 of the build order are done; step 9 (publish gate)
+is next. Build order is in `spec/overview.md` — follow it, don't skip ahead.
+
+Three gates, all of which must pass before a step is called done:
+`pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`.
+Stop the worker before running the suite — a live worker claims the tests' jobs,
+and a job left queued afterwards silently *skips* the UI tests rather than
+failing them, which looks like a clean run.
 
 ## Target environment
 
@@ -33,10 +39,11 @@ These are settled. Don't relitigate without a reason:
 | Service paths | `/stream/`, `/download/`, `/upload/` (no prefix) |
 | Hosted services path | `/serve/{name}/` |
 | MCP transport | Streamable HTTP |
-| MCP auth | OAuth 2.0 PKCE (`authlib`) |
+| MCP auth | OAuth 2.0 PKCE — hand-rolled in `oauth.py`, no `authlib` |
 | Job streaming | pg_notify → SSE (durable, restart-safe) |
 | DB | asyncpg against PostgreSQL + PostGIS |
-| Scheduler | APScheduler |
+| Scheduler | none — the worker polls `next_run` in the DB (no timer, no scheduler object, restart-safe) |
+| Connection secrets | AES-256-GCM, key from `DATUM_SYNC_SECRET_KEY`, connection name as AAD |
 | Default timezone | Pacific/Auckland |
 | Bearer token storage | `sha256(token)` only — raw value never persisted |
 | Workspace isolation | subprocess, not import |

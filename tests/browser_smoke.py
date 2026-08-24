@@ -1,4 +1,4 @@
-"""Drive the Schedules and Automations screens in a real browser.
+"""Drive the Schedules, Automations and Connections screens in a real browser.
 
 Not a test module -- it needs a running server and a real account, so it will
 not work under pytest and does not try to:
@@ -39,6 +39,12 @@ PASSWORD = os.environ.get("DS_SMOKE_PASSWORD", "")
 
 SCHEDULE = "_ui-smoke-schedule"
 AUTOMATION = "_ui-smoke-automation"
+CONNECTION = "_ui-smoke-connection"
+
+# Distinctive enough to search the whole rendered page for. The point of the
+# connections checks is that this string reaches the database and never comes
+# back, and "never comes back" is only demonstrable by looking everywhere.
+CONNECTION_SECRET = "_ui-smoke-must-not-appear"
 
 # Deliberately unrunnable: example.invalid never resolves, and the automation is
 # deleted before anything could fire it. What is being tested is that the editor
@@ -121,6 +127,7 @@ def main() -> int:
         try:
             schedules(page)
             automations(page)
+            connections(page)
         except Exception as exc:            # noqa: BLE001 - recorded, not raised
             # Recorded rather than propagated, because cleanup has to run and a
             # `finally` that calls cleanup will throw away this exception the
@@ -140,7 +147,7 @@ def main() -> int:
         for item in problems:
             print("  -", item)
         return 1
-    print("PASS: both screens render, create, edit and delete cleanly")
+    print("PASS: every screen renders, creates, edits and deletes cleanly")
     return 0
 
 
@@ -248,9 +255,64 @@ def automations(page) -> None:
           "not fired" in page.locator(".empty").inner_text())
 
 
+def connections(page) -> None:
+    print("\nconnections")
+    page.goto(BASE + "/ui#/connections")
+    page.wait_for_selector("#view >> text=New connection")
+    check("list renders", page.locator("#view h1").first.inner_text() == "Connections")
+
+    page.click("#view >> text=New connection")
+    page.wait_for_selector("form.panel")
+
+    texts = page.locator("form.panel input[type=text]")
+    selects = page.locator("form.panel select")
+    kind, scope, targets = selects.nth(0), selects.nth(2), texts.nth(1)
+
+    texts.nth(0).fill(CONNECTION)
+    kind.select_option("file")
+    # The database refuses a global connection carrying targets, so the form has
+    # to refuse it too -- otherwise the only way to learn is a 400 on save.
+    check("a global connection cannot carry scope targets", targets.is_disabled())
+    scope.select_option("repository")
+    check("choosing a narrower scope enables the targets", targets.is_enabled())
+    targets.fill("Testing")
+
+    boxes = page.locator("form.panel textarea")
+    boxes.nth(0).fill('{"root": "/tmp"}')
+    boxes.nth(1).fill('{"password": "%s"}' % CONNECTION_SECRET)
+    page.click("form.panel button[type=submit]")
+
+    page.wait_for_selector(f"tr:has-text('{CONNECTION}')")
+    row = page.locator(f"tr:has-text('{CONNECTION}')").inner_text()
+    check("row shows the scope", "Testing" in row, repr(row))
+    check("row says a secret is stored", "stored" in row, repr(row))
+    check("the secret is not on the list screen",
+          CONNECTION_SECRET not in page.content())
+
+    page.click(f"#view >> tr:has-text('{CONNECTION}') >> text={CONNECTION}")
+    page.wait_for_selector("#view >> text=Clear secret")
+    boxes = page.locator("form.panel textarea")
+    check("config survives the round trip", "/tmp" in boxes.nth(0).input_value())
+    # The guarantee the whole store is built around, seen from the screen rather
+    # than argued from the schema: the box reopens empty because there is no
+    # route that could fill it, and the value is nowhere in the document.
+    check("the secret box reopens empty", boxes.nth(1).input_value() == "")
+    check("the secret is not on the detail screen",
+          CONNECTION_SECRET not in page.content())
+
+    # A real open() of /tmp, not a stub -- the outcome is written to the row and
+    # read back, so a Test button that only looked like it worked would show
+    # "never tested" here.
+    page.click("#view >> button:has-text('Test')")
+    page.wait_for_selector("#view .badge.complete")
+    check("a real test is recorded and read back",
+          "never tested" not in page.locator(".panel").last.inner_text())
+
+
 def cleanup(page) -> None:
     print("\ncleanup")
-    for section, name in (("schedules", SCHEDULE), ("automations", AUTOMATION)):
+    for section, name in (("schedules", SCHEDULE), ("automations", AUTOMATION),
+                          ("connections", CONNECTION)):
         page.goto(f"{BASE}/ui#/{section}")
         # Not `#view h1`: arriving from a detail screen that also has one, it
         # matches the screen still on display and the count below is read before

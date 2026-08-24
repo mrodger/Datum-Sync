@@ -229,7 +229,34 @@ async def test_every_redirect_hop_is_checked_not_just_the_first(monkeypatch):
 # --------------------------------------------------------------------------
 
 @pytest_asyncio.fixture
-async def automation(db):
+async def only_test_automations(db):
+    """No automation but this module's is enabled while these tests run.
+
+    `automations.consider()` reads the whole table -- that is its job -- so any
+    automation a human left in this database fires for real here. The damage is
+    not only a miscount in the assertion: the other automation submits a
+    genuine job, which then trips the "live jobs in the queue, refusing to
+    disturb them" guard and silently SKIPS 58 unrelated UI tests. One demo row
+    seeded for the web UI cost 1 failure and 58 skips, and only the failure
+    named anything real.
+
+    So the precondition is established rather than assumed. Restored after,
+    including when the test body fails -- fixture finalisation still runs.
+    """
+    others = [
+        r["id"] for r in await db.fetch(
+            "UPDATE automations SET enabled = false WHERE enabled RETURNING id"
+        )
+    ]
+    yield
+    if others:
+        await db.execute(
+            "UPDATE automations SET enabled = true WHERE id = ANY($1::int[])", others
+        )
+
+
+@pytest_asyncio.fixture
+async def automation(db, only_test_automations):
     await db.execute("DELETE FROM automations WHERE name = '_pytest-auto'")
     row = await automations.create(db, GOOD, created_by="_pytest")
     yield row
@@ -350,7 +377,7 @@ async def test_a_job_still_running_is_not_considered_finished(db, automation):
 
 
 @pytest_asyncio.fixture
-async def broken_automation(db):
+async def broken_automation(db, only_test_automations):
     """Teardown in a fixture, not at the end of the test body.
 
     Cleaning up on the happy path only means a failing test leaves an enabled
