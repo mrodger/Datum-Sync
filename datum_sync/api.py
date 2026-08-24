@@ -38,7 +38,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.datastructures import UploadFile
 
 from datum_sync import (
-    auth, config, db, errors, events, execute, jobs, mcp, oauth, ui, uploads,
+    auth, automations, config, db, errors, events, execute, jobs, mcp, oauth,
+    schedules, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -201,6 +202,11 @@ def _job_json(row: asyncpg.Record) -> dict[str, Any]:
         "artifacts": json.loads(row["artifacts"]),
         "error": row["error"],
         "submitted_by": row["submitted_by"],
+        # What caused this run, as opposed to who owns it. A scheduled job's
+        # submitted_by is also `schedule:<name>`, but that is a convention the
+        # scheduler happens to follow; this is the column, and it is what the
+        # loop guard and the UI's "why did this run?" both read.
+        "triggered_by": row["triggered_by"],
         "parent_job": str(row["parent_job"]) if row["parent_job"] else None,
         "submitted_at": when("submitted_at"),
         "started_at": when("started_at"),
@@ -672,6 +678,337 @@ async def revoke_grants(name: str, caller: Principal = Caller) -> dict[str, Any]
             account_id,
         )
     return {"account": name, "revoked": revoked}
+
+
+# -- schedules and automations ---------------------------------------------
+#
+# Both of these create jobs later, without the caller present, which is the
+# whole reason they need their own scope checks rather than relying on the ones
+# on /submit.
+#
+# A job an automation submits runs as `automation:<name>`, not as whoever wrote
+# the automation, and `jobs.submit` performs no scope check of its own -- that
+# has always been the API's job. So without a check at write time, an account
+# scoped to one repository could write an automation that runs a workspace in
+# another and have the server run it for them. The rule is the obvious one
+# stated once: you may only automate what you could have run yourself, and you
+# may only watch what you could have seen.
+
+
+def _require_watch_scope(caller: Principal, repository: str | None) -> None:
+    """A trigger with no repository named watches every repository.
+
+    That is a legitimate thing to want and a leak to hand to a scoped account:
+    the trigger fires on other repositories' jobs, and an `http_request` action
+    can put that job's parameters in the body. So the unfiltered form requires
+    unfiltered scope, and a scoped caller must name a repository they hold.
+    """
+    if repository is not None:
+        auth.require_repo(caller, repository)
+        return
+    if caller.repo_scope is not None and not caller.is_admin:
+        raise ApiError(
+            403,
+            "FORBIDDEN",
+            f"{caller.name} is scoped to particular repositories, so a trigger "
+            f"must name one; an unfiltered trigger watches all of them",
+            {"repo_scope": caller.repo_scope},
+        )
+
+
+def _require_automation_scope(caller: Principal, config: dict[str, Any]) -> None:
+    _require_watch_scope(caller, config["trigger"]["repository"])
+    for action in config["actions"]:
+        if action["type"] == "run_workspace":
+            auth.require_repo(caller, action["repository"])
+
+
+def _scope_sql(caller: Principal, column: str, index: int) -> tuple[str, list]:
+    """A WHERE fragment restricting `column` to the caller's repositories.
+
+    In SQL rather than applied to the result for the reason `list_jobs`
+    documents at length: filtering after the query means LIMIT is applied to
+    rows the caller cannot see, so a scoped account pages through gaps.
+
+    Returns the ARGUMENT LIST, not the repositories -- they are one parameter,
+    a text[], and callers splat this with *args. Returning the bare list turned
+    a two-repository scope into two placeholders where the query has one, and a
+    one-repository scope into a str where asyncpg wants a sequence.
+    """
+    if caller.repo_scope is None:
+        return "", []
+    return f" AND {column} = ANY(${index}::text[])", [
+        [s.split("/")[0] for s in caller.repo_scope]
+    ]
+
+
+def _schedule_json(row: asyncpg.Record) -> dict[str, Any]:
+    def when(key: str) -> str | None:
+        value = row[key]
+        return value.isoformat() if value is not None else None
+
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "repository": row["repository"],
+        "workspace": row["workspace"],
+        "params": json.loads(row["params"]),
+        "cron": row["cron"],
+        "interval_s": row["interval_s"],
+        "timezone": row["timezone"],
+        "enabled": row["enabled"],
+        "created_by": row["created_by"],
+        "created_at": when("created_at"),
+        "last_run": when("last_run"),
+        "last_job": str(row["last_job"]) if row["last_job"] else None,
+        # The one field worth having: it is the same column the worker claims
+        # on, so what the screen says is when it will actually run.
+        "next_run": when("next_run"),
+    }
+
+
+def _automation_json(row: asyncpg.Record) -> dict[str, Any]:
+    def when(key: str) -> str | None:
+        value = row[key]
+        return value.isoformat() if value is not None else None
+
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        # Both: the YAML is what the editor must show back, verbatim; the
+        # parsed config is what the table renders without re-parsing per row.
+        "yaml": row["yaml"],
+        "config": json.loads(row["config"]),
+        "enabled": row["enabled"],
+        "created_by": row["created_by"],
+        "created_at": when("created_at"),
+        "updated_at": when("updated_at"),
+        "last_fired": when("last_fired"),
+        "last_error": row["last_error"],
+    }
+
+
+@app.get("/rest/v1/schedules")
+async def list_schedules(caller: Principal = Caller) -> dict[str, Any]:
+    where, args = _scope_sql(caller, "repository", 1)
+    async with db.pool().acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM schedules WHERE true{where} "
+            f"ORDER BY enabled DESC, next_run, name",
+            *args,
+        )
+    return {"items": [_schedule_json(r) for r in rows]}
+
+
+@app.post("/rest/v1/schedules", status_code=201)
+async def create_schedule(
+    body: dict[str, Any] = Body(...), caller: Principal = Caller
+) -> dict[str, Any]:
+    for key in ("name", "repository", "workspace"):
+        if not isinstance(body.get(key), str) or not body[key]:
+            raise ApiError(400, "INVALID_PARAMETER", f"'{key}' is required")
+    auth.require_repo(caller, body["repository"])
+
+    async with db.pool().acquire() as conn:
+        try:
+            row = await schedules.create(
+                conn,
+                name=body["name"],
+                repository=body["repository"],
+                workspace=body["workspace"],
+                params=body.get("params") or {},
+                cron=body.get("cron"),
+                interval_s=body.get("interval_s"),
+                timezone=body.get("timezone", "Pacific/Auckland"),
+                enabled=bool(body.get("enabled", True)),
+                created_by=caller.name,
+            )
+        except schedules.ScheduleError as e:
+            raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
+        except jobs.WorkspaceNotFound as e:
+            raise ApiError(404, "NOT_FOUND", str(e)) from None
+        except asyncpg.UniqueViolationError:
+            raise ApiError(
+                409, "ALREADY_EXISTS", f"a schedule named {body['name']!r} exists"
+            ) from None
+    return _schedule_json(row)
+
+
+async def _schedule_for(
+    conn: asyncpg.Connection, caller: Principal, schedule_id: int
+) -> asyncpg.Record:
+    row = await schedules.get(conn, schedule_id)
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no schedule {schedule_id}")
+    auth.require_repo(caller, row["repository"])
+    return row
+
+
+@app.get("/rest/v1/schedules/{schedule_id}")
+async def get_schedule(
+    schedule_id: int, caller: Principal = Caller
+) -> dict[str, Any]:
+    async with db.pool().acquire() as conn:
+        return _schedule_json(await _schedule_for(conn, caller, schedule_id))
+
+
+@app.patch("/rest/v1/schedules/{schedule_id}")
+async def update_schedule(
+    schedule_id: int,
+    body: dict[str, Any] = Body(...),
+    caller: Principal = Caller,
+) -> dict[str, Any]:
+    """Partial update. Changing the trigger or enabling recomputes `next_run`.
+
+    Repository and workspace are not patchable: a schedule that could be
+    repointed is a scope check that happened once, on a row that no longer says
+    what it said. Delete it and make another.
+    """
+    async with db.pool().acquire() as conn:
+        await _schedule_for(conn, caller, schedule_id)
+        try:
+            row = await schedules.update(conn, schedule_id, body)
+        except schedules.ScheduleError as e:
+            raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no schedule {schedule_id}")
+    return _schedule_json(row)
+
+
+@app.delete("/rest/v1/schedules/{schedule_id}")
+async def delete_schedule(
+    schedule_id: int, caller: Principal = Caller
+) -> dict[str, Any]:
+    async with db.pool().acquire() as conn:
+        await _schedule_for(conn, caller, schedule_id)
+        await schedules.delete(conn, schedule_id)
+    return {"id": schedule_id, "deleted": True}
+
+
+@app.get("/rest/v1/automations")
+async def list_automations(caller: Principal = Caller) -> dict[str, Any]:
+    where, args = _scope_sql(caller, "config -> 'trigger' ->> 'repository'", 1)
+    async with db.pool().acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM automations WHERE true{where} "
+            f"ORDER BY enabled DESC, name",
+            *args,
+        )
+    return {"items": [_automation_json(r) for r in rows]}
+
+
+@app.post("/rest/v1/automations", status_code=201)
+async def create_automation(
+    body: dict[str, Any] = Body(...), caller: Principal = Caller
+) -> dict[str, Any]:
+    text = body.get("yaml")
+    if not isinstance(text, str) or not text.strip():
+        raise ApiError(400, "INVALID_PARAMETER", "'yaml' is required")
+    async with db.pool().acquire() as conn:
+        try:
+            _require_automation_scope(caller, automations.parse(text))
+            row = await automations.create(conn, text, created_by=caller.name)
+        except automations.AutomationError as e:
+            raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
+        except asyncpg.UniqueViolationError:
+            raise ApiError(
+                409, "ALREADY_EXISTS", "an automation with that name exists"
+            ) from None
+    return _automation_json(row)
+
+
+async def _automation_for(
+    conn: asyncpg.Connection, caller: Principal, automation_id: int
+) -> asyncpg.Record:
+    row = await automations.get(conn, automation_id)
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no automation {automation_id}")
+    _require_automation_scope(caller, json.loads(row["config"]))
+    return row
+
+
+@app.get("/rest/v1/automations/{automation_id}")
+async def get_automation(
+    automation_id: int, caller: Principal = Caller
+) -> dict[str, Any]:
+    async with db.pool().acquire() as conn:
+        return _automation_json(await _automation_for(conn, caller, automation_id))
+
+
+@app.put("/rest/v1/automations/{automation_id}")
+async def replace_automation(
+    automation_id: int,
+    body: dict[str, Any] = Body(...),
+    caller: Principal = Caller,
+) -> dict[str, Any]:
+    """Replace the document. Scope is checked against both versions.
+
+    The old one because editing an automation you cannot see is reading it; the
+    new one because otherwise the check is trivially bypassed by writing a
+    harmless automation and then editing it into a privileged one.
+    """
+    text = body.get("yaml")
+    if not isinstance(text, str) or not text.strip():
+        raise ApiError(400, "INVALID_PARAMETER", "'yaml' is required")
+    async with db.pool().acquire() as conn:
+        await _automation_for(conn, caller, automation_id)
+        try:
+            _require_automation_scope(caller, automations.parse(text))
+            row = await automations.replace(conn, automation_id, text)
+        except automations.AutomationError as e:
+            raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no automation {automation_id}")
+    return _automation_json(row)
+
+
+@app.patch("/rest/v1/automations/{automation_id}")
+async def toggle_automation(
+    automation_id: int,
+    body: dict[str, Any] = Body(...),
+    caller: Principal = Caller,
+) -> dict[str, Any]:
+    """Enable or disable without touching the document."""
+    if not isinstance(body.get("enabled"), bool):
+        raise ApiError(400, "INVALID_PARAMETER", "'enabled' must be true or false")
+    async with db.pool().acquire() as conn:
+        await _automation_for(conn, caller, automation_id)
+        row = await automations.set_enabled(conn, automation_id, body["enabled"])
+    return _automation_json(row)
+
+
+@app.delete("/rest/v1/automations/{automation_id}")
+async def delete_automation(
+    automation_id: int, caller: Principal = Caller
+) -> dict[str, Any]:
+    async with db.pool().acquire() as conn:
+        await _automation_for(conn, caller, automation_id)
+        await automations.delete(conn, automation_id)
+    return {"id": automation_id, "deleted": True}
+
+
+@app.get("/rest/v1/automations/{automation_id}/runs")
+async def automation_runs(
+    automation_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    caller: Principal = Caller,
+) -> dict[str, Any]:
+    """What this automation has actually done, newest first."""
+    async with db.pool().acquire() as conn:
+        await _automation_for(conn, caller, automation_id)
+        rows = await automations.runs(conn, automation_id, limit)
+    return {
+        "items": [
+            {
+                "id": r["id"],
+                "fired_at": r["fired_at"].isoformat(),
+                "trigger_job": str(r["trigger_job"]) if r["trigger_job"] else None,
+                "results": json.loads(r["results"]),
+                "ok": r["ok"],
+            }
+            for r in rows
+        ]
+    }
 
 
 # -- service paths ---------------------------------------------------------

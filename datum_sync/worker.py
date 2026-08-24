@@ -8,6 +8,11 @@ timer is not a fallback for a flaky NOTIFY -- it is the primary correctness
 mechanism. A job submitted while the worker was down, restarting, or between
 LISTEN calls generates a notification nobody receives, and Postgres does not
 replay it. The poll is what guarantees such a job still runs.
+
+The same poll asks whether any schedule is due, which is why there is no
+scheduler process and no timer: see datum_sync/schedules.py. It also asks which
+finished jobs no automation has considered yet, for the same reason the poll
+exists at all -- see datum_sync/automations.py.
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ from typing import Any
 
 import asyncpg
 
-from datum_sync import config, jobs, uploads
+from datum_sync import automations, config, jobs, schedules, uploads
 from datum_sync.runner import Runner
 
 POLL_SECONDS = 5.0
@@ -79,6 +84,9 @@ class Worker:
         running: set[asyncio.Task] = set()
 
         while not self.stopping.is_set():
+            await self._tick_schedules()
+            await self._tick_automations()
+
             while len(running) < self.concurrency:
                 job = await self._claim()
                 if job is None:
@@ -124,6 +132,63 @@ class Worker:
     def stop(self) -> None:
         self.stopping.set()
         self.wake.set()
+
+    # -- schedules ---------------------------------------------------------
+
+    async def _tick_schedules(self) -> None:
+        """Submit anything due. Runs on the same poll that claims jobs.
+
+        There is no timer and no scheduler object: `schedules.next_run` is the
+        due time, and this asks the database which rows have passed it. The
+        resolution is therefore the poll interval, which is the trade made for
+        having one source of truth that an API edit updates directly.
+
+        Failures are printed and swallowed. A schedule pointing at a workspace
+        someone unpublished is an operational fact about that schedule; taking
+        the worker down over it would stop every unrelated job as well.
+        """
+        assert self._pool is not None
+        try:
+            async with self._pool.acquire() as conn:
+                fired = await schedules.run_due(conn)
+        except Exception as exc:  # noqa: BLE001 - a bad schedule is not fatal
+            print(f"schedule tick failed: {type(exc).__name__}: {exc}", flush=True)
+            return
+
+        for entry in fired:
+            if entry["error"]:
+                print(f"schedule {entry['schedule']!r} did not submit: "
+                      f"{entry['error']}", flush=True)
+            else:
+                print(f"schedule {entry['schedule']!r} submitted job "
+                      f"{entry['job_id']}", flush=True)
+
+    async def _tick_automations(self) -> None:
+        """Consider every finished job no automation has seen yet.
+
+        Driven off a column rather than off the completion NOTIFY. A job that
+        finishes while this worker is restarting still gets considered, just
+        late -- `automations_at IS NULL` stays true until some worker acts on
+        it. That does mean the last jobs to finish under `--once` are left for
+        the next run, which is the correct end of that trade: late is a delay,
+        lost is a delivery that never happened and nothing to say so.
+
+        Swallows for the same reason `_tick_schedules` does, with one addition:
+        an action here makes an outbound HTTP request, so the failure modes
+        include every way a third-party endpoint can be broken.
+        """
+        assert self._pool is not None
+        try:
+            async with self._pool.acquire() as conn:
+                fired = await automations.run_pending(conn)
+        except Exception as exc:  # noqa: BLE001 - a bad automation is not fatal
+            print(f"automation tick failed: {type(exc).__name__}: {exc}", flush=True)
+            return
+
+        for entry in fired:
+            state = "fired" if entry["ok"] else "fired with errors"
+            print(f"automation {entry['automation']!r} {state} on job "
+                  f"{entry['job_id']}", flush=True)
 
     # -- execution ---------------------------------------------------------
 

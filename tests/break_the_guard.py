@@ -16,11 +16,15 @@ afterwards, so a crash mid-run cannot leave a disarmed check in the tree.
 """
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from datum_sync import db  # noqa: E402  -- after the path insert, necessarily
 
 # (label, file, old, new, test that must break)
 CASES = [
@@ -374,6 +378,238 @@ CASES = [
         "                                      \"status\": body.get(\"status\")})",
         "tests/test_api.py::test_every_status_frame_carries_the_same_fields",
     ),
+
+    # -- step 7: schedules -------------------------------------------------
+    (
+        # The CHECK constraint cannot parse a cron expression, so without this
+        # the row is accepted and sits enabled and never fires. A schedule with
+        # no symptom is the worst thing this feature can produce.
+        "a cron expression is parsed before the schedule is stored",
+        "datum_sync/schedules.py",
+        "    if cron is not None and not croniter.is_valid(cron):",
+        "    if False:",
+        "tests/test_schedules.py::test_a_definition_the_worker_could_not_run_is_refused",
+    ),
+    (
+        # Evaluate the cron in UTC and the UTC hour is held while the local one
+        # moves, so "every weekday at 07:00" becomes 08:00 for half the year.
+        # Nothing looks wrong: the schedule fires, daily, at a time.
+        "cron is evaluated in the schedule's own timezone",
+        "datum_sync/schedules.py",
+        "    zone = _zone(timezone)\n"
+        "    local = moment.astimezone(zone)\n"
+        "    following = croniter(cron, local).get_next(dt.datetime)\n"
+        "    return following.astimezone(dt.timezone.utc)",
+        "    _zone(timezone)\n"
+        "    following = croniter(cron, moment).get_next(dt.datetime)\n"
+        "    return following.astimezone(dt.timezone.utc)",
+        "tests/test_schedules.py::test_a_daily_cron_holds_its_local_hour_across_a_dst_change",
+    ),
+    (
+        # Return the missed time instead of walking past it. It still fires --
+        # immediately -- and then again on the next poll, once for every period
+        # it owed.
+        "a missed schedule is walked forward, not replayed",
+        "datum_sync/schedules.py",
+        "        if upcoming > moment:\n            return upcoming",
+        "        return upcoming",
+        "tests/test_schedules.py::test_five_missed_days_are_one_run_and_not_five",
+    ),
+    (
+        # Advance from now rather than from the missed time. Identical for a
+        # cron schedule, which is why this needs an interval to notice: the
+        # hourly job quietly moves to :15 and stays there.
+        "a missed interval keeps its phase",
+        "datum_sync/schedules.py",
+        "    upcoming = row[\"next_run\"]\n"
+        "    for _ in range(_MAX_CATCHUP_STEPS):",
+        "    upcoming = moment\n"
+        "    for _ in range(_MAX_CATCHUP_STEPS):",
+        "tests/test_schedules.py::test_a_missed_interval_keeps_its_phase",
+    ),
+    (
+        # A worker spinning through 86,400 steps of catch-up stops claiming
+        # jobs, so one badly-configured schedule takes the whole queue down.
+        "the catch-up walk is bounded",
+        "datum_sync/schedules.py",
+        "_MAX_CATCHUP_STEPS = 1000",
+        "_MAX_CATCHUP_STEPS = 100_000_000",
+        "tests/test_schedules.py::test_a_pathologically_overdue_interval_gives_up_walking",
+    ),
+    (
+        # Advance only on success and a schedule pointing at an unpublished
+        # workspace stays due forever: the worker retries it every poll, which
+        # is a hot loop that also floods the log.
+        "a schedule that failed to submit still advances",
+        "datum_sync/schedules.py",
+        "        upcoming = _advance(row, moment)\n"
+        "\n"
+        "        job_id = None",
+        "        upcoming = row[\"next_run\"]\n"
+        "\n"
+        "        job_id = None",
+        "tests/test_schedules.py::test_a_schedule_pointing_at_nothing_records_it_and_still_advances",
+    ),
+    (
+        # Re-enabling a schedule paused for a week must not mean "fire now,
+        # then catch up". The next_run is a week in the past.
+        "re-enabling re-times instead of replaying",
+        "datum_sync/schedules.py",
+        "    enabling = changes.get(\"enabled\") and not current[\"enabled\"]",
+        "    enabling = False",
+        "tests/test_schedules.py::test_re_enabling_does_not_replay_the_runs_it_missed",
+    ),
+    (
+        # asyncpg hands back jsonb as JSON *text*. Carrying that text through
+        # the merge unchanged means json.dumps re-encodes it, so a patch that
+        # only flips `enabled` stores a JSON string where an object was -- and
+        # the next patch wraps it again. Silent, and invisible to every test
+        # that patches params, because those overwrite the corrupted value.
+        "params are decoded before being merged and re-encoded",
+        "datum_sync/schedules.py",
+        "    merged[\"params\"] = json.loads(current[\"params\"])",
+        "    merged[\"params\"] = current[\"params\"]",
+        "tests/test_schedules.py::test_pausing_a_schedule_does_not_eat_its_parameters",
+    ),
+    (
+        # A schedule that can be repointed is a scope check that happened once,
+        # on a row that no longer says what it said when it happened.
+        "repository and workspace are not patchable",
+        "datum_sync/schedules.py",
+        "_PATCHABLE = (\"params\", \"cron\", \"interval_s\", \"timezone\", \"enabled\")",
+        "_PATCHABLE = (\"params\", \"cron\", \"interval_s\", \"timezone\", \"enabled\",\n"
+        "              \"repository\", \"workspace\")",
+        "tests/test_schedules.py::test_a_schedule_cannot_be_repointed_at_another_workspace",
+    ),
+    (
+        # The schedule submits jobs later with nobody present to check scope,
+        # and jobs.submit performs no check of its own.
+        "repo scope on creating a schedule",
+        "datum_sync/api.py",
+        "    auth.require_repo(caller, body[\"repository\"])\n"
+        "\n"
+        "    async with db.pool().acquire() as conn:\n"
+        "        try:\n"
+        "            row = await schedules.create(",
+        "    async with db.pool().acquire() as conn:\n"
+        "        try:\n"
+        "            row = await schedules.create(",
+        "tests/test_schedules.py::test_a_scoped_caller_cannot_schedule_another_repository",
+    ),
+    (
+        "scope filter on the schedules listing",
+        "datum_sync/api.py",
+        "    where, args = _scope_sql(caller, \"repository\", 1)",
+        "    where, args = \"\", []",
+        "tests/test_schedules.py::test_a_scoped_caller_does_not_see_other_repositories_schedules",
+    ),
+
+    # -- step 7: automations -----------------------------------------------
+    (
+        # The highest-consequence line in the module. `load` constructs
+        # arbitrary Python from tags, in a field a user types YAML into.
+        # The payload run here is `true`, deliberately: the break has to
+        # actually execute for the case to prove anything.
+        "YAML is parsed with safe_load, never load",
+        "datum_sync/automations.py",
+        "        doc = yaml.safe_load(text)",
+        "        doc = yaml.load(text, Loader=yaml.UnsafeLoader)",
+        "tests/test_automations.py::test_a_python_object_tag_is_not_constructed",
+    ),
+    (
+        # Not deleting the function -- moving it back out of `parse` to where
+        # it started, as a step each writer had to remember. `create` no longer
+        # calls it, so an automation that submits jobs forever is stored.
+        "the self-trigger check is inside parse, not beside it",
+        "datum_sync/automations.py",
+        "    _reject_self_trigger(config)\n    return config",
+        "    return config",
+        "tests/test_automations.py::test_an_automation_that_triggers_on_what_it_runs_is_refused",
+    ),
+    (
+        # A template naming something outside the namespace would otherwise
+        # render as the empty string, forever, silently.
+        "a placeholder is checked when the automation is written",
+        "datum_sync/automations.py",
+        "        if name.startswith(\"job.\") and name[4:] in _JOB_FIELDS:\n"
+        "            continue",
+        "        if name.startswith(\"job.\"):\n"
+        "            continue",
+        "tests/test_automations.py::test_a_placeholder_naming_nothing_is_refused_where_it_was_typed",
+    ),
+    (
+        "the server refuses to fetch its own network",
+        "datum_sync/automations.py",
+        "        if not address.is_global or address.is_multicast:",
+        "        if False:",
+        "tests/test_automations.py::test_the_server_refuses_to_fetch_its_own_network",
+    ),
+    (
+        # The plausible version, and the one everybody writes: let httpx follow
+        # the redirects. Only the first URL was ever validated, so a webhook
+        # that 302s to 169.254.169.254 walks straight through.
+        "every redirect hop is checked, not just the first",
+        "datum_sync/automations.py",
+        "    async with httpx.AsyncClient(follow_redirects=False,",
+        "    async with httpx.AsyncClient(follow_redirects=True,",
+        "tests/test_automations.py::test_every_redirect_hop_is_checked_not_just_the_first",
+    ),
+    (
+        # Deploying an automation would deliver every run in the job history:
+        # webhooks posted and jobs submitted for work that finished weeks ago.
+        # This is not hypothetical -- it is what the first end-to-end run did.
+        "an automation does not fire on jobs older than itself",
+        "datum_sync/automations.py",
+        "        \"WHERE enabled AND created_at <= $1\",\n        job[\"completed_at\"],",
+        "        \"WHERE enabled AND $1 IS NOT NULL\",\n        job[\"completed_at\"],",
+        "tests/test_automations.py::test_a_job_that_finished_before_the_automation_existed_is_not_delivered",
+    ),
+    (
+        # The runtime half of the loop guard. Without it an automation whose
+        # trigger names no workspace runs forever.
+        "a job an automation caused does not re-fire it",
+        "datum_sync/automations.py",
+        "    return job[\"triggered_by\"] == f\"automation:{name}\"",
+        "    return False",
+        "tests/test_automations.py::test_a_job_this_automation_caused_does_not_re_fire_it",
+    ),
+    (
+        # The claim moved out of `consider` and back into the caller's WHERE
+        # clause -- where it started. `run_pending` still filters, so the
+        # worker still behaves; only a direct second caller double-delivers.
+        "consider claims the job itself",
+        "datum_sync/automations.py",
+        "        \"WHERE id = $1 AND automations_at IS NULL RETURNING id\",",
+        "        \"WHERE id = $1 RETURNING id\",",
+        "tests/test_automations.py::test_considering_is_recorded_so_the_next_poll_does_not_redeliver",
+    ),
+    (
+        "repo scope on writing an automation",
+        "datum_sync/api.py",
+        "            _require_automation_scope(caller, automations.parse(text))\n"
+        "            row = await automations.create(conn, text, created_by=caller.name)",
+        "            row = await automations.create(conn, text, created_by=caller.name)",
+        "tests/test_automations.py::test_a_scoped_caller_cannot_automate_another_repository",
+    ),
+    (
+        # Naming no repository in a trigger is not "no repository", it is all
+        # of them -- every job in the system, including its parameters.
+        "an unfiltered trigger requires unfiltered scope",
+        "datum_sync/api.py",
+        "    if caller.repo_scope is not None and not caller.is_admin:",
+        "    if False:",
+        "tests/test_automations.py::test_a_scoped_caller_cannot_watch_every_repository",
+    ),
+    (
+        # Check only the stored document and the check is bypassed by writing
+        # something harmless and then editing it into something privileged.
+        "an edit is checked against the new document too",
+        "datum_sync/api.py",
+        "            _require_automation_scope(caller, automations.parse(text))\n"
+        "            row = await automations.replace(conn, automation_id, text)",
+        "            row = await automations.replace(conn, automation_id, text)",
+        "tests/test_automations.py::test_scope_is_checked_against_the_new_document_not_only_the_old",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
@@ -393,6 +629,37 @@ def run(test: str) -> bool:
         text=True,
     )
     return proc.returncode == 0
+
+
+async def _sweep() -> None:
+    await db.init_pool()
+    try:
+        async with db.pool().acquire() as conn:
+            for table in ("automations", "schedules"):
+                await conn.execute(f"DELETE FROM {table} WHERE name LIKE '_pytest%'")
+    finally:
+        await db.close_pool()
+
+
+def sweep() -> None:
+    """Delete the rows a broken run wrote, before the next case starts.
+
+    Reverting the source is not reverting the run. Half these cases delete a
+    permission check, and a test that then asserts 403 fails *after* the write
+    it was meant to prevent -- so its own cleanup, which lives past the failing
+    assert, never happens. The row survives the revert.
+
+    That is not theoretical tidiness. An enabled `_pytest-watch` automation left
+    behind this way watches every workspace, and it fired alongside six later
+    tests in the ordinary suite, each failing with a message about something
+    other than the cause. Cleaning up here rather than in each test is the
+    narrower fix: the harness is what runs code it knows to be broken, so the
+    mess is the harness's to own, and a case added later inherits this for free.
+
+    Only the two tables that act on their own. Leftover jobs are inert -- an
+    automation is asked about one job by id, never about the table.
+    """
+    asyncio.run(_sweep())
 
 
 def main() -> int:
@@ -415,6 +682,7 @@ def main() -> int:
         finally:
             path.write_text(original)
             assert path.read_text() == original, f"failed to restore {relpath}"
+            sweep()
 
         if passed:
             unproven.append(label)

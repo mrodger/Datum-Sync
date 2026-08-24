@@ -164,7 +164,22 @@ pg_notify channel: `job_events` — payload `{"job_id": "...", "status": "...", 
 
 ## 6. Schedules
 
-APScheduler-backed cron and interval triggers.
+Cron and interval triggers. **No scheduler object** — `next_run` in this table is
+the only place a due time is recorded, and the worker claims due rows exactly the
+way it claims jobs (`FOR UPDATE SKIP LOCKED`, inside a transaction).
+
+That choice is the whole design, and it is a change from an earlier draft that
+said APScheduler:
+
+- An edit through the API takes effect immediately, because the API writes the
+  same column the worker reads. An in-process scheduler runs in a *different*
+  process from the API and would have to be told.
+- A restart loses nothing. An in-process scheduler rebuilds its timers from the
+  table on startup and is blind to anything that changed while it was down.
+- "When does this next run?" has one answer, and it is the one the UI shows.
+
+The cost is that a schedule fires within one worker poll (5s) of its due time
+rather than on the second. For a workspace runner that is not a real cost.
 
 ```sql
 CREATE TABLE schedules (
@@ -172,45 +187,131 @@ CREATE TABLE schedules (
     name        TEXT NOT NULL UNIQUE,
     repository  TEXT NOT NULL,
     workspace   TEXT NOT NULL,
-    params      JSONB,
+    params      JSONB NOT NULL DEFAULT '{}'::jsonb,
     cron        TEXT,               -- cron expression, null if interval
-    interval_s  INTEGER,            -- seconds, null if cron
-    timezone    TEXT DEFAULT 'Pacific/Auckland',
-    enabled     BOOLEAN DEFAULT true,
+    interval_s  INTEGER CHECK (interval_s IS NULL OR interval_s > 0),
+    timezone    TEXT NOT NULL DEFAULT 'Pacific/Auckland',
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_run    TIMESTAMPTZ,
-    next_run    TIMESTAMPTZ
+    last_job    UUID REFERENCES jobs(id) ON DELETE SET NULL,
+    next_run    TIMESTAMPTZ,
+    CHECK ((cron IS NULL) != (interval_s IS NULL))
 );
 ```
+
+The CHECK is what makes "compute the next run" total: no row can reach that code
+with both or neither set.
+
+**Semantics worth stating, because each is a decision:**
+
+- Cron is evaluated in the schedule's own timezone and converted back to UTC.
+  That is the only way "every weekday at 07:00" survives a daylight saving
+  change — 07:00 NZST and 07:00 NZDT are different instants, and the schedule
+  means the local one.
+- Intervals are deliberately *not* timezone-aware. "Every 900 seconds" is a
+  duration, and a duration does not shift when the clocks do.
+- A missed schedule fires **once**, not once per period missed. The due time is
+  walked forward from the missed one until it is in the future, which also
+  preserves an interval's phase — an hourly schedule stays on the hour instead
+  of moving to :15 because that is when the worker came back.
+- Re-enabling a schedule re-times it from now. A schedule paused for a week has
+  a `next_run` a week in the past, and "fire immediately, then catch up" turns a
+  paused nightly job into a burst.
+- Params are validated against the published manifest **at write time**, so an
+  unrunnable schedule is a 400 on the request that wrote it rather than a
+  failure discovered at 3am by nobody.
+- A schedule whose workspace has since been unpublished records the error and
+  **still advances**. Not advancing leaves the row due forever, and the worker
+  retries it every poll.
 
 ---
 
 ## 7. Automations
 
 YAML-configured triggers and action chains. No visual builder — YAML editor with schema
-validation in the web UI.
+validation in the web UI. The stored document is kept **verbatim**, and the editor
+hands back exactly what was typed: an editor that returns the parsed config
+re-serialised discards comments, key order and quoting, so opening an automation
+and saving it unchanged would rewrite it.
 
-**Trigger types:** `schedule`, `job_complete`, `webhook`, `email`
+| Trigger type   | Status | Note |
+|---|---|---|
+| `job_complete` | built | filters on repository, workspace, status |
+| `schedule`     | deferred | a schedule already runs a workspace; this only earns its place once actions are worth chaining onto a clock |
+| `webhook`      | deferred | needs the credential store (step 8) to authenticate the caller |
+| `email`        | deferred | needs the credential store (step 8) |
 
-**Action types:** `run_workspace`, `deliver`, `http_request`
+| Action type    | Status | Note |
+|---|---|---|
+| `run_workspace` | built | submits as `automation:<name>` |
+| `http_request`  | built | SSRF-guarded, every redirect hop re-checked |
+| `deliver`       | deferred | needs SMTP credentials from step 8 |
 
-**Example:**
+`status` takes a real job status — `complete`, `failed`, `cancelled`. There is no
+`success`; an earlier draft of this section said there was.
+
+**Example (as built):**
 ```yaml
-name: site-plan-email-delivery
+name: site-plan-notify
 enabled: true
 trigger:
   type: job_complete
+  repository: SCIMAC
   workspace: site_plan
-  status: success
+  status: complete
 actions:
-  - type: deliver
-    channel: email
-    to: [andrew@example.com, david@example.com]
-    artifacts: [site_plan_pdf]
-    subject: "Site plan ready — {{params.JOB_ID}}"
   - type: http_request
-    url: "{{SLACK_WEBHOOK}}"
-    body: '{"text": "Site plan delivered for job {{params.JOB_ID}}"}'
+    method: POST
+    url: https://hooks.example.com/site-plan
+    body: '{"text": "Site plan finished for job {{job.id}}"}'
 ```
+
+**Guards, each of which is a way this could have become an escalation:**
+
+- YAML is parsed with `safe_load`. `load` constructs arbitrary Python objects
+  from a document a user pastes into a text box.
+- An automation that triggers on the workspace it runs is refused **inside
+  `parse`**, so the check cannot be bypassed by editing rather than creating.
+  Longer cycles (A→B→C→A) are *not* detected — recorded here because it is a
+  known gap, not an oversight.
+- A job an automation itself caused does not re-fire it.
+- Jobs that finished before the automation existed are not delivered, so writing
+  an automation does not replay history.
+- `http_request` refuses to fetch the server's own network, and re-checks after
+  every redirect — one hop is not enough, because the redirect is the attack.
+- Repo scope is checked against the **new** document on an edit, not only the
+  old one, and a trigger naming no repository requires unfiltered scope: naming
+  no repository is not "no repository", it is all of them.
+
+```sql
+CREATE TABLE automations (
+    id           SERIAL PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,
+    yaml         TEXT NOT NULL,      -- verbatim, as typed
+    config       JSONB NOT NULL,     -- parsed, for querying
+    enabled      BOOLEAN NOT NULL DEFAULT true,
+    created_by   TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_fired   TIMESTAMPTZ,
+    last_error   TEXT
+);
+
+CREATE TABLE automation_runs (
+    id            BIGSERIAL PRIMARY KEY,
+    automation_id INTEGER NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    fired_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    trigger_job   UUID REFERENCES jobs(id) ON DELETE SET NULL,
+    results       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ok            BOOLEAN NOT NULL
+);
+```
+
+A failing action is written to `automation_runs` and does **not** raise. Raising
+would take down the worker poll carrying it, turning one bad automation into a
+stopped queue.
 
 ---
 
@@ -263,8 +364,11 @@ GET|POST        /rest/v1/schedules
 GET|PATCH|DELETE /rest/v1/schedules/{id}
 
 # Automations
-GET|POST        /rest/v1/automations
-GET|PATCH|DELETE /rest/v1/automations/{id}
+# PUT replaces the whole document; PATCH is the enabled toggle only, so the
+# on/off switch does not require re-parsing and re-writing YAML nobody edited.
+GET|POST             /rest/v1/automations
+GET|PUT|PATCH|DELETE /rest/v1/automations/{id}
+GET                  /rest/v1/automations/{id}/runs
 
 # Connections
 GET|POST        /rest/v1/connections

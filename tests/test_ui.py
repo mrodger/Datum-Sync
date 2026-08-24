@@ -155,9 +155,28 @@ async def test_the_ui_talks_only_to_its_own_origin():
     """No CDN, no font host, no analytics. A self-hosted runner on a network
     with no route to the internet must still render its own sign-in page, and
     every third-party origin on this page is one that could serve script into
-    a session."""
+    a session.
+
+    AUTOMATION_TEMPLATE is cut out first, and that exclusion is the interesting
+    part of this test. It contains `https://example.com/hook` -- not an origin
+    the browser ever touches, but the starter text for a YAML document the
+    *server* will later fetch. A line grep cannot tell those two apart, so it
+    flagged it, and the temptation was to spell the URL in pieces to get past
+    the check. That would leave a test that says "no third-party origins" and
+    means "no third-party origins written in one go".
+
+    Cutting the constant by name is narrower and honest: the property still
+    holds over every line the browser executes, and the one place it does not
+    apply is named. The index() calls are what stop the exclusion from
+    quietly widening -- rename or delete the constant and this fails rather
+    than silently skipping nothing, or everything.
+    """
+    start = APP_JS.index('const AUTOMATION_TEMPLATE')
+    end = APP_JS.index('].join(', start)
+    code = APP_JS[:start] + APP_JS[end:]
+
     for marker in ("http://", "https://"):
-        for line in APP_JS.splitlines():
+        for line in code.splitlines():
             if marker in line:
                 # The SVG namespace is a identifier, not a fetch.
                 assert "w3.org/2000/svg" in line, line

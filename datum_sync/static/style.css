@@ -269,6 +269,55 @@ tbody tr:hover { background: var(--panel); }
 .badge.failed    { background: var(--failed); }
 .badge.cancelled { background: var(--queued); }
 
+/* A schedule or automation is enabled or paused, not queued or running.
+ * Outlined rather than filled, and deliberately not reusing .complete for
+ * enabled: a solid green pill beside a schedule reads as "it ran and
+ * succeeded", which is a different claim from "it is switched on". */
+.badge.enabled {
+    background: transparent;
+    color: var(--amber);
+    box-shadow: inset 0 0 0 1px var(--amber);
+}
+.badge.paused {
+    background: transparent;
+    color: var(--muted);
+    box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* -- toolbar: a heading with its primary action beside it ---------------- */
+
+.toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+.toolbar h1 { margin: 0; }
+
+/* -- the automation editor ----------------------------------------------- */
+
+/* No wrapping and no soft tabs: YAML is whitespace-significant, and a line
+ * that wraps looks exactly like a line that is indented. */
+textarea.yaml {
+    font-family: var(--mono);
+    font-size: .82rem;
+    line-height: 1.5;
+    tab-size: 2;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+}
+
+pre.mono {
+    margin: 0;
+    padding: .6rem .75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
 /* -- cards --------------------------------------------------------------- */
 
 .cards {

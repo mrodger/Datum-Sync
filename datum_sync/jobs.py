@@ -86,6 +86,7 @@ async def submit(
     submitted_by: str | None = None,
     idempotency_key: str | None = None,
     parent_job: uuid.UUID | None = None,
+    triggered_by: str | None = None,
 ) -> uuid.UUID:
     """Queue a job. Returns its id.
 
@@ -107,8 +108,9 @@ async def submit(
     async with conn.transaction():
         job_id = await conn.fetchval(
             """
-            INSERT INTO jobs (repository, workspace, params, submitted_by, parent_job)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO jobs (repository, workspace, params, submitted_by,
+                              parent_job, triggered_by)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
             """,
             repository,
@@ -116,6 +118,7 @@ async def submit(
             json.dumps(validated),
             submitted_by,
             parent_job,
+            triggered_by,
         )
         if idempotency_key is not None:
             # ON CONFLICT blocks on a concurrent uncommitted insert of the same

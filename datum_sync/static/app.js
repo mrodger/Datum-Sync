@@ -246,8 +246,8 @@ function parseHash() {
 const SCREENS = {
     repositories: [screenRepositories, screenRepository, screenWorkspace],
     jobs: [screenJobs, screenJob],
-    schedules: [(view) => notBuilt(view, 'Schedules', 7)],
-    automations: [(view) => notBuilt(view, 'Automations', 7)],
+    schedules: [screenSchedules, screenSchedule],
+    automations: [screenAutomations, screenAutomation],
     connections: [(view) => notBuilt(view, 'Connections', 8)],
     resources: [(view) => notBuilt(view, 'Resources', null)],
     services: [(view) => notBuilt(view, 'Services', 10)],
@@ -278,8 +278,7 @@ async function route() {
         leaveScreen = (await screen(view, ...rest)) || null;
     } catch (err) {
         if (err instanceof ApiError && err.status === 401) return showSignin();
-        view.append(el('div', { class: 'banner' },
-            el('b', {}, (err.code || 'ERROR') + ': '), err.message || String(err)));
+        view.append(banner(err));
     }
     refreshEngines();
 }
@@ -330,6 +329,11 @@ function duration(from, to) {
 
 function badge(status) {
     return el('span', { class: 'badge ' + status }, status);
+}
+
+function banner(err) {
+    return el('div', { class: 'banner' },
+        el('b', {}, (err.code || 'ERROR') + ': '), err.message || String(err));
 }
 
 function table(headings, rows) {
@@ -452,25 +456,13 @@ async function screenWorkspace(view, repo, name) {
         run.disabled = true;
         clear(status);
         try {
-            const params = {};
-            for (const { param, ctl } of controls) {
-                const value = ctl.read();
-                if (value === null || value === undefined) {
-                    if (param.required) throw new ApiError(0, 'INVALID_PARAMETER',
-                        `${param.name} is required`);
-                    continue;   // absent, so the manifest default applies
-                }
-                // A FILE parameter carries an upload id, never a path or the
-                // bytes: the file goes up first and the job gets the id back.
-                params[param.name] = ctl.file ? await upload(value) : value;
-            }
+            const params = await readParams(controls);
             const job = await api(
                 `/transformations/submit/${encodeURIComponent(repo)}/${encodeURIComponent(name)}`,
                 { method: 'POST', json: { params } });
             go('#/jobs/' + job.id);
         } catch (err) {
-            status.append(el('div', { class: 'banner' },
-                el('b', {}, (err.code || 'ERROR') + ': '), err.message || String(err)));
+            status.append(banner(err));
         } finally {
             run.disabled = false;
         }
@@ -509,6 +501,31 @@ async function screenWorkspace(view, repo, name) {
                 el('td', {}, job.submitted_by),
                 el('td', {}, el('a', { href: '#/jobs/' + job.id }, 'open')))))
             : el('div', { class: 'empty' }, 'This workspace has not been run recently.'));
+}
+
+/* Read a set of controls into the params object a submit or a schedule takes.
+ *
+ * Shared by the run form and both schedule forms so that a parameter cannot be
+ * read one way when it is run now and another way when it is run at 3am.
+ *
+ * The FILE branch keys off `instanceof File` rather than off `ctl.file`,
+ * because on the schedule edit form a FILE control can also return the upload
+ * id already stored -- see paramControls().
+ */
+async function readParams(controls) {
+    const params = {};
+    for (const { param, ctl } of controls) {
+        const value = ctl.read();
+        if (value === null || value === undefined) {
+            if (param.required) throw new ApiError(0, 'INVALID_PARAMETER',
+                `${param.name} is required`);
+            continue;   // absent, so the manifest default applies
+        }
+        // A FILE parameter carries an upload id, never a path or the bytes:
+        // the file goes up first and the job gets the id back.
+        params[param.name] = value instanceof File ? await upload(value) : value;
+    }
+    return params;
 }
 
 async function upload(file) {
@@ -708,6 +725,510 @@ async function screenJob(view, id) {
     stream.addEventListener('error', () => stream.close());
 
     return () => stream.close();
+}
+
+// ---------------------------------------------------------------------------
+// schedules
+// ---------------------------------------------------------------------------
+
+/* `#/schedules/new` and `#/automations/new` reach the detail screen with the
+ * id "new". Safe because both ids are database integers, so no real row can
+ * ever be reached by that URL, and it keeps creating and editing on one screen
+ * built from one set of fields -- the alternative is two forms that drift. */
+const NEW = 'new';
+
+function every(seconds) {
+    for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60]]) {
+        if (seconds % size === 0) return (seconds / size) + unit;
+    }
+    return seconds + 's';
+}
+
+function triggerOf(schedule) {
+    return schedule.cron
+        ? el('span', {}, el('code', {}, schedule.cron), ' ',
+             el('span', { class: 'hint' }, schedule.timezone))
+        : el('span', {}, 'every ', every(schedule.interval_s));
+}
+
+function zones(selected) {
+    // Intl ships the list, so there is no bundled table to go stale and no
+    // third-party fetch. The current value is prepended if the browser does
+    // not know it, so editing a schedule can never silently retime it.
+    let all;
+    try { all = Intl.supportedValuesOf('timeZone'); } catch (e) { all = ['UTC']; }
+    return all.includes(selected) ? all : [selected, ...all];
+}
+
+/* The trigger half of a schedule form: cron or interval, and the zone the
+ * cron is read in. Returned as {node, read} for the same reason control()
+ * is -- so a trigger cannot be rendered as one kind and read as another. */
+function triggerFields(schedule) {
+    const isCron = !schedule || schedule.cron !== null;
+    const zone = (schedule && schedule.timezone) || 'Pacific/Auckland';
+
+    const kind = el('select', {},
+        el('option', { value: 'cron', selected: isCron }, 'Cron expression'),
+        el('option', { value: 'interval', selected: !isCron }, 'Fixed interval'));
+    const cron = el('input', {
+        type: 'text', placeholder: '0 7 * * 1-5',
+        value: (schedule && schedule.cron) || '',
+    });
+    const seconds = el('input', {
+        type: 'number', min: '1',
+        value: (schedule && schedule.interval_s) || 900,
+    });
+    const zoneInput = el('select', {},
+        zones(zone).map((z) => el('option', { value: z, selected: z === zone }, z)));
+
+    const cronField = el('div', { class: 'field' },
+        el('label', {}, 'Cron expression'), cron,
+        el('div', { class: 'hint' }, 'Five fields: minute hour day month weekday.'));
+    const intervalField = el('div', { class: 'field' },
+        el('label', {}, 'Interval (seconds)'), seconds,
+        el('div', { class: 'hint' },
+            'A duration, so it does not shift when the clocks do.'));
+    const zoneField = el('div', { class: 'field' },
+        el('label', {}, 'Timezone'), zoneInput,
+        el('div', { class: 'hint' },
+            '07:00 here stays 07:00 across a daylight saving change.'));
+
+    function show() {
+        const cronNow = kind.value === 'cron';
+        cronField.hidden = !cronNow;
+        intervalField.hidden = cronNow;
+        // An interval is not evaluated in a zone, so offering one would
+        // suggest it changes something. It is still sent and still stored.
+        zoneField.hidden = !cronNow;
+    }
+    kind.addEventListener('change', show);
+    show();
+
+    return {
+        node: el('div', {},
+            el('div', { class: 'field' }, el('label', {}, 'Trigger'), kind),
+            cronField, intervalField, zoneField),
+        read: () => (kind.value === 'cron'
+            ? { cron: cron.value.trim(), interval_s: null, timezone: zoneInput.value }
+            : { cron: null, interval_s: parseInt(seconds.value, 10),
+                timezone: zoneInput.value }),
+    };
+}
+
+/* Controls for a workspace's parameters, seeded with what a schedule already
+ * stores. */
+function paramControls(parameters, stored) {
+    return parameters.map((p) => {
+        const seeded = Object.assign({}, p);
+        if (stored && p.name in stored) seeded.default = stored[p.name];
+        const ctl = control(seeded);
+        if (ctl.file && stored && stored[p.name]) {
+            // A file input cannot be given a value, so an untouched FILE field
+            // reads as null. On an edit form that would quietly drop the
+            // upload the schedule has been running with for weeks, and the
+            // next run would fail on a missing required parameter. Hold the
+            // stored id and return it unless a new file is actually chosen.
+            const held = stored[p.name];
+            const chosen = ctl.read;
+            ctl.read = () => chosen() || held;
+        }
+        return { param: seeded, ctl };
+    });
+}
+
+function paramsPanel(controls) {
+    return el('div', {},
+        el('h2', { style: 'margin-top:1rem' }, 'Parameters'),
+        controls.length
+            ? controls.map(({ param, ctl }) => field(param, ctl))
+            : el('p', { class: 'subtitle' }, 'This workspace publishes no parameters.'));
+}
+
+async function screenSchedules(view) {
+    const { items } = await api('/schedules');
+    view.append(el('div', { class: 'toolbar' },
+        el('h1', {}, 'Schedules'),
+        el('a', { class: 'button', href: '#/schedules/' + NEW }, 'New schedule')));
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty' },
+            'Nothing scheduled. A schedule runs one workspace on a cron ',
+            'expression or a fixed interval.'));
+        return;
+    }
+
+    view.append(table(
+        ['', 'Name', 'Workspace', 'Trigger', 'Next run', 'Last run', ''],
+        items.map((s) => el('tr', {},
+            el('td', {}, badge(s.enabled ? 'enabled' : 'paused')),
+            el('td', {}, el('a', { href: '#/schedules/' + s.id }, s.name)),
+            el('td', {}, el('a', {
+                href: `#/repositories/${encodeURIComponent(s.repository)}`
+                    + `/${encodeURIComponent(s.workspace)}`,
+            }, s.repository + '/' + s.workspace)),
+            el('td', {}, triggerOf(s)),
+            // Only for an enabled schedule. Disabling does not clear next_run,
+            // so a paused one still carries whatever time it was paused at --
+            // shown, that reads as permanently overdue, which it is not.
+            el('td', {}, s.enabled ? when(s.next_run) : '\u2014'),
+            el('td', {}, s.last_job
+                ? el('a', { href: '#/jobs/' + s.last_job }, when(s.last_run))
+                : when(s.last_run)),
+            el('td', {}, el('a', { href: '#/schedules/' + s.id }, 'open'))))));
+}
+
+async function screenSchedule(view, id) {
+    return id === NEW ? newSchedule(view) : editSchedule(view, id);
+}
+
+async function newSchedule(view) {
+    const { items: repos } = await api('/repositories');
+
+    const name = el('input', { type: 'text', required: true, placeholder: 'nightly-export' });
+    const repo = el('select', { required: true },
+        el('option', { value: '' }, 'Choose a repository\u2026'),
+        repos.map((r) => el('option', { value: r.name }, r.name)));
+    const workspace = el('select', { required: true, disabled: true },
+        el('option', { value: '' }, '\u2014'));
+    const params = el('div', {});
+    const trigger = triggerFields(null);
+    const status = el('div', {});
+    const create = el('button', { type: 'submit', disabled: true }, 'Create schedule');
+    let controls = [];
+
+    repo.addEventListener('change', async () => {
+        controls = [];
+        clear(params);
+        create.disabled = true;
+        workspace.disabled = !repo.value;
+        clear(workspace).append(el('option', { value: '' }, 'Choose a workspace\u2026'));
+        if (!repo.value) return;
+        const { items } = await api(
+            `/repositories/${encodeURIComponent(repo.value)}/workspaces`);
+        append(workspace, [items.map((w) => el('option', { value: w.name }, w.name))]);
+    });
+
+    workspace.addEventListener('change', async () => {
+        controls = [];
+        clear(params);
+        create.disabled = !workspace.value;
+        if (!workspace.value) return;
+        const ws = await api(`/repositories/${encodeURIComponent(repo.value)}`
+            + `/workspaces/${encodeURIComponent(workspace.value)}`);
+        controls = paramControls(ws.parameters, null);
+        params.append(paramsPanel(controls));
+    });
+
+    const form = el('form', { class: 'panel' },
+        el('div', { class: 'field' }, el('label', {}, 'Name'), name,
+            el('div', { class: 'hint' }, 'Unique, and how the schedule signs the jobs it submits.')),
+        el('div', { class: 'field' }, el('label', {}, 'Repository'), repo),
+        el('div', { class: 'field' }, el('label', {}, 'Workspace'), workspace),
+        trigger.node,
+        params,
+        el('div', { style: 'margin-top:1rem' }, create),
+        status);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        create.disabled = true;
+        clear(status);
+        try {
+            const body = Object.assign({
+                name: name.value.trim(),
+                repository: repo.value,
+                workspace: workspace.value,
+                // A FILE parameter on a schedule stores an upload id that has
+                // to outlive every run, which is a different lifetime from the
+                // one an upload for a single job needs.
+                params: await readParams(controls),
+                enabled: true,
+            }, trigger.read());
+            await api('/schedules', { method: 'POST', json: body });
+            go('#/schedules');
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            create.disabled = false;
+        }
+    });
+
+    view.append(
+        crumbs(['Schedules', '#/schedules'], ['New']),
+        el('h1', {}, 'New schedule'),
+        el('p', { class: 'subtitle' },
+            'The workspace and its parameters are checked now, so a schedule ',
+            'that could never run is refused here rather than at 3am.'),
+        form);
+}
+
+async function editSchedule(view, id) {
+    const s = await api('/schedules/' + encodeURIComponent(id));
+
+    // A schedule can outlive the workspace it points at -- unpublishing does
+    // not delete schedules -- and that is exactly when someone comes to look
+    // at it. So a 404 here degrades to a read-only view of the stored params
+    // rather than taking the whole screen down with it.
+    let parameters = null;
+    try {
+        const ws = await api(`/repositories/${encodeURIComponent(s.repository)}`
+            + `/workspaces/${encodeURIComponent(s.workspace)}`);
+        parameters = ws.parameters;
+    } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 404) throw err;
+    }
+
+    const controls = parameters ? paramControls(parameters, s.params) : [];
+    const trigger = triggerFields(s);
+    const status = el('div', {});
+    const save = el('button', { type: 'submit' }, 'Save');
+
+    const form = el('form', { class: 'panel' },
+        el('h2', {}, 'Trigger'),
+        trigger.node,
+        parameters
+            ? paramsPanel(controls)
+            : el('div', {},
+                el('h2', { style: 'margin-top:1rem' }, 'Parameters'),
+                el('div', { class: 'banner' },
+                    s.repository, '/', s.workspace, ' is no longer published. ',
+                    'The stored parameters are shown but cannot be edited here.'),
+                el('pre', { class: 'mono' }, JSON.stringify(s.params, null, 2))),
+        el('div', { style: 'margin-top:1rem' }, save),
+        status);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        clear(status);
+        try {
+            const body = trigger.read();
+            // Omitted, not sent empty, when the manifest could not be loaded:
+            // an empty params object would erase what the schedule runs with.
+            if (parameters) body.params = await readParams(controls);
+            await api('/schedules/' + encodeURIComponent(id),
+                { method: 'PATCH', json: body });
+            go('#/schedules');
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            save.disabled = false;
+        }
+    });
+
+    const toggle = el('button', {
+        class: 'secondary',
+        onclick: async () => {
+            toggle.disabled = true;
+            await api('/schedules/' + encodeURIComponent(id),
+                { method: 'PATCH', json: { enabled: !s.enabled } });
+            route();
+        },
+    }, s.enabled ? 'Pause' : 'Resume');
+
+    view.append(
+        crumbs(['Schedules', '#/schedules'], [s.name]),
+        el('div', { class: 'toolbar' },
+            el('h1', {}, s.name),
+            badge(s.enabled ? 'enabled' : 'paused')),
+        el('div', { class: 'split' },
+            form,
+            el('div', { class: 'panel' },
+                el('h2', {}, 'Details'),
+                el('dl', { class: 'kv' },
+                    el('dt', {}, 'Workspace'),
+                    el('dd', {}, el('a', {
+                        href: `#/repositories/${encodeURIComponent(s.repository)}`
+                            + `/${encodeURIComponent(s.workspace)}`,
+                    }, s.repository + '/' + s.workspace)),
+                    el('dt', {}, 'Next run'),
+                    el('dd', {}, s.enabled ? when(s.next_run) : 'paused'),
+                    el('dt', {}, 'Last run'), el('dd', {}, when(s.last_run)),
+                    el('dt', {}, 'Last job'),
+                    el('dd', {}, s.last_job
+                        ? el('a', { href: '#/jobs/' + s.last_job }, s.last_job.slice(0, 8))
+                        : '\u2014'),
+                    el('dt', {}, 'Created by'), el('dd', {}, s.created_by || '\u2014'),
+                    el('dt', {}, 'Created'), el('dd', {}, when(s.created_at))),
+                el('p', { class: 'hint', style: 'margin-top:1rem' },
+                    'Repository and workspace cannot be changed. A schedule ',
+                    'that could be repointed is a permission check made once, ',
+                    'on a row that no longer says what it said.'),
+                el('div', { style: 'display:flex;gap:.5rem;margin-top:1rem' },
+                    toggle,
+                    el('button', {
+                        class: 'danger',
+                        onclick: async (event) => {
+                            event.target.disabled = true;
+                            await api('/schedules/' + encodeURIComponent(id),
+                                { method: 'DELETE' });
+                            go('#/schedules');
+                        },
+                    }, 'Delete')))));
+}
+
+// ---------------------------------------------------------------------------
+// automations
+// ---------------------------------------------------------------------------
+
+/* The document a new automation starts from. Deliberately complete and
+ * deliberately not runnable as-is: every field is shown with a real value so
+ * the shape is learnable from the form, and REPOSITORY/WORKSPACE are obvious
+ * placeholders so nobody saves the example by accident and wonders why it
+ * never fires. */
+const AUTOMATION_TEMPLATE = [
+    'name: my-automation',
+    'enabled: true',
+    '',
+    'trigger:',
+    '  type: job_complete',
+    '  repository: REPOSITORY',
+    '  workspace: WORKSPACE',
+    '  status: complete        # omit for any terminal status, failures included',
+    '',
+    'actions:',
+    '  - type: http_request',
+    '    method: POST',
+    '    url: https://example.com/hook',
+    '    body: \'{"job": "{{job.id}}", "status": "{{job.status}}"}\'',
+    '',
+].join('\n');
+
+function triggerSummary(config) {
+    const t = config.trigger;
+    return el('span', {},
+        (t.repository || 'any') + '/' + (t.workspace || 'any'),
+        ' \u00b7 ',
+        el('span', { class: 'hint' }, t.status || 'any terminal status'));
+}
+
+async function screenAutomations(view) {
+    const { items } = await api('/automations');
+    view.append(el('div', { class: 'toolbar' },
+        el('h1', {}, 'Automations'),
+        el('a', { class: 'button', href: '#/automations/' + NEW }, 'New automation')));
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty' },
+            'No automations. An automation watches for finished jobs and runs ',
+            'a workspace or calls a URL when one matches.'));
+        return;
+    }
+
+    view.append(table(
+        ['', 'Name', 'Trigger', 'Actions', 'Last fired', 'Last error', ''],
+        items.map((a) => el('tr', {},
+            el('td', {}, badge(a.enabled ? 'enabled' : 'paused')),
+            el('td', {}, el('a', { href: '#/automations/' + a.id }, a.name)),
+            el('td', {}, triggerSummary(a.config)),
+            el('td', {}, a.config.actions.map((x) => x.type).join(', ')),
+            el('td', {}, when(a.last_fired)),
+            el('td', { class: 'error' }, a.last_error || ''),
+            el('td', {}, el('a', { href: '#/automations/' + a.id }, 'open'))))));
+}
+
+async function screenAutomation(view, id) {
+    const fresh = id === NEW;
+    const a = fresh ? null : await api('/automations/' + encodeURIComponent(id));
+
+    /* The stored YAML, verbatim -- not the parsed config re-serialised. An
+     * editor that hands back a normalised document silently discards comments,
+     * key order and quoting style, so opening an automation and saving it
+     * unchanged would rewrite it. */
+    const editor = el('textarea', { class: 'yaml', spellcheck: 'false', rows: 22 },
+        fresh ? AUTOMATION_TEMPLATE : a.yaml);
+    const status = el('div', {});
+    const save = el('button', { type: 'submit' }, fresh ? 'Create automation' : 'Save');
+
+    const form = el('form', { class: 'panel' },
+        el('h2', {}, 'Definition'),
+        editor,
+        el('div', { style: 'margin-top:1rem' }, save),
+        status);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        clear(status);
+        try {
+            await api(fresh ? '/automations' : '/automations/' + encodeURIComponent(id),
+                { method: fresh ? 'POST' : 'PUT', json: { yaml: editor.value } });
+            go('#/automations');
+        } catch (err) {
+            // The server parses the YAML; nothing here does. One parser means
+            // the editor cannot accept a document the server would refuse, or
+            // refuse one it would accept.
+            status.append(banner(err));
+        } finally {
+            save.disabled = false;
+        }
+    });
+
+    if (fresh) {
+        view.append(
+            crumbs(['Automations', '#/automations'], ['New']),
+            el('h1', {}, 'New automation'),
+            el('p', { class: 'subtitle' },
+                'Placeholders are ', el('code', {}, '{{job.id}}'), ', ',
+                el('code', {}, '{{job.status}}'), ' and ',
+                el('code', {}, '{{params.NAME}}'), '. A name outside that set ',
+                'is refused now rather than posted as literal text later.'),
+            form);
+        return;
+    }
+
+    const toggle = el('button', {
+        class: 'secondary',
+        onclick: async () => {
+            toggle.disabled = true;
+            await api('/automations/' + encodeURIComponent(id),
+                { method: 'PATCH', json: { enabled: !a.enabled } });
+            route();
+        },
+    }, a.enabled ? 'Pause' : 'Resume');
+
+    const { items: runs } = await api(
+        '/automations/' + encodeURIComponent(id) + '/runs');
+
+    view.append(
+        crumbs(['Automations', '#/automations'], [a.name]),
+        el('div', { class: 'toolbar' },
+            el('h1', {}, a.name),
+            badge(a.enabled ? 'enabled' : 'paused')),
+        a.last_error ? el('div', { class: 'banner' }, a.last_error) : null,
+        el('div', { class: 'split' },
+            form,
+            el('div', { class: 'panel' },
+                el('h2', {}, 'Details'),
+                el('dl', { class: 'kv' },
+                    el('dt', {}, 'Trigger'), el('dd', {}, triggerSummary(a.config)),
+                    el('dt', {}, 'Actions'),
+                    el('dd', {}, a.config.actions.map((x) => x.type).join(', ')),
+                    el('dt', {}, 'Last fired'), el('dd', {}, when(a.last_fired)),
+                    el('dt', {}, 'Created by'), el('dd', {}, a.created_by || '\u2014'),
+                    el('dt', {}, 'Created'), el('dd', {}, when(a.created_at)),
+                    el('dt', {}, 'Updated'), el('dd', {}, when(a.updated_at))),
+                el('div', { style: 'display:flex;gap:.5rem;margin-top:1rem' },
+                    toggle,
+                    el('button', {
+                        class: 'danger',
+                        onclick: async (event) => {
+                            event.target.disabled = true;
+                            await api('/automations/' + encodeURIComponent(id),
+                                { method: 'DELETE' });
+                            go('#/automations');
+                        },
+                    }, 'Delete')))),
+        el('h2', { style: 'margin-top:1.5rem' }, 'Runs'),
+        runs.length
+            ? table(['', 'Fired', 'Triggered by', 'Result'], runs.map((r) => el('tr', {},
+                el('td', {}, badge(r.ok ? 'complete' : 'failed')),
+                el('td', {}, when(r.fired_at)),
+                el('td', {}, r.trigger_job
+                    ? el('a', { href: '#/jobs/' + r.trigger_job }, r.trigger_job.slice(0, 8))
+                    : '\u2014'),
+                el('td', {}, el('span', { class: 'mono' }, JSON.stringify(r.results))))))
+            : el('div', { class: 'empty' }, 'This automation has not fired yet.'));
 }
 
 // ---------------------------------------------------------------------------
