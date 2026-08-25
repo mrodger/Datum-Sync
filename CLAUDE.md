@@ -11,8 +11,9 @@ Full design spec: `spec/` directory. Read `spec/overview.md` first.
 
 ## Status
 
-**Implementing.** Steps 1–8 of the build order are done; step 9 (publish gate)
-is next. Build order is in `spec/overview.md` — follow it, don't skip ahead.
+**Implementing.** Steps 1–9 of the build order are done; step 10 (hosted
+services) is next. Build order is in `spec/overview.md` — follow it, don't skip
+ahead.
 
 Three gates, all of which must pass before a step is called done:
 `pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`.
@@ -87,10 +88,29 @@ Every workspace needs: `main.py`, `manifest.json`, `MANIFEST.md`.
 
 ## Publish gate (all must pass)
 
-1. `manifest.json` validates against schema
-2. All declared connections exist and are accessible at the required tier
-3. `MANIFEST.md` present and non-empty
-4. Optional smoke test exits 0
+`datum_sync/publish.py`, run from `repository.sync()`. Cheapest check first — a
+workspace with a broken manifest never costs a process launch.
+
+1. `manifest.json` validates against schema (`manifest.load_manifest`)
+2. Every declared connection exists, and is in scope for `repository/workspace`
+   — the same predicate `connections.resolve` uses at run time
+3. The **publisher's** `max_tier` covers every connection's tier. Checked
+   against whoever publishes, not whoever later submits a job: the workspace
+   runs with its own authority, and the submitter never chose its connections
+4. `MANIFEST.md` present with all five sections **non-empty** — "N/A", "TBD" and
+   an HTML comment all count as empty
+5. Smoke test exits 0, if `manifest.json` sets `"smoke_test": true`. Opt-in
+   because a workspace with no `--smoke` handler ignores the flag and runs for
+   real, so an always-on check would report a pass having done the side effects
+
+Failing the gate drops the workspace from what gets written — the previously
+published version stays up and callable. Stale is computed from the **disk**
+before the gate runs, so a broken workspace is never mistaken for a removed one.
+
+`python -m datum_sync.repository sync [--dry-run] [--prune] [--as ACCOUNT]`.
+Without `--as` it publishes as an unrestricted local admin, which is honest:
+anyone who can run it already has the database URL and the decryption key.
+`--dry-run` skips the smoke test — it promises to change nothing.
 
 ## Connection tier model
 

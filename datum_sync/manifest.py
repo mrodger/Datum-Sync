@@ -102,6 +102,16 @@ class Manifest(BaseModel):
     connections: list[ConnectionRef] = Field(default_factory=list)
     timeout_seconds: int = 300
 
+    # Opt in to the publish gate running `python main.py --smoke`. Declared here
+    # rather than detected, because there is no way to ask a script whether it
+    # supports a flag except by running it -- and a workspace with no --smoke
+    # handler does not fail, it runs its normal path with an argument it ignores.
+    # That would make "the smoke test passed" mean "the workspace ran for real",
+    # which for anything with side effects is the opposite of a safe check.
+    #
+    # Default false so the gate stays free unless a workspace asks for it.
+    smoke_test: bool = False
+
     @model_validator(mode="after")
     def _check(self) -> "Manifest":
         self._reject_duplicates([p.name for p in self.parameters], "parameter")

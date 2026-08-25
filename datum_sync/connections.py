@@ -20,11 +20,14 @@ someone forgetting to strip it. The only code that reads the column is
 `_sealed()`, called by `resolve()` and `test()`, neither of which returns to an
 HTTP client.
 
-Scope is enforced; tier is not. Scope is an addressing rule -- two repositories
-can each own a "MainDB" and mean different databases -- so resolution needs it
-to be correct at all. Tier is a permission, checked against a service account's
-`max_tier` at the publish gate in step 9. It is stored and displayed here so the
-data is ready, and enforced nowhere yet, which is recorded rather than implied.
+Scope is enforced here; tier is enforced elsewhere, and the split is deliberate.
+Scope is an addressing rule -- two repositories can each own a "MainDB" and mean
+different databases -- so resolution needs it to be correct at all, on every
+call. Tier is a permission, and the person it constrains is whoever *published*
+the workspace, not whoever submitted the job: a workspace runs with its own
+authority, so the credential decision was made once, at publish time. It is
+therefore checked once, in `publish.check_connections`, against the publisher's
+`max_tier`. Checking it again at resolution would ask the wrong person.
 """
 from __future__ import annotations
 

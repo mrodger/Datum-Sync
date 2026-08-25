@@ -23,11 +23,34 @@ from pathlib import Path
 
 import asyncpg
 
-from datum_sync import config
+from datum_sync import auth, config, publish
+from datum_sync.auth import Principal
 from datum_sync.manifest import Manifest, ManifestError, load_manifest
 
 ENTRYPOINT = "main.py"
 RUN_SIGNATURE = ("params", "emit", "connections")
+
+# Who a CLI sync publishes as when no --as is given.
+#
+# Unrestricted, and that is not a loophole being left open -- it is a true
+# statement about what running this command already requires. Anyone who can run
+# it has the database URL and the key that unseals every stored secret, so a
+# tier check against them constrains nothing. Pretending otherwise would put a
+# lock on a door with no wall attached, and would mean the ordinary `sync` on a
+# dev box failed against any tier-2 connection.
+#
+# The check is real where it binds someone who does *not* already have that:
+# `--as NAME` publishes with a named account's max_tier, which is how a
+# restricted publisher is tested and how this is meant to be run in anger.
+LOCAL_PUBLISHER = Principal(
+    account_id=0,
+    name="local",
+    max_tier=4,
+    repo_scope=None,
+    connection_grants=None,
+    is_admin=True,
+    source="local",
+)
 
 
 class WorkspaceError(Exception):
@@ -47,6 +70,7 @@ class SyncReport:
     loaded: list[LoadedWorkspace] = field(default_factory=list)
     errors: list[tuple[str, str]] = field(default_factory=list)   # (where, message)
     stale: list[tuple[str, str]] = field(default_factory=list)    # (repo, workspace)
+    publisher: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -124,7 +148,9 @@ def scan(root: Path | None = None) -> SyncReport:
     return report
 
 
-async def _upsert(conn: asyncpg.Connection, report: SyncReport, root: Path) -> None:
+async def _upsert(
+    conn: asyncpg.Connection, report: SyncReport, root: Path, publisher: str
+) -> None:
     for repo_dir in _visible_dirs(root):
         await conn.execute(
             """
@@ -142,24 +168,42 @@ async def _upsert(conn: asyncpg.Connection, report: SyncReport, root: Path) -> N
         await conn.execute(
             """
             INSERT INTO workspaces
-                (repository_id, name, description, version, manifest)
-            VALUES ($1, $2, $3, $4, $5)
+                (repository_id, name, description, version, manifest, published_by)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (repository_id, name) DO UPDATE SET
                 description  = EXCLUDED.description,
                 version      = EXCLUDED.version,
                 manifest     = EXCLUDED.manifest,
-                published_at = now()
+                published_at = now(),
+                published_by = EXCLUDED.published_by
             """,
             repo_id,
             ws.name,
             ws.manifest.description,
             ws.manifest.version,
             json.dumps(ws.manifest.model_dump(mode="json")),
+            publisher,
         )
 
 
+def _on_disk(root: Path) -> set[tuple[str, str]]:
+    """Every workspace directory present, whether or not it loads.
+
+    Deliberately not "every workspace that loaded". Stale means *removed*, and a
+    directory that is still there but fails to load has not been removed -- it is
+    broken, which is a different fact with a different remedy. Conflating them
+    means a typo in manifest.json plus `--prune` deregisters a working published
+    workspace, turning a syntax error into an outage.
+    """
+    return {
+        (repo_dir.name, ws_dir.name)
+        for repo_dir in _visible_dirs(root)
+        for ws_dir in _visible_dirs(repo_dir)
+    }
+
+
 async def _find_stale(
-    conn: asyncpg.Connection, report: SyncReport
+    conn: asyncpg.Connection, root: Path
 ) -> list[tuple[str, str]]:
     rows = await conn.fetch(
         """
@@ -167,7 +211,7 @@ async def _find_stale(
         FROM workspaces w JOIN repositories r ON r.id = w.repository_id
         """
     )
-    on_disk = {(w.repository, w.name) for w in report.loaded}
+    on_disk = _on_disk(root)
     return [
         (r["repository"], r["workspace"])
         for r in rows
@@ -175,19 +219,65 @@ async def _find_stale(
     ]
 
 
-async def sync(dry_run: bool = False, prune: bool = False) -> SyncReport:
+async def _apply_gate(
+    conn: asyncpg.Connection,
+    report: SyncReport,
+    publisher: Principal,
+    smoke: bool,
+) -> None:
+    """Run the publish gate over everything that loaded, and drop the failures.
+
+    Dropping from `loaded` is what makes a failed gate mean something: `_upsert`
+    only writes what is in that list, so a workspace that fails leaves whatever
+    was published before it untouched and still callable. That is the intended
+    behaviour -- editing a workspace into an invalid state must not take the
+    working version off the air -- and it only holds because this runs *after*
+    `_find_stale`, which reads the disk rather than this list.
+    """
+    passed: list[LoadedWorkspace] = []
+    for ws in report.loaded:
+        try:
+            await publish.gate(
+                conn, ws.manifest, ws.path, ws.repository, publisher, smoke=smoke
+            )
+        except publish.PublishError as e:
+            report.errors.append((f"{ws.repository}/{ws.name}", str(e)))
+        else:
+            passed.append(ws)
+    report.loaded = passed
+
+
+async def sync(
+    dry_run: bool = False,
+    prune: bool = False,
+    as_account: str | None = None,
+) -> SyncReport:
     root = config.REPOSITORIES_PATH
     report = scan(root)
 
     conn = await asyncpg.connect(config.DATABASE_URL)
     try:
-        report.stale = await _find_stale(conn, report)
+        # Before the gate, so that failing the gate is never mistaken for
+        # having been deleted. See _on_disk.
+        report.stale = await _find_stale(conn, root)
+
+        publisher = (
+            await auth.principal_by_name(conn, as_account)
+            if as_account
+            else LOCAL_PUBLISHER
+        )
+        report.publisher = publisher.name
+
+        # Smoke tests are skipped on a dry run: --dry-run promises to change
+        # nothing, and a workspace's smoke test is arbitrary code that may
+        # write to whatever it can reach.
+        await _apply_gate(conn, report, publisher, smoke=not dry_run)
 
         if dry_run:
             return report
 
         async with conn.transaction():
-            await _upsert(conn, report, root)
+            await _upsert(conn, report, root, publisher.name)
             if prune:
                 for repo, ws in report.stale:
                     await conn.execute(
@@ -218,7 +308,8 @@ def _print(report: SyncReport, dry_run: bool, prune: bool) -> int:
         print("  (run with --prune to deregister stale workspaces)")
 
     mode = "would register" if dry_run else "registered"
-    print(f"{len(report.loaded)} {mode}, {len(report.errors)} failed.")
+    who = f" as {report.publisher}" if report.publisher else ""
+    print(f"{len(report.loaded)} {mode}{who}, {len(report.errors)} failed.")
     return 0 if report.ok else 1
 
 
@@ -228,9 +319,22 @@ def main() -> int:
     p = sub.add_parser("sync", help="reconcile disk with the database")
     p.add_argument("--dry-run", action="store_true", help="report only, change nothing")
     p.add_argument("--prune", action="store_true", help="deregister workspaces not on disk")
+    p.add_argument(
+        "--as",
+        dest="as_account",
+        metavar="ACCOUNT",
+        help="publish as this service account, enforcing its max_tier "
+             "(default: unrestricted local)",
+    )
     args = parser.parse_args()
 
-    report = asyncio.run(sync(dry_run=args.dry_run, prune=args.prune))
+    try:
+        report = asyncio.run(
+            sync(dry_run=args.dry_run, prune=args.prune, as_account=args.as_account)
+        )
+    except auth.UnknownAccount as e:
+        print(f"  [FAILED ] {e}")
+        return 1
     return _print(report, args.dry_run, args.prune)
 
 

@@ -300,6 +300,50 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
     )
 
 
+class UnknownAccount(Exception):
+    """No such account, or it is disabled."""
+
+
+async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
+    """Look an account up by name, with no credential involved.
+
+    Only for callers that have already established their authority some other
+    way -- today that is the publish CLI, where the authority is having a shell
+    on the server. It is emphatically not an authentication path: it takes a
+    name and returns full permissions, so exposing it over HTTP would be a
+    login form with the password field removed.
+
+    It lives here rather than in the CLI because it builds a Principal, and the
+    column list that populates one should exist once. Written out at the call
+    site instead, a new permission column gets added to `resolve` and silently
+    missed here, and the CLI publishes with a permission set that quietly
+    differs from the same account's over the API.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT id, name, max_tier, repo_scope, connection_grants, is_admin,
+               disabled
+          FROM service_accounts
+         WHERE name = $1
+        """,
+        name,
+    )
+    if row is None:
+        raise UnknownAccount(f"no account named {name!r}")
+    if row["disabled"]:
+        raise UnknownAccount(f"account {name!r} is disabled")
+
+    return Principal(
+        account_id=row["id"],
+        name=row["name"],
+        max_tier=row["max_tier"],
+        repo_scope=row["repo_scope"],
+        connection_grants=row["connection_grants"],
+        is_admin=row["is_admin"],
+        source="local",
+    )
+
+
 # -- browser sessions ------------------------------------------------------
 # A third credential, and the only one that is not a bearer token: a person at
 # the web UI has nothing to present, so signing in mints an opaque session and

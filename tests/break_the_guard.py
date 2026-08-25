@@ -736,6 +736,86 @@ CASES = [
         "    return not (raw or \"on\").strip().lower() in (\"on\", \"1\", \"true\")",
         "tests/test_auth.py::test_anything_but_the_word_off_leaves_authentication_on",
     ),
+
+    # -- step 9: the publish gate --------------------------------------------
+    (
+        # The step-8 deferral. Without it any account that can publish can hand
+        # a tier-4 credential to everyone who can submit a job.
+        "the publisher's max_tier bounds what it can publish",
+        "datum_sync/publish.py",
+        "        if row[\"tier\"] > publisher.max_tier:",
+        "        if False:",
+        "tests/test_publish.py::test_the_publisher_tier_decides",
+    ),
+    (
+        "a workspace cannot publish against a connection scoped elsewhere",
+        "datum_sync/publish.py",
+        "        if not connections.matches_scope(row, repository, manifest.name):",
+        "        if False:",
+        "tests/test_publish.py::"
+        "test_a_connection_out_of_scope_is_refused_at_publish_not_at_run",
+    ),
+    (
+        "declared write access must match what is stored",
+        "datum_sync/publish.py",
+        "        if ref.access == \"write\" and row[\"access\"] != \"write\":",
+        "        if False:",
+        "tests/test_publish.py::"
+        "test_declaring_write_on_a_read_only_connection_is_refused",
+    ),
+    (
+        # Presence-only: the file exists, the headings are there, nothing is
+        # under them. Exactly what a required-file rule produces.
+        "a section with no content is not a documented section",
+        "datum_sync/publish.py",
+        "    blank = [s for s in REQUIRED_SECTIONS if _is_empty(lowered[s.lower()])]",
+        "    blank = []",
+        "tests/test_publish.py::"
+        "test_the_five_headings_with_nothing_under_them_do_not_pass",
+    ),
+    (
+        # Always-on, and "the smoke test passed" starts meaning "the workspace
+        # ran for real" for every workspace that has no --smoke handler.
+        "the smoke test runs only when the manifest opts in",
+        "datum_sync/publish.py",
+        "    if smoke and manifest.smoke_test:",
+        "    if smoke:",
+        "tests/test_publish.py::test_the_smoke_test_only_runs_when_the_manifest_asks",
+    ),
+    (
+        # Reordered, a workspace with no MANIFEST.md still costs a process
+        # launch -- and runs arbitrary code before anything has vouched for it.
+        "the free checks run before the one that spawns a process",
+        "datum_sync/publish.py",
+        "    check_docs(ws_path)\n"
+        "    await check_connections(conn, manifest, repository, publisher)\n"
+        "    if smoke and manifest.smoke_test:\n"
+        "        await run_smoke(ws_path)",
+        "    if smoke and manifest.smoke_test:\n"
+        "        await run_smoke(ws_path)\n"
+        "    check_docs(ws_path)\n"
+        "    await check_connections(conn, manifest, repository, publisher)",
+        "tests/test_publish.py::test_the_cheap_checks_run_before_the_expensive_one",
+    ),
+    (
+        # Report the failure but keep the workspace in `loaded`, and _upsert
+        # writes it anyway: the gate becomes a warning.
+        "failing the gate drops the workspace from what gets written",
+        "datum_sync/repository.py",
+        "    report.loaded = passed",
+        "    report.loaded = report.loaded",
+        "tests/test_publish.py::"
+        "test_failing_the_gate_leaves_the_published_version_alone",
+    ),
+    (
+        # Stale computed from what loaded rather than what is on disk. A
+        # manifest typo plus --prune then deregisters a working workspace.
+        "stale means removed from disk, not failed to load",
+        "datum_sync/repository.py",
+        "    on_disk = _on_disk(root)",
+        "    on_disk = set()",
+        "tests/test_publish.py::test_a_workspace_that_fails_the_gate_is_not_stale",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
