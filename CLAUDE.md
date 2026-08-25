@@ -20,6 +20,27 @@ Stop the worker before running the suite — a live worker claims the tests' job
 and a job left queued afterwards silently *skips* the UI tests rather than
 failing them, which looks like a clean run.
 
+**A skipped test reads as a passing one.** `break_the_guard.py` asks whether a
+test fails when a guard is deleted; a skip is not a failure, so a poisoned queue
+reports the guards *unproven* rather than reporting the queue. If a run comes
+back with guards unproven in bulk, check `pytest -q` for skips before believing
+any of them. An API server also queues jobs — it runs the scheduler, so one left
+running quietly refills the queue from any enabled schedule, and no worker means
+those jobs stay `queued` forever.
+
+## Running it for hand-testing
+
+`DATUM_SYNC_AUTH=off` serves every request as an administrator with no
+credential, so the UI can be driven without provisioning accounts. It requires
+`HOST=127.0.0.1` — the server refuses to start otherwise — and separately checks
+the connecting socket's own address on every request, because `uvicorn --host`
+binds without consulting `HOST` and would otherwise walk around the startup
+check. With it on, the account area of the UI shows a red **NO AUTH** badge.
+
+There is no API for creating an account or setting a password; accounts are
+seeded directly. That is why the smoke's account has repeatedly had no password
+set, and it is worth fixing when account management gets built.
+
 ## Target environment
 
 - Host: Stratum VM (192.168.88.112), isolated from datum-ui

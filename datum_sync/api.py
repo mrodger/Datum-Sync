@@ -114,6 +114,15 @@ async def lifespan(_: FastAPI):
     # until a client tries to use the token, so the resolved value needs to be
     # visible at startup rather than inferred from a failure.
     log.info("public URL: %s", config.require_public_url())
+    # Refuses outright if this would be reachable from anywhere but this
+    # machine. Warned about on every start even when safe, because the whole
+    # failure mode is a flag nobody remembers is on.
+    config.require_safe_auth()
+    if config.AUTH_DISABLED:
+        log.warning(
+            "AUTHENTICATION IS DISABLED (DATUM_SYNC_AUTH=off) -- every request "
+            "is served as an administrator. Development only."
+        )
     await db.init_pool()
     try:
         yield
@@ -145,6 +154,30 @@ async def authenticate(request: Request, call_next):
     """
     path = request.url.path
     if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
+        return await call_next(request)
+    # Development only, and refused at startup unless bound to loopback.
+    #
+    # Placed after the allowlist rather than before it so the flag can only ever
+    # widen what was already reachable, and never attach a principal to an
+    # endpoint that authenticates by its own rules. That is defensive, not
+    # load-bearing: no OAuth handler reads request.state.principal today, so
+    # both orders behave identically from outside and no test distinguishes
+    # them. It is written this way so that it stays true if one ever does.
+    if config.AUTH_DISABLED:
+        # The startup check refuses to serve unless config.HOST is loopback, but
+        # it can be walked around: `uvicorn --host 0.0.0.0` binds the socket
+        # itself and never consults config.HOST. So the real guard is here, on
+        # the peer address of the actual connection, which no start-up flag can
+        # change and no header can forge -- request.client is the socket, not
+        # X-Forwarded-For.
+        if not config.is_loopback_client(request.client):
+            return errors.envelope(
+                403,
+                "FORBIDDEN",
+                "this server is running with authentication disabled and will "
+                "only answer the machine it runs on",
+            )
+        request.state.principal = auth.DEV_PRINCIPAL
         return await call_next(request)
     try:
         request.state.principal = await auth.require_auth(

@@ -156,6 +156,18 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     text-transform: uppercase;
 }
 
+/* Deliberately not the amber of .badge-admin: "admin" is a normal state and
+   this is not one, so it should not be possible to mistake at a glance. */
+.account .badge-insecure {
+    background: var(--failed);
+    color: #fff;
+    border-radius: .2rem;
+    padding: 0 .3rem;
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
 .sidebar {
     grid-area: nav;
     background: var(--panel);

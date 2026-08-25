@@ -695,6 +695,47 @@ CASES = [
         "            return await connections.test(conn, name)",
         "tests/test_connections.py::test_writes_are_admin_only_and_reads_are_not",
     ),
+
+    # -- development mode --------------------------------------------------
+    (
+        # Without the loopback requirement, DATUM_SYNC_AUTH=off in a copied .env
+        # publishes the admin API and the connection store to the whole network,
+        # and nothing anywhere says so except a line in the log.
+        "an unauthenticated server must be unreachable from other machines",
+        "datum_sync/config.py",
+        "    if HOST not in _LOOPBACK_HOSTS:",
+        "    if False:",
+        "tests/test_auth.py::test_a_reachable_server_refuses_to_start_without_authentication",
+    ),
+    (
+        # The load-bearing half. The startup check reads config.HOST, which
+        # `uvicorn --host 0.0.0.0` never consults; this runs on the socket's own
+        # peer address, so remove it and an auth-off server answers the network
+        # even though it refused to start on one.
+        "an auth-off server answers nobody but its own machine",
+        "datum_sync/api.py",
+        "        if not config.is_loopback_client(request.client):",
+        "        if False:",
+        "tests/test_auth.py::test_a_remote_caller_is_refused_even_with_auth_off",
+    ),
+    (
+        # Strip the IPv4-mapped prefix without re-checking and ::ffff:8.8.8.8
+        # reads as loopback.
+        "a mapped public address is not loopback",
+        "datum_sync/config.py",
+        "    return host in _LOOPBACK_HOSTS or host.startswith(\"127.\")",
+        "    return True",
+        "tests/test_auth.py::test_a_remote_peer_is_not_local",
+    ),
+    (
+        # Read as a general truthiness test, DATUM_SYNC_AUTH=false disables
+        # authentication. The strictness is the guard.
+        "only the word off disables authentication",
+        "datum_sync/config.py",
+        "    return (raw or \"\").strip().lower() == \"off\"",
+        "    return not (raw or \"on\").strip().lower() in (\"on\", \"1\", \"true\")",
+        "tests/test_auth.py::test_anything_but_the_word_off_leaves_authentication_on",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

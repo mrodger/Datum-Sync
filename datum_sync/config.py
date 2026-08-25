@@ -63,6 +63,85 @@ def require_public_url() -> str:
         )
     return PUBLIC_URL
 
+# Development only: serve every route as a fixed administrator, with no
+# credential of any kind. Off unless the environment says the exact string
+# "off", so a typo, an empty value or an unset variable all leave auth on --
+# the one direction a mistake is allowed to go.
+#
+# The danger is not that this exists, it is that it survives a copied .env into
+# somewhere that matters, so `require_safe_auth()` refuses to serve unless the
+# socket is also bound to loopback. HOST defaults to 0.0.0.0, which means the
+# defaults alone cannot produce a reachable unauthenticated server: turning this
+# on costs you a second, deliberate setting.
+def _auth_disabled(raw: str | None) -> bool:
+    """True only for the exact word "off".
+
+    A named function rather than an inline comparison so the rule can be tested
+    without reimporting the module. It matters that it is this strict: read as
+    a general truthiness test, "false", "0" and "no" would all *disable*
+    authentication, which is the reverse of what anyone setting them intends.
+    """
+    return (raw or "").strip().lower() == "off"
+
+
+AUTH_DISABLED = _auth_disabled(os.getenv("DATUM_SYNC_AUTH"))
+
+# Addresses that reach no further than this machine. `localhost` is included on
+# the assumption it resolves to one of the other two; that is true here and on
+# every platform we target, and getting it wrong fails closed (refusing to
+# start) rather than open.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def is_loopback_client(client) -> bool:
+    """Did this request arrive from the machine the server runs on?
+
+    `client` is Starlette's `request.client` -- the peer address of the socket,
+    not a header, so it cannot be forged by the caller the way X-Forwarded-For
+    can. None means no peer address is available (an in-process test transport),
+    which is treated as local: it is not a network connection at all.
+
+    This is the enforcing half of the auth-off guard, and `require_safe_auth()`
+    is only the early warning. The startup check reads HOST, but `uvicorn
+    --host 0.0.0.0` binds the socket without consulting it, so a check made once
+    at startup can be walked around and one made per connection cannot.
+    """
+    if client is None:
+        return True
+    host = client.host
+    # IPv4-mapped IPv6, which is what a dual-stack listener reports for an IPv4
+    # loopback connection.
+    if host.startswith("::ffff:"):
+        host = host[len("::ffff:"):]
+    # The whole 127.0.0.0/8 block is loopback, not just 127.0.0.1.
+    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+
+
+def require_safe_auth() -> None:
+    """Refuse at startup to serve an unauthenticated server others can reach.
+
+    Called from the app lifespan for the same reason as `require_public_url()`:
+    importing the app must not demand deployment configuration, and this is a
+    property of *serving*, not of the app object. The consequence is that the
+    test suite cannot reach it -- `ASGITransport` runs no lifespan -- so the
+    check is also exercised by really launching.
+
+    This refuses early and loudly on the ordinary start path. It is not the
+    thing standing between an auth-off server and the network: that is
+    `is_loopback_client()`, which runs per request. This one can be bypassed by
+    passing --host to uvicorn directly; that one cannot.
+    """
+    if not AUTH_DISABLED:
+        return
+    if HOST not in _LOOPBACK_HOSTS:
+        raise RuntimeError(
+            f"DATUM_SYNC_AUTH=off with HOST={HOST!r} would publish every route, "
+            "including the connection store and the admin API, to anything that "
+            "can reach this machine. Bind it to the machine it is being tested "
+            "on (HOST=127.0.0.1) or turn authentication back on."
+        )
+
+
 # Lifetimes. Access tokens are deliberately short-lived; the refresh token is
 # the durable credential and it rotates on every use.
 ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("ACCESS_TOKEN_TTL_SECONDS", "3600"))

@@ -156,7 +156,15 @@ function showApp() {
     clear($('account'));
     append($('account'), [
         me.name,
-        me.is_admin ? el('span', { class: 'badge-admin' }, 'admin') : null,
+        // The server says who it thinks is calling, and with DATUM_SYNC_AUTH=off
+        // the honest answer is nobody. Rendered here rather than left in the log
+        // because the whole failure mode of that flag is forgetting it is on --
+        // and a log you have to go and read is not a reminder.
+        me.source === 'auth-disabled'
+            ? el('span', { class: 'badge-insecure', title:
+                  'DATUM_SYNC_AUTH=off - every request is served as an ' +
+                  'administrator, with no credential.' }, 'no auth')
+            : me.is_admin ? el('span', { class: 'badge-admin' }, 'admin') : null,
     ]);
     buildNav();
     refreshEngines();

@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from starlette.datastructures import Address
 import pytest
 import pytest_asyncio
 
@@ -1421,3 +1422,161 @@ async def test_revoking_grants_leaves_the_service_account_token_working(
 async def test_revoking_grants_for_an_unknown_account_is_a_404(client):
     r = await client.delete("/rest/v1/accounts/no-such-account/grants")
     assert r.status_code == 404
+
+
+# -- development mode ------------------------------------------------------
+#
+# `DATUM_SYNC_AUTH=off` serves every request as an administrator. The tests that
+# matter here are not that it works -- that is one line of middleware -- but
+# that it is off unless asked for in exactly one way, and that a server running
+# with it on cannot be reached from another machine.
+
+
+def test_authentication_is_on_unless_the_environment_says_otherwise():
+    """The default, read from the real environment this suite runs in.
+
+    Everything else in this section patches the flag on, so without this one the
+    suite would never assert the shipped configuration."""
+    assert config.AUTH_DISABLED is False
+
+
+@pytest.mark.parametrize("raw", [None, "", "on", "false", "0", "no", "of", "offf"])
+def test_anything_but_the_word_off_leaves_authentication_on(raw):
+    """`false`, `0` and `no` are the trap: under a truthiness test each of them
+    would turn authentication *off*, which is the reverse of what anyone typing
+    them means. `of` and `offf` are the typos, and a typo must fail safe."""
+    assert config._auth_disabled(raw) is False
+
+
+@pytest.mark.parametrize("raw", ["off", "OFF", " off ", "Off"])
+def test_the_word_off_disables_authentication(raw):
+    """The other half. Without it the test above would pass just as well against
+    a function that returned False unconditionally, and the flag would simply
+    never work. Case and surrounding whitespace are forgiven: `OFF ` in an .env
+    is a typo with an unambiguous intention."""
+    assert config._auth_disabled(raw) is True
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.88.102", "::"])
+def test_a_reachable_server_refuses_to_start_without_authentication(
+    monkeypatch, host
+):
+    monkeypatch.setattr(config, "AUTH_DISABLED", True)
+    monkeypatch.setattr(config, "HOST", host)
+    with pytest.raises(RuntimeError, match="DATUM_SYNC_AUTH=off"):
+        config.require_safe_auth()
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
+def test_the_same_server_starts_when_only_this_machine_can_reach_it(
+    monkeypatch, host
+):
+    """The other half of the guard. Without this the refusal above would pass
+    just as well against a function that raised unconditionally."""
+    monkeypatch.setattr(config, "AUTH_DISABLED", True)
+    monkeypatch.setattr(config, "HOST", host)
+    config.require_safe_auth()
+
+
+def test_the_host_check_does_not_apply_when_authentication_is_on(monkeypatch):
+    """A normal server binds 0.0.0.0 -- that is the default. The loopback
+    requirement is a consequence of disabling auth, not a rule about binding."""
+    monkeypatch.setattr(config, "AUTH_DISABLED", False)
+    monkeypatch.setattr(config, "HOST", "0.0.0.0")
+    config.require_safe_auth()
+
+
+@pytest.mark.asyncio
+async def test_with_auth_off_an_unauthenticated_request_is_served_as_admin(
+    monkeypatch, client
+):
+    """Two-sided: the same credential-free request 401s with the flag off."""
+    bare = {"Authorization": ""}
+    refused = await client.get("/rest/v1/whoami", headers=bare)
+    assert refused.status_code == 401
+
+    monkeypatch.setattr(config, "AUTH_DISABLED", True)
+    allowed = await client.get("/rest/v1/whoami", headers=bare)
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert body["is_admin"] is True
+    # Not "token" or "oauth": a caller branching on source should see something
+    # it does not recognise rather than a plausible-looking lie.
+    assert body["source"] == "auth-disabled"
+    assert body["name"] == "auth-disabled"
+
+
+@pytest.mark.asyncio
+async def test_with_auth_off_the_oauth_endpoints_still_authenticate_themselves(
+    monkeypatch, client
+):
+    """Disabling the request credential must not disable OAuth's own rules.
+
+    The flag makes every route trust the caller; the endpoints that *mint*
+    credentials authenticate by client secret and PKCE instead, and those are a
+    separate mechanism that this must not reach into. Otherwise a dev server
+    would hand out real tokens for the real audience to anyone who asked.
+
+    Note what this does *not* prove: the middleware applies the flag after the
+    PUBLIC_PATHS check, and that ordering is defensive rather than load-bearing
+    -- no OAuth handler reads request.state.principal, so today the two orders
+    are indistinguishable from outside. Do not read this test as covering it."""
+    monkeypatch.setattr(config, "AUTH_DISABLED", True)
+    r = await client.post(
+        "/oauth/token",
+        data={"grant_type": "authorization_code", "code": "nope"},
+        headers={"Authorization": ""},
+    )
+    # An OAuth error object, not our envelope and not a 200 with a principal
+    # attached: the endpoint reached its own rules and refused on them. The code
+    # is invalid_request because no client_id was sent -- it never gets as far as
+    # the credential.
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "host", ["127.0.0.1", "127.0.0.53", "::1", "localhost", "::ffff:127.0.0.1"]
+)
+def test_a_local_peer_is_recognised_however_it_is_spelled(host):
+    """A dual-stack listener reports an IPv4 loopback peer as ::ffff:127.0.0.1,
+    and the loopback block is all of 127.0.0.0/8 rather than one address. Miss
+    either and the flag is merely useless -- which is the safe direction, and so
+    would go unnoticed until someone wondered why dev mode never worked."""
+    assert config.is_loopback_client(Address(host, 54321)) is True
+
+
+@pytest.mark.parametrize("host", ["192.168.88.102", "10.0.0.5", "::ffff:8.8.8.8"])
+def test_a_remote_peer_is_not_local(host):
+    """The half that matters. `::ffff:8.8.8.8` is the one to get wrong: strip
+    the prefix carelessly and a mapped *public* address reads as loopback."""
+    assert config.is_loopback_client(Address(host, 54321)) is False
+
+
+def test_no_peer_address_counts_as_local():
+    """The in-process test transport supplies no client. That is not a network
+    connection at all, so refusing it would break every test below rather than
+    protect anything."""
+    assert config.is_loopback_client(None) is True
+
+
+@pytest.mark.asyncio
+async def test_a_remote_caller_is_refused_even_with_auth_off(monkeypatch, client):
+    """The guard the startup check cannot provide.
+
+    `require_safe_auth()` reads config.HOST, and `uvicorn --host 0.0.0.0` never
+    consults it -- so an auth-off server *can* end up bound to the network. This
+    runs on the socket's own peer address, per request, and no start-up flag or
+    forged header reaches it."""
+    monkeypatch.setattr(config, "AUTH_DISABLED", True)
+    bare = {"Authorization": ""}
+
+    # Local: served, as the test above establishes.
+    assert (await client.get("/rest/v1/whoami", headers=bare)).status_code == 200
+
+    monkeypatch.setattr(
+        config, "is_loopback_client", lambda _client: False
+    )
+    remote = await client.get("/rest/v1/whoami", headers=bare)
+    assert remote.status_code == 403
+    assert remote.json()["code"] == "FORBIDDEN"

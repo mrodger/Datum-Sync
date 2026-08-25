@@ -143,6 +143,28 @@ def principal_json(p: Principal) -> dict:
     }
 
 
+# The caller every request gets when `DATUM_SYNC_AUTH=off`. Synthetic rather
+# than a seeded row: `submitted_by` and `created_by` are plain text on every
+# table that records who did something, and the only foreign keys onto
+# `service_accounts` are sessions and the oauth_* tables -- none of which a
+# request can reach with authentication disabled. So this needs no account to
+# exist, and cannot leave one behind when the flag goes away.
+#
+# `source` is not "token" or "oauth" because it is neither, and callers that
+# branch on it should see something they do not recognise. It is what /whoami
+# reports and what the UI renders its banner from, which is the point: with the
+# flag on, the screen says so.
+DEV_PRINCIPAL = Principal(
+    account_id=0,
+    name="auth-disabled",
+    max_tier=4,
+    repo_scope=None,
+    connection_grants=None,
+    is_admin=True,
+    source="auth-disabled",
+)
+
+
 def _scope_matches(pattern: str, repo: str) -> bool:
     """`SCIMAC`, `SCIMAC/*` and `*` -- deliberately not fnmatch.
 
