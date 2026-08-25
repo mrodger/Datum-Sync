@@ -37,9 +37,11 @@ the connecting socket's own address on every request, because `uvicorn --host`
 binds without consulting `HOST` and would otherwise walk around the startup
 check. With it on, the account area of the UI shows a red **NO AUTH** badge.
 
-There is no API for creating an account or setting a password; accounts are
-seeded directly. That is why the smoke's account has repeatedly had no password
-set, and it is worth fixing when account management gets built.
+Accounts are managed by `python -m datum_sync.accounts`
+(`create` · `token` · `passwd` · `disable` · `enable` · `list`). There is no HTTP
+route for it, which is deliberate. Give the smoke account a password with
+`passwd`; do not write to `service_accounts` directly, because the CLI hashes
+with the argon2 settings the login path verifies against.
 
 ## Target environment
 
