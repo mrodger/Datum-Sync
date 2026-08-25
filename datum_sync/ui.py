@@ -22,14 +22,39 @@ STATIC_DIR = config.REPO_ROOT / "datum_sync" / "static"
 router = APIRouter(tags=["ui"])
 
 
+class _RevalidatedStatics(StaticFiles):
+    """Static assets that must be asked about, not assumed.
+
+    StaticFiles sends an ETag and a Last-Modified but no Cache-Control, and a
+    response with neither a Cache-Control nor an Expires is one the browser is
+    free to *heuristically* cache -- roughly a tenth of the file's age, without
+    asking. That is the bad case: not a stale file served after a check, but a
+    stale file served with no check at all, so nothing the server does can
+    dislodge it. It shipped a CSS change to a demo audience who saw the old
+    stylesheet and no error.
+
+    `no-cache` does not mean "do not store"; it means "revalidate before use".
+    The ETag still does the work -- an unchanged asset is a 304 with no body --
+    so this costs one conditional request per asset per load and removes the
+    guess. There is no build step here to hash filenames with, which is the
+    other way to solve this and is not worth adding for six files.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def install(app: FastAPI) -> None:
     app.include_router(router)
-    app.mount("/ui/static", StaticFiles(directory=STATIC_DIR), name="ui-static")
+    app.mount("/ui/static", _RevalidatedStatics(directory=STATIC_DIR), name="ui-static")
 
 
 @router.get("/ui", include_in_schema=False)
 async def shell() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    # The shell names the assets, so caching it hides a change to any of them.
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @router.post("/ui/login")

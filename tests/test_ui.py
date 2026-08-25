@@ -89,6 +89,35 @@ async def test_the_static_assets_are_served_without_a_credential(anon, asset):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/ui", "/ui/static/app.js", "/ui/static/style.css"])
+async def test_the_ui_is_revalidated_rather_than_assumed_fresh(anon, path):
+    """A response carrying neither Cache-Control nor Expires may be cached on a
+    *guess* -- roughly a tenth of its age -- and served without asking. That is
+    what shipped an old stylesheet to a demo audience with no error anywhere:
+    not a stale asset served after a check, but one served with no check, which
+    nothing the server does can dislodge.
+
+    The shell is in here too. It names the assets, so caching it hides a change
+    to any of them.
+    """
+    r = await anon.get(path)
+    assert r.status_code == 200
+    assert "no-cache" in r.headers.get("cache-control", "")
+
+
+@pytest.mark.asyncio
+async def test_revalidation_of_an_unchanged_asset_costs_nothing(anon):
+    """`no-cache` means "ask", not "send it again" -- the point of paying a
+    conditional request is that the answer is usually an empty 304. If this
+    starts returning 200 with a body, every page load is re-downloading the UI.
+    """
+    etag = (await anon.get("/ui/static/style.css")).headers["etag"]
+    r = await anon.get("/ui/static/style.css", headers={"If-None-Match": etag})
+    assert r.status_code == 304
+    assert not r.content
+
+
+@pytest.mark.asyncio
 async def test_the_static_mount_does_not_escape_its_directory(anon):
     """The mount is a filesystem path joined with user input, which is the
     shape of every traversal bug, and the consequence here is reading the
