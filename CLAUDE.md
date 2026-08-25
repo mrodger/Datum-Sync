@@ -12,7 +12,7 @@ Full design spec: `spec/` directory. Read `spec/overview.md` first.
 ## Status
 
 **Deployed.** Steps 1–10 of the build order are done and the app is running on
-the Stratum VM (192.168.88.112:8200). Build order is in `spec/overview.md`.
+the Stratum VM (192.168.88.112:8201). Build order is in `spec/overview.md`.
 
 Four gates, all of which must pass before a step is called done:
 `pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`
@@ -75,7 +75,7 @@ with the argon2 settings the login path verifies against.
 
 ## Deployed instance — 192.168.88.112
 
-**Live at `http://192.168.88.112:8200` (LAN). Beside FME Flow on :80.**
+**Live at `http://192.168.88.112:8201` (LAN). Beside FME Flow on :80.**
 
 ### Layout on host
 
@@ -139,11 +139,11 @@ The gate for the deployed instance is the browser smoke:
 
 ```bash
 # On vm112 (playwright is in the venv there):
-DS_SMOKE_URL=http://192.168.88.112:8200 DS_SMOKE_USER=admin DS_SMOKE_PASSWORD=... \
+DS_SMOKE_URL=http://192.168.88.112:8201 DS_SMOKE_USER=admin DS_SMOKE_PASSWORD=... \
   .venv/bin/python tests/browser_smoke.py
 
 # From vm102 (playwright is system python3 there):
-DS_SMOKE_URL=http://192.168.88.112:8200 DS_SMOKE_USER=admin DS_SMOKE_PASSWORD=... \
+DS_SMOKE_URL=http://192.168.88.112:8201 DS_SMOKE_USER=admin DS_SMOKE_PASSWORD=... \
   python3 tests/browser_smoke.py
 ```
 
@@ -158,7 +158,7 @@ sudo apt-get remove postgresql-16-postgis-3  # only if not wanted for other DBs
 rm -rf /home/ubuntu/datum-sync /home/ubuntu/datum-sync.git
 ```
 
-Nothing outside those paths and port 8200 is modified. FME Flow on :80 and
+Nothing outside those paths and port 8201 is modified. FME Flow on :80 and
 `stratum.service` on :3030 are unaffected.
 
 ## Locked design decisions
