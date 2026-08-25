@@ -59,6 +59,7 @@ const SVG = 'http://www.w3.org/2000/svg';
  * assets are vendored -- deliberately plain, so nobody mistakes them for the
  * finished article. */
 const GLYPHS = {
+    dashboard: 'M4 4h7v7H4zM13 4h7v5h-7zM13 13h7v7h-7zM4 15h7v5H4z',
     repositories: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
     jobs: 'M4 6h16M4 12h16M4 18h10',
     schedules: 'M5 5h14v14H5zM5 9h14M9 3v4M15 3v4',
@@ -232,6 +233,7 @@ async function refreshEngines() {
  * forced into a position Flow does not have.
  */
 const SECTIONS = [
+    { id: 'dashboard', label: 'Dashboard' },
     { id: 'repositories', label: 'Repositories' },
     { id: 'automations', label: 'Automations' },
     { id: 'schedules', label: 'Schedules' },
@@ -258,6 +260,12 @@ function buildNav() {
     }
 }
 
+/* Where an empty hash lands. Named because it is written down in three places
+ * that have to agree: the hash parser, the section route() picks when there is
+ * no hash at all, and the `data-ready` value the browser tests wait on. When
+ * they disagreed, the third was the one that lied. */
+const HOME = 'dashboard';
+
 function hashQuery() {
     return new URLSearchParams((location.hash.split('?')[1]) || '');
 }
@@ -266,11 +274,12 @@ function parseHash() {
     // The query string lives inside the hash (`#/jobs?status=running`), so it
     // has to come off before splitting on '/' -- otherwise the section name is
     // "jobs?status=running" and matches no screen.
-    const raw = (location.hash || '#/repositories').split('?')[0].replace(/^#\/?/, '');
+    const raw = (location.hash || '#/' + HOME).split('?')[0].replace(/^#\/?/, '');
     return raw.split('/').filter(Boolean).map(decodeURIComponent);
 }
 
 const SCREENS = {
+    dashboard: [screenDashboard],
     repositories: [screenRepositories, screenRepository, screenWorkspace],
     jobs: [screenJobs, screenJob],
     schedules: [screenSchedules, screenSchedule],
@@ -305,7 +314,7 @@ async function route() {
     const mine = ++generation;
 
     const parts = parseHash();
-    const [section, ...rest] = parts.length ? parts : ['repositories'];
+    const [section, ...rest] = parts.length ? parts : [HOME];
     for (const link of $('nav').children) {
         link.classList.toggle('active', link.id === 'nav-' + section);
     }
@@ -330,7 +339,7 @@ async function route() {
         // label that two screens share. Those are guesses about rendering;
         // this is the fact itself, and it is set only past the generation
         // check, so a stale screen cannot claim it. Waits belong on this.
-        view.dataset.ready = parts.length ? parts.join('/') : 'repositories';
+        view.dataset.ready = parts.length ? parts.join('/') : HOME;
     } catch (err) {
         if (err instanceof ApiError && err.status === 401) return showSignin();
         view.append(banner(err));
@@ -447,6 +456,92 @@ function filterRows(view, term) {
     const needle = term.trim().toLowerCase();
     for (const row of view.querySelectorAll('tbody tr, .cards > .card')) {
         row.hidden = needle !== '' && !row.textContent.toLowerCase().includes(needle);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// dashboard
+// ---------------------------------------------------------------------------
+
+/* Flow's landing page, carrying our data.
+ *
+ * The structure is theirs, from the 2026.2 pixel scan: a row of create tiles
+ * across the top, recent items under it, job counters below those, reference
+ * links last. That order is the point. A Flow user arriving here should not
+ * have to look for anything, and the previous landing screen -- a bare list of
+ * two repositories -- gave them nothing to recognise and nothing to do.
+ *
+ * The counters carry Flow's labels where the two systems name a state
+ * differently ('complete' is 'Successful' there). The status in the link is
+ * ours, because that is what /transformations/jobs filters on. */
+const COUNTERS = [
+    // Flow's grouping too: the three settled states on one row, the two live
+    // ones on a wider row under them.
+    [['failed', 'Failed'], ['complete', 'Successful'], ['cancelled', 'Cancelled']],
+    [['queued', 'Queued'], ['running', 'Running']],
+];
+
+async function screenDashboard(view) {
+    // Scopes the h2 rule to this screen; elsewhere an h2 is a panel title.
+    view.className = 'dashboard';
+    view.append(el('h1', {}, 'Dashboard'));
+
+    // Local rather than module-level only because of NEW, which is declared
+    // further down the file and would still be in its temporal dead zone.
+    const tiles = [
+        ['Run Workspace', 'repositories', '#/repositories'],
+        ['Create Schedule', 'schedules', '#/schedules/' + NEW],
+        ['Create Automation', 'automations', '#/automations/' + NEW],
+        // Creating a connection is admin-only at the API, and the connections
+        // screen hides its own Create button for that reason. Offering it here
+        // unconditionally would put a form nobody may submit one click from
+        // the landing page, which is the case the other screen bothers about.
+        me.is_admin && ['Create Connection', 'connections', '#/connections?new=1'],
+    ].filter(Boolean);
+    view.append(el('div', { class: 'tiles' }, tiles.map(([label, glyph, href]) =>
+        el('a', { class: 'tile', href }, icon(glyph), el('span', {}, label)))));
+
+    // Together, so the two round trips overlap, and so that either one failing
+    // fails the whole screen. A dashboard that draws half of itself and no
+    // error is worse than one that says what went wrong.
+    const [recent, summary] = await Promise.all([
+        api('/transformations/jobs?limit=5'),
+        api('/transformations/jobs/summary'),
+    ]);
+
+    view.append(el('h2', {}, 'Recent jobs'));
+    view.append(recent.items.length
+        ? el('div', { class: 'recent' }, recent.items.map((job) =>
+            el('a', { class: 'recent-card', href: '#/jobs/' + job.id },
+                badge(job.status),
+                el('span', { class: 'name' }, job.workspace),
+                el('span', { class: 'repo' }, job.repository),
+                el('span', { class: 'ago' }, when(job.submitted_at)))))
+        : el('div', { class: 'empty' }, 'Nothing has run yet.'));
+
+    view.append(el('h2', {}, 'Jobs'));
+    const counts = summary.counts;
+    view.append(el('div', { class: 'counters' }, COUNTERS.map((row) =>
+        el('div', { class: 'counter-row' }, row.map(([status, label]) =>
+            // Links, because being the way into the filtered list is the whole
+            // job of a counter. Flow's navigate too.
+            el('a', { class: 'counter ' + status, href: '#/jobs?status=' + status },
+                el('span', { class: 'label' }, label),
+                el('span', { class: 'n' }, counts[status])))))));
+
+    view.append(el('h2', {}, 'Reference'));
+    view.append(el('div', { class: 'links' },
+        // One link, and it resolves. Flow's three go to its community, its
+        // academy and its support desk; inventing Datum equivalents would put
+        // three dead links on the first screen anybody sees.
+        el('a', { class: 'link-card', href: '/docs', target: '_blank', rel: 'noopener' },
+            el('b', {}, 'REST API'),
+            el('span', {}, 'Every route this page calls, with its schema'))));
+
+    // Same rule as the jobs list: repoll only while something is moving.
+    if (counts.queued || counts.running) {
+        const timer = setTimeout(route, 4000);
+        return () => clearTimeout(timer);
     }
 }
 

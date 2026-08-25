@@ -611,6 +611,22 @@ CASES = [
         "tests/test_automations.py::test_scope_is_checked_against_the_new_document_not_only_the_old",
     ),
 
+    (
+        # The dashboard counts jobs, and the count of jobs you may not see is
+        # still a fact about them. Anchored on the summary's own early return,
+        # so it cannot match the identical-looking block in the job list.
+        "repo scope on the dashboard's job counts",
+        "datum_sync/api.py",
+        "        if caller.repo_scope is not None:\n"
+        "            names = await conn.fetch(\"SELECT DISTINCT repository FROM jobs\")\n"
+        "            allowed = [r[\"repository\"] for r in names"
+        " if caller.allows_repo(r[\"repository\"])]\n"
+        "            if not allowed:\n"
+        "                return {\"counts\": dict.fromkeys(JOB_STATUSES, 0), \"total\": 0}\n",
+        "",
+        "tests/test_api.py::test_a_scoped_caller_is_not_told_how_busy_the_others_are",
+    ),
+
     # -- connections -------------------------------------------------------
     (
         # The whole reason `secret` is a separate column rather than a key in

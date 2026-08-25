@@ -480,6 +480,47 @@ async def list_jobs(
     return {"items": items, "count": len(items)}
 
 
+@app.get("/rest/v1/transformations/jobs/summary")
+async def job_summary(caller: Principal = Caller) -> dict[str, Any]:
+    """How many jobs are in each status. Counted in SQL, for two reasons.
+
+    The dashboard cannot get this from the job list. That endpoint's `count` is
+    the length of the page it returned, so any status with more jobs than the
+    limit would report the limit -- a wrong number, arrived at silently, on the
+    first screen anybody sees.
+
+    And the scope filter is the same one the list applies, for the same reason
+    it applies it: a caller restricted to one repository must not learn how busy
+    the others are. A count is a smaller leak than a row, not a different one.
+    """
+    async with db.pool().acquire() as conn:
+        allowed: list[str] | None = None
+        if caller.repo_scope is not None:
+            names = await conn.fetch("SELECT DISTINCT repository FROM jobs")
+            allowed = [r["repository"] for r in names if caller.allows_repo(r["repository"])]
+            if not allowed:
+                return {"counts": dict.fromkeys(JOB_STATUSES, 0), "total": 0}
+
+        rows = await conn.fetch(
+            """
+            SELECT status, count(*) AS n
+              FROM jobs
+             WHERE ($1::text[] IS NULL OR repository = ANY($1))
+             GROUP BY status
+            """,
+            allowed,
+        )
+
+    # Every status is present even at zero, so the dashboard draws a stable set
+    # of tiles rather than a row that changes width as the queue empties.
+    counts = dict.fromkeys(JOB_STATUSES, 0)
+    for row in rows:
+        counts[row["status"]] = row["n"]
+    # Summed from the rows, not from `counts`, so a status this build does not
+    # know about is still counted in the total rather than quietly dropped.
+    return {"counts": counts, "total": sum(r["n"] for r in rows)}
+
+
 @app.get("/rest/v1/transformations/jobs/id/{raw_id}")
 async def get_job(raw_id: str, caller: Principal = Caller) -> dict[str, Any]:
     async with db.pool().acquire() as conn:

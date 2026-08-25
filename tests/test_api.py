@@ -491,3 +491,102 @@ async def test_the_job_listing_rejects_an_unknown_status(client):
     assert r.status_code == 400
     assert r.json()["code"] == "INVALID_PARAMETER"
     assert "queued" in r.json()["detail"]["valid"]
+
+
+# --------------------------------------------------------------------------
+# the job summary the dashboard counts from
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_summary_names_every_status_even_at_zero(client):
+    """The dashboard draws one tile per status. If a status vanished from the
+    response whenever nothing was in it, the row would change width as the
+    queue emptied -- and `counts[status]` would be undefined, which renders as
+    the word "undefined" rather than as a number."""
+    r = await client.get("/rest/v1/transformations/jobs/summary")
+    assert r.status_code == 200
+    assert set(r.json()["counts"]) == {
+        "queued", "running", "complete", "failed", "cancelled"
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_summary_counts_a_submitted_job(client, workspace):
+    repo, ws = workspace
+    before = (await client.get("/rest/v1/transformations/jobs/summary")).json()
+
+    await client.post(
+        f"/rest/v1/transformations/submit/{repo}/{ws}", json={"params": {"WHO": "x"}}
+    )
+
+    after = (await client.get("/rest/v1/transformations/jobs/summary")).json()
+    # Relative, not absolute: a worker may be running alongside the suite and
+    # move this job out of `queued` between the submit and the read. What
+    # cannot happen is the total staying put.
+    assert after["total"] == before["total"] + 1
+
+
+@pytest.mark.asyncio
+async def test_the_summary_counts_past_the_listing_limit(client, workspace, db):
+    """The reason this endpoint exists rather than the dashboard counting the
+    job list. That list is capped at 500 rows and reports `len(items)`, so on a
+    queue larger than the cap it would report the cap -- a wrong number,
+    arrived at silently, on the first screen anybody sees.
+
+    Proven at a smaller scale than 500 by asking the list for one row: the
+    summary must not agree with it.
+    """
+    repo, ws = workspace
+    for _ in range(3):
+        await client.post(
+            f"/rest/v1/transformations/submit/{repo}/{ws}",
+            json={"params": {"WHO": "x"}},
+        )
+
+    page = (await client.get("/rest/v1/transformations/jobs?limit=1")).json()
+    summary = (await client.get("/rest/v1/transformations/jobs/summary")).json()
+
+    assert page["count"] == 1
+    assert summary["total"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_caller_is_not_told_how_busy_the_others_are(
+    client, workspace, scoped_token
+):
+    """A count is a smaller leak than a row, not a different one. A caller
+    confined to one repository must not learn the queue depth of the ones it
+    cannot see -- and the job list already refuses to tell them, so an
+    unfiltered summary next to it would be a hole with a filter beside it.
+    """
+    repo, ws = workspace
+    await client.post(
+        f"/rest/v1/transformations/submit/{repo}/{ws}", json={"params": {"WHO": "x"}}
+    )
+
+    # Scoped to 'Elsewhere/*', which is not the fixture's repository.
+    r = await client.get(
+        "/rest/v1/transformations/jobs/summary",
+        headers={"authorization": f"Bearer {scoped_token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+    assert set(r.json()["counts"].values()) == {0}
+
+
+@pytest_asyncio.fixture
+async def scoped_token(db):
+    """A credential confined to a repository the fixtures never create."""
+    from datum_sync import auth
+
+    raw = auth.new_token()
+    await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_scoped_api'")
+    await db.execute(
+        """
+        INSERT INTO service_accounts (name, token_hash, max_tier, repo_scope)
+        VALUES ('_pytest_scoped_api', $1, 4, ARRAY['Elsewhere/*'])
+        """,
+        auth.hash_token(raw),
+    )
+    yield raw
+    await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_scoped_api'")

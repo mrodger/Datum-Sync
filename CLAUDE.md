@@ -38,6 +38,16 @@ application successfully with the sidebar at *any* width at all. The place a
 to somebody. The numbers in it are measurements, not preferences — change them
 only if Flow itself is re-scanned.
 
+**Pixel parity is not perceived parity.** The rail, the item pitch and the
+button heights were brought onto Flow's numbers and the result was reported as
+looking exactly the same — correctly, because the largest of those moves was
+10px. Geometry is worth holding once it is right, but it is not what makes the
+thing read as a product. What did was giving it Flow's *landing page*: the
+dashboard, with create tiles, recent jobs, job counters and a reference link,
+against the bare two-row repository list it used to open on. When the next
+question is "how do we make this more convincing", reach for a screen Flow has
+and we do not before reaching for a measurement.
+
 **Wait on `data-ready`, never on rendered content.** `route()` sets
 `view.dataset.ready` to the hash path after the screen's fetch resolves and only
 past its generation check, so it means "this screen, live, finished". Every

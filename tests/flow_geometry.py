@@ -16,6 +16,11 @@ identically on all nine pages that were scanned:
     content       starts at x=290
     action button h=35        search field h=40        tab h=36
 
+The dashboard numbers come from the same scan, from Flow's own landing page:
+
+    create tile   h=56, 12px apart      recent card  210x130, 8px apart
+    job counter   278x72 x3 / 422x72 x2, 10px apart  help link  400x55
+
 The point of asserting them is that layout drift is invisible to every other
 check we have. `browser_smoke.py` drives the whole application and passes with
 the sidebar at any width at all; the pytest suite never renders anything. A
@@ -41,6 +46,7 @@ PASSWORD = os.environ.get("DS_SMOKE_PASSWORD", "")
 VIEWPORT = {"width": 1920, "height": 1080}
 
 problems: list[str] = []
+skipped: list[str] = []
 
 
 def check(label: str, got, want, tol: float = 0.5) -> None:
@@ -97,6 +103,28 @@ def main() -> int:
         # its padding is what puts content at Flow's x=290.
         check("content left edge", box(page, "#view h1", "x"), 290)
 
+        print("\ndashboard")
+        # The landing screen, so it is already on display -- but say so rather
+        # than assume it, because the whole point of `data-ready` is that
+        # "something rendered" is not "this screen rendered".
+        page.wait_for_selector("#view > [data-ready='dashboard']")
+        check("create tile height", box(page, ".tile", "height"), 56)
+        check("counter height", box(page, ".counter", "height"), 72)
+        check("counter width (row of 3)", box(page, ".counter-row:nth-child(1) .counter", "width"), 278)
+        check("counter width (row of 2)", box(page, ".counter-row:nth-child(2) .counter", "width"), 422)
+        check("reference link width", box(page, ".link-card", "width"), 400)
+        check("reference link height", box(page, ".link-card", "height"), 55)
+
+        # Only drawn when something has run. Reported rather than passed over:
+        # a check that quietly disappears on an empty database is a check that
+        # stops being a check on the machine that matters least.
+        if page.locator(".recent-card").count():
+            check("recent card width", box(page, ".recent-card", "width"), 210)
+            check("recent card height", box(page, ".recent-card", "height"), 130)
+        else:
+            skipped.append("recent card size: no jobs on this instance to draw one")
+            print("  SKIP recent card size                  (no jobs on this instance)")
+
         print("\ncontrols")
         page.goto(f"{BASE}/ui#/schedules")
         page.wait_for_selector("#view > [data-ready='schedules']")
@@ -110,6 +138,11 @@ def main() -> int:
         for p in problems:
             print(f"  - {p}")
         return 1
+
+    if skipped:
+        print(f"\n{len(skipped)} check(s) skipped:")
+        for s in skipped:
+            print(f"  - {s}")
 
     print("\nPASS: chrome matches the FME Flow 2026.2 scan")
     return 0

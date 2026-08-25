@@ -465,6 +465,118 @@ a.card:hover { border-color: var(--amber); text-decoration: none; }
 .card p { color: var(--muted); font-size: .85rem; margin: .25rem 0 0; }
 .card .meta { color: var(--muted); font-size: .75rem; margin-top: .75rem; font-family: var(--mono); }
 
+/* -- dashboard ----------------------------------------------------------- */
+
+/* Every number here is Flow's, from the same scan as the chrome above:
+ *
+ *   create tiles   h=56, 12px apart, content-width, left-aligned
+ *   recent cards   210x130, 8px apart
+ *   job counters   278x72 x3 / 422x72 x2, 10px apart, 82px row pitch
+ *   help links     400x55, stacked flush
+ *
+ * The two counter rows come to the same total width -- 3x278 + 2x10 and
+ * 2x422 + 10 are both 854 -- which is why they are two equal-column grids
+ * inside one 854px block rather than five tiles with hardcoded widths. Set the
+ * block width and Flow's numbers fall out of the arithmetic. */
+
+/* Scoped to the dashboard: h2 is the group heading here, but elsewhere it is a
+ * panel title sitting inside a form, where 2rem of air above it would open a
+ * gap in the middle of the panel. */
+.dashboard h2 {
+    font-size: 1.05rem;
+    margin: 2rem 0 .75rem;
+}
+
+.tiles { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 1.25rem; }
+
+.tile {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    height: 56px;
+    padding: 0 1.25rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: .4rem;
+    color: var(--text);
+    font-family: var(--heading);
+    font-weight: 600;
+}
+
+.tile:hover { border-color: var(--amber); background: var(--navy); text-decoration: none; }
+.tile svg { color: var(--amber); }
+
+.recent { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.recent-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: .35rem;
+    width: 210px;
+    height: 130px;
+    padding: .85rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: .4rem;
+    color: var(--text);
+}
+
+.recent-card:hover { border-color: var(--amber); text-decoration: none; }
+/* The workspace name is the identifying line, so it gets the room. A long one
+ * wraps to two lines and then clips rather than growing the card, which would
+ * break the row into uneven heights. */
+.recent-card .name {
+    font-family: var(--heading);
+    font-weight: 600;
+    line-height: 1.25;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+.recent-card .repo { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.recent-card .ago { color: var(--muted); font-size: .72rem; font-family: var(--mono); margin-top: auto; }
+
+.counters { max-width: 854px; }
+.counter-row { display: grid; gap: 10px; margin-bottom: 10px; }
+.counter-row:nth-child(1) { grid-template-columns: repeat(3, 1fr); }
+.counter-row:nth-child(2) { grid-template-columns: repeat(2, 1fr); }
+
+.counter {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 72px;
+    padding: 0 1.25rem;
+    background: var(--panel);
+    /* The state's colour is a left edge rather than a fill: five saturated
+     * blocks on the landing page would read as five alerts. */
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--queued);
+    border-radius: .4rem;
+    color: var(--text);
+}
+
+.counter:hover { background: var(--surface); text-decoration: none; }
+.counter.failed { border-left-color: var(--failed); }
+.counter.complete { border-left-color: var(--complete); }
+.counter.running { border-left-color: var(--running); }
+.counter .label { color: var(--muted); font-size: .9rem; }
+.counter .n { font-family: var(--heading); font-size: 1.75rem; font-weight: 600; }
+
+.links { max-width: 400px; }
+
+.link-card {
+    display: block;
+    height: 55px;
+    padding: .5rem .9rem;
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+
+.link-card:hover { background: var(--surface); text-decoration: none; }
+.link-card b { font-family: var(--heading); display: block; font-size: .9rem; }
+.link-card span { color: var(--muted); font-size: .78rem; }
+
 /* -- workspace detail ---------------------------------------------------- */
 
 .split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
