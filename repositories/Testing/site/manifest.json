@@ -1,0 +1,11 @@
+{
+  "name": "site",
+  "description": "Integration fixture: builds a tiny static site and publishes it at /serve/_fixture-site/.",
+  "version": "0.1.0",
+  "parameters": [
+    {"name": "HEADING", "type": "STRING", "default": "datum-sync"}
+  ],
+  "outputs": [{"name": "_fixture-site", "type": "service/static", "primary": true}],
+  "services": ["job_submitter"],
+  "timeout_seconds": 60
+}

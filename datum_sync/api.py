@@ -39,7 +39,7 @@ from starlette.datastructures import UploadFile
 
 from datum_sync import (
     auth, automations, config, connections, crypto, db, errors, events, execute,
-    jobs, mcp, oauth, schedules, ui, uploads,
+    jobs, mcp, oauth, schedules, services, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -103,7 +103,12 @@ PUBLIC_PREFIXES = ("/ui/static/",)
 # cookies on top-level navigation, so accepting the cookie there would let any
 # page on the internet run someone's workspace by linking to it. Those URLs are
 # for programmatic callers, which have tokens.
-COOKIE_PATHS = ("/rest/v1/", "/ui/")
+# `/serve/` is included, and is the one service-shaped path that is. It reads
+# files from a directory a job already produced; it executes nothing, so a
+# link to it cannot make anything happen. Excluding it would mean a hosted
+# dashboard could not be opened by the signed-in person it was built for, which
+# is the only way anyone opens one.
+COOKIE_PATHS = ("/rest/v1/", "/ui/", "/serve/")
 
 
 @asynccontextmanager
@@ -577,6 +582,15 @@ async def get_artifact(
     )
     if artifact is None:
         raise ApiError(404, "NOT_FOUND", f"job {job_id} has no artifact {name!r}")
+    if services.is_service(artifact["type"]):
+        # A directory, so FileResponse would 500 -- and `artifact_path` would
+        # 404 with "artifact file missing", which is both true and useless to
+        # someone looking at a job that plainly produced it.
+        raise ApiError(
+            409, "IS_SERVICE",
+            f"{name!r} is a hosted service, not a file; browse it at "
+            f"/serve/{name}/",
+        )
     return FileResponse(
         execute.artifact_path(job_id, artifact["file"]),
         media_type=artifact["type"],
@@ -1318,6 +1332,68 @@ async def data_upload(
         )
     response.headers["Location"] = f"/rest/v1/transformations/jobs/id/{job_id}"
     return {"id": str(job_id), "status": "queued", "files": received}
+
+
+# -- hosted services -------------------------------------------------------
+
+
+@app.get("/rest/v1/services")
+async def list_services(caller: Principal = Caller) -> dict[str, Any]:
+    """Every hosted service the caller's repository scope covers."""
+    async with db.pool().acquire() as conn:
+        rows = await services.listing(conn)
+    return {
+        "items": [
+            {
+                "name": r["name"],
+                "type": r["type"],
+                "repository": r["repository"],
+                "workspace": r["workspace"],
+                "status": r["status"],
+                "url": f"/serve/{r['name']}/",
+                "source_job": str(r["source_job"]) if r["source_job"] else None,
+                "updated_at": r["updated_at"].isoformat(),
+            }
+            for r in rows
+            if caller.allows_repo(r["repository"])
+        ]
+    }
+
+
+@app.get("/serve/{name}")
+@app.get("/serve/{name}/{subpath:path}")
+async def serve(
+    name: str, subpath: str = "", caller: Principal = Caller
+) -> FileResponse:
+    """Serve one file from a hosted service's built directory.
+
+    Authenticated like everything else, and accepting the UI's session cookie
+    (COOKIE_PATHS) so a signed-in browser can open a dashboard. Not public: a
+    hosted service is built from a repository's data, and making the whole
+    namespace world-readable because static files feel harmless would publish
+    whatever the last job wrote.
+
+    Repository scope is checked against the *owning* workspace, so a caller
+    confined to one repository cannot read another's site through a URL that
+    happens not to mention it.
+    """
+    async with db.pool().acquire() as conn:
+        row = await services.get(conn, name)
+
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no hosted service named {name!r}")
+    auth.require_repo(caller, row["repository"])
+
+    try:
+        path = services.resolve(row, subpath)
+    except services.ServiceError as e:
+        # 404 for a missing file, 501 for a type this server does not run. The
+        # distinction is the difference between "you asked for the wrong thing"
+        # and "we cannot do this at all", and only the second is our problem.
+        status = 501 if row["type"] in services.SUPERVISED else 404
+        raise ApiError(status, "SERVICE_UNAVAILABLE", str(e)) from None
+
+    return FileResponse(path)
 
 
 def main() -> int:

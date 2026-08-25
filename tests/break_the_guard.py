@@ -189,8 +189,8 @@ CASES = [
         # The plausible mistake: the UI wants to link to a download, so someone
         # adds the service paths to the list. `GET /stream/...` runs a
         # workspace, and Lax sends the cookie on top-level navigation.
-        'COOKIE_PATHS = ("/rest/v1/", "/ui/")',
-        'COOKIE_PATHS = ("/rest/v1/", "/ui/", "/stream/", "/download/")',
+        'COOKIE_PATHS = ("/rest/v1/", "/ui/", "/serve/")',
+        'COOKIE_PATHS = ("/rest/v1/", "/ui/", "/serve/", "/stream/", "/download/")',
         "tests/test_auth.py::test_the_session_cookie_is_refused_on_the_service_paths",
     ),
     (
@@ -788,12 +788,14 @@ CASES = [
         "the free checks run before the one that spawns a process",
         "datum_sync/publish.py",
         "    check_docs(ws_path)\n"
+        "    await check_services(conn, manifest, repository)\n"
         "    await check_connections(conn, manifest, repository, publisher)\n"
         "    if smoke and manifest.smoke_test:\n"
         "        await run_smoke(ws_path)",
         "    if smoke and manifest.smoke_test:\n"
         "        await run_smoke(ws_path)\n"
         "    check_docs(ws_path)\n"
+        "    await check_services(conn, manifest, repository)\n"
         "    await check_connections(conn, manifest, repository, publisher)",
         "tests/test_publish.py::test_the_cheap_checks_run_before_the_expensive_one",
     ),
@@ -815,6 +817,144 @@ CASES = [
         "    on_disk = _on_disk(root)",
         "    on_disk = set()",
         "tests/test_publish.py::test_a_workspace_that_fails_the_gate_is_not_stale",
+    ),
+
+    # -- hosted services ----------------------------------------------------
+
+    (
+        # The classic. /data/app and /data/app-secrets share a prefix as
+        # strings and share no directory as paths.
+        "served root containment uses is_relative_to, not startswith",
+        "datum_sync/services.py",
+        "    return target == root or target.is_relative_to(root)",
+        "    return str(target).startswith(str(root))",
+        "tests/test_services.py::test_resolve_refuses_a_sibling_that_shares_a_prefix",
+    ),
+    (
+        "/serve/ refuses a path that escapes the service root",
+        "datum_sync/services.py",
+        "    if not _within(root, target):\n"
+        "        raise ServiceError(\"path escapes the service root\")\n",
+        "",
+        "tests/test_services.py::test_serve_refuses_traversal",
+    ),
+    (
+        # A registered supervised row can only exist if the publish gate was
+        # bypassed -- which is exactly when this has to hold.
+        "resolve() refuses a service type this server does not run",
+        "datum_sync/services.py",
+        "    if row[\"type\"] in SUPERVISED:",
+        "    if False:",
+        "tests/test_services.py::test_resolve_refuses_a_supervised_service",
+    ),
+    (
+        # A containment bug at write time is a containment bug on every read.
+        "registration refuses a served root outside the job's artifacts",
+        "datum_sync/services.py",
+        "    if root not in path.parents:\n"
+        "        raise ServiceError(f\"{filename!r} resolves outside the job's artifacts\")\n",
+        "",
+        "tests/test_services.py::test_register_refuses_a_name_that_escapes_the_job",
+    ),
+    (
+        "registration refuses a served root that is not a directory",
+        "datum_sync/services.py",
+        "    if not path.is_dir():\n"
+        "        raise ServiceError(f\"{filename!r} is not a directory\")\n",
+        "",
+        "tests/test_services.py::test_register_refuses_a_file",
+    ),
+    (
+        # Without the WHERE, the later job simply takes the URL: the first
+        # workspace's site is replaced by the second's and nothing says so.
+        "one workspace cannot upsert over another's service name",
+        "datum_sync/services.py",
+        "            WHERE hosted_services.repository = EXCLUDED.repository\n"
+        "              AND hosted_services.workspace = EXCLUDED.workspace\n",
+        "",
+        "tests/test_services.py::test_another_workspace_cannot_take_the_url",
+    ),
+    (
+        # The WHERE still holds, so the URL is not stolen -- but the job
+        # reports success while its service went nowhere, and nothing says so.
+        "a refused service registration is raised, not passed over quietly",
+        "datum_sync/services.py",
+        "        if claimed is None:",
+        "        if False:",
+        "tests/test_services.py::test_another_workspace_cannot_take_the_url",
+    ),
+    (
+        "a service/* output must be a directory",
+        "datum_sync/runner.py",
+        "            if is_service and not is_dir:",
+        "            if False:",
+        "tests/test_services.py::test_a_service_output_returning_a_file_fails",
+    ),
+    (
+        # Allowed through, this is a 500 on the download of a job that
+        # reported success.
+        "a directory under an ordinary output is refused at the run",
+        "datum_sync/runner.py",
+        "            if is_dir and not is_service:",
+        "            if False:",
+        "tests/test_services.py::test_a_directory_under_a_non_service_output_fails",
+    ),
+    (
+        "the gate refuses a service type this server cannot run",
+        "datum_sync/publish.py",
+        "        if out.type in services.SUPERVISED:",
+        "        if False:",
+        "tests/test_services.py::test_gate_refuses_a_supervised_output",
+    ),
+    (
+        "the gate refuses a service name another workspace already serves",
+        "datum_sync/publish.py",
+        "        owner = await conn.fetchrow(\n"
+        "            \"SELECT repository, workspace FROM hosted_services WHERE name = $1\",\n"
+        "            out.name,\n"
+        "        )",
+        "        owner = None",
+        "tests/test_services.py::test_gate_refuses_a_name_another_workspace_serves",
+    ),
+    (
+        # The URL carries no repository, so without this a scoped caller reads
+        # another repository's site through a name that gives no hint of it.
+        "/serve/ checks the scope of the repository that owns the service",
+        "datum_sync/api.py",
+        # Anchored on the line above it: `require_repo(caller, row["repository"])`
+        # appears three times in this file, and a pattern matching all three
+        # would break three guards at once and prove none of them.
+        "        raise ApiError(404, \"NOT_FOUND\", f\"no hosted service named {name!r}\")\n"
+        "    auth.require_repo(caller, row[\"repository\"])\n",
+        "        raise ApiError(404, \"NOT_FOUND\", f\"no hosted service named {name!r}\")\n",
+        "tests/test_services.py::test_serve_checks_the_owning_repositorys_scope",
+    ),
+    (
+        "the service listing is filtered by repository scope",
+        "datum_sync/api.py",
+        "            for r in rows\n"
+        "            if caller.allows_repo(r[\"repository\"])",
+        "            for r in rows",
+        "tests/test_services.py::test_listing_is_filtered_by_scope",
+    ),
+    (
+        # A built site is built from a repository's data. Public because static
+        # files feel harmless publishes whatever the last job wrote.
+        "/serve/ is not public",
+        "datum_sync/api.py",
+        "PUBLIC_PREFIXES = (\"/ui/static/\",)",
+        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/serve/\")",
+        "tests/test_services.py::test_serve_needs_a_credential",
+    ),
+    (
+        # FileResponse on a directory is a 500 at the transport layer, and
+        # artifact_path's 404 is true but useless to someone looking at a job
+        # that plainly produced the thing.
+        "a service artifact is refused by the file-download route",
+        "datum_sync/api.py",
+        "    if services.is_service(artifact[\"type\"]):",
+        "    if False:",
+        "tests/test_services.py::test_a_service_artifact_is_not_downloadable",
     ),
 ]
 

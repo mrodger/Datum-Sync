@@ -23,7 +23,7 @@ from pathlib import Path
 
 import asyncpg
 
-from datum_sync import auth, config, publish
+from datum_sync import auth, config, publish, services
 from datum_sync.auth import Principal
 from datum_sync.manifest import Manifest, ManifestError, load_manifest
 
@@ -289,6 +289,11 @@ async def sync(
                         repo,
                         ws,
                     )
+                    # hosted_services has no foreign key to workspaces -- it is
+                    # keyed by name for the URL -- so nothing cascades. Left
+                    # behind, the row keeps a URL serving a build that can never
+                    # be refreshed, because the workspace that made it is gone.
+                    await services.deregister_workspace(conn, repo, ws)
     finally:
         await conn.close()
 

@@ -219,12 +219,33 @@ class Runner:
                 "run() returned undeclared artifacts: " + ", ".join(sorted(undeclared))
             )
 
+        for a in artifacts:
+            is_service = declared[a["name"]].type.startswith("service/")
+            is_dir = bool(a.get("dir"))
+            if is_service and not is_dir:
+                raise ValueError(
+                    f"{a['name']!r} is declared {declared[a['name']].type} but the "
+                    "run returned a file; a hosted service is a directory"
+                )
+            # The converse matters more. A directory landed under an ordinary
+            # output would be fetched by GET .../artifacts/{name}, which builds
+            # a FileResponse -- so it would be a 500 at download time for a job
+            # that reported success. Refuse it while there is still a run to
+            # attribute it to.
+            if is_dir and not is_service:
+                raise ValueError(
+                    f"{a['name']!r} is a directory, but output {a['name']!r} is "
+                    f"declared {declared[a['name']].type}; only service/* outputs "
+                    "may be directories"
+                )
+
         return [
             {
                 "name": a["name"],
                 "type": declared[a["name"]].type,
                 "primary": declared[a["name"]].primary,
                 "file": a["file"],
+                "dir": bool(a.get("dir")),
                 "size": a["size"],
             }
             for a in artifacts

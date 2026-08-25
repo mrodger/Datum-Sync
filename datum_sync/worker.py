@@ -28,7 +28,7 @@ from typing import Any
 import asyncpg
 
 from datum_sync import (
-    automations, config, connections, crypto, jobs, schedules, uploads,
+    automations, config, connections, crypto, jobs, schedules, services, uploads,
 )
 from datum_sync.runner import Runner
 
@@ -240,7 +240,7 @@ class Worker:
             ws_path = (
                 config.REPOSITORIES_PATH / job["repository"] / job["workspace"]
             )
-            artifact_dir = config.DATA_PATH / "jobs" / str(job_id)
+            artifact_dir = config.job_dir(job_id)
 
             async def sink(event_type: str, payload: dict[str, Any]) -> None:
                 await self._sink(conn, job_id, event_type, payload)
@@ -264,6 +264,25 @@ class Worker:
                 return
             finally:
                 self._active.pop(job_id, None)
+
+            if result.status == "complete":
+                try:
+                    await services.register(
+                        conn, job_id, job["repository"], job["workspace"],
+                        result.artifacts,
+                    )
+                except services.ServiceError as e:
+                    # Before finish(), so the job is never 'complete' while its
+                    # URL points at another workspace's application. The run did
+                    # its work and the artifacts are on disk either way -- but a
+                    # workspace whose output *is* a hosted site has not done what
+                    # it said it would if the site was not published, and
+                    # reporting success is how that goes unnoticed.
+                    await jobs.finish(
+                        conn, job_id, "failed", result.artifacts,
+                        f"hosted service not published: {e}",
+                    )
+                    return
 
             await jobs.finish(
                 conn, job_id, result.status, result.artifacts, result.error

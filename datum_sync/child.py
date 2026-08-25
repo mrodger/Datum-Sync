@@ -95,17 +95,34 @@ def _store(artifact: dict[str, Any], artifact_dir: Path) -> dict[str, Any]:
             )
     else:
         src = Path(artifact["path"])
-        if not src.is_file():
+        if src.is_dir():
+            # A hosted service is a built site, not a file. Copied whole so the
+            # served tree lives in the job's own artifact directory like every
+            # other output: serving the workspace's build directory in place
+            # would mean the next run rewrites a live site under its visitors,
+            # and deleting the workspace would take the site with it.
+            shutil.copytree(src, dest, symlinks=False)
+        elif src.is_file():
+            shutil.copyfile(src, dest)
+        else:
             raise RuntimeError(f"artifact {name!r} path does not exist: {src}")
-        shutil.copyfile(src, dest)
 
+    is_dir = dest.is_dir()
     return {
         "name": name,
         "type": artifact.get("type", "application/octet-stream"),
         "primary": bool(artifact.get("primary", False)),
         "file": name,
-        "size": dest.stat().st_size,
+        # Reported, not judged. Whether a directory is legal for this output
+        # depends on the manifest, which the child does not have -- the parent
+        # decides in runner._reconcile.
+        "dir": is_dir,
+        "size": _tree_size(dest) if is_dir else dest.stat().st_size,
     }
+
+
+def _tree_size(root: Path) -> int:
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
 async def _main() -> int:

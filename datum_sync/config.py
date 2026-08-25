@@ -180,3 +180,19 @@ RESOURCES_PATH = _path("RESOURCES_PATH", "./resources")
 DATA_PATH = _path("DATA_PATH", "./data")
 
 MIGRATIONS_PATH = REPO_ROOT / "migrations"
+
+
+def job_dir(job_id) -> Path:
+    """Where a job's artifacts live.
+
+    Here rather than in the modules that use it, because three of them do -- the
+    worker writes it, execute.py resolves files out of it, services.py records a
+    directory inside it as a served root -- and until this existed each spelled
+    the layout out again. A layout written in three places is one that gets
+    changed in two.
+
+    It also removes an import cycle with no other reason to exist: services.py
+    wanted one path helper from execute.py, which imports the worker, which
+    imports services.
+    """
+    return DATA_PATH / "jobs" / str(job_id)

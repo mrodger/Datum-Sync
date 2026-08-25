@@ -15,6 +15,10 @@ Five checks, in the order the spec fixes them:
   4. MANIFEST.md is filled in         -- `check_docs`
   5. optional smoke test exits 0      -- `run_smoke`
 
+plus one the contract implies rather than lists: a `service/*` output claims a
+global URL, so `check_services` refuses a name another workspace already serves,
+and a service type this server cannot run.
+
 They run cheapest-first. Check 5 spawns a subprocess, so nothing reaches it
 until the free checks have passed: a workspace with a broken manifest should
 never cost a process launch.
@@ -38,7 +42,7 @@ from pathlib import Path
 
 import asyncpg
 
-from datum_sync import connections
+from datum_sync import connections, services
 from datum_sync.auth import Principal
 from datum_sync.manifest import Manifest
 
@@ -199,6 +203,49 @@ async def check_connections(
             )
 
 
+# --- hosted services --------------------------------------------------------
+
+
+async def check_services(
+    conn: asyncpg.Connection, manifest: Manifest, repository: str
+) -> None:
+    """A `service/*` output must name a supported type and a free URL.
+
+    Publishing is the right moment for both, and the only one. `/serve/{name}/`
+    has nothing in it but the name, so the namespace is global, and the
+    alternative to checking here is discovering the clash when a job completes
+    -- at which point either the URL silently changes owner or a run that did
+    its work is reported as failed. Neither is something the person who wrote
+    the workspace can act on; a refused publish is.
+    """
+    for out in manifest.outputs:
+        if not services.is_service(out.type):
+            continue
+
+        if out.type in services.SUPERVISED:
+            raise PublishError(
+                f"output {out.name!r} is {out.type}; supervised services are not "
+                "run by this server (static, pwa and dashboard are)"
+            )
+        if out.type not in services.STATIC:
+            raise PublishError(
+                f"output {out.name!r} has unknown service type {out.type!r}; "
+                f"valid: {', '.join(services.STATIC)}"
+            )
+
+        owner = await conn.fetchrow(
+            "SELECT repository, workspace FROM hosted_services WHERE name = $1",
+            out.name,
+        )
+        if owner is not None and (
+            owner["repository"] != repository or owner["workspace"] != manifest.name
+        ):
+            raise PublishError(
+                f"service name {out.name!r} is already served by "
+                f"{owner['repository']}/{owner['workspace']}"
+            )
+
+
 # --- check 5: smoke test ----------------------------------------------------
 
 
@@ -264,6 +311,7 @@ async def gate(
     writes to a database would break that promise.
     """
     check_docs(ws_path)
+    await check_services(conn, manifest, repository)
     await check_connections(conn, manifest, repository, publisher)
     if smoke and manifest.smoke_test:
         await run_smoke(ws_path)

@@ -115,11 +115,12 @@ async def await_job(job_id: uuid.UUID, timeout: float) -> asyncpg.Record:
 
 def artifact_path(job_id: uuid.UUID, filename: str) -> Path:
     """Resolve a stored artifact, refusing anything outside the job's dir."""
-    root = (config.DATA_PATH / "jobs" / str(job_id)).resolve()
+    root = config.job_dir(job_id).resolve()
     path = (root / filename).resolve()
     if not path.is_file() or root not in path.parents:
         raise ApiError(404, "NOT_FOUND", f"artifact file missing: {filename}")
     return path
+
 
 
 async def run_sync(

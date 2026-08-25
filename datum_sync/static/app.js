@@ -258,11 +258,24 @@ const SCREENS = {
     automations: [screenAutomations, screenAutomation],
     connections: [screenConnections, screenConnection],
     resources: [(view) => notBuilt(view, 'Resources', null)],
-    services: [(view) => notBuilt(view, 'Services', 10)],
+    services: [screenServices],
     admin: [screenAdmin],
 };
 
 let leaveScreen = null;
+
+// Two routes can be in flight at once. `route()` clears the view synchronously
+// but appends after an await, so navigating away before a screen's fetch
+// resolves leaves that fetch running -- and it then appends into a view the
+// next screen has already filled. The browser smoke caught it as a Schedules
+// list carrying a Repositories heading, intermittently, on the one navigation
+// fast enough to overlap: the first click after signing in.
+//
+// The fix is that a screen never gets the view itself, only a container of its
+// own that the next route detaches. A stale screen's appends land in an orphan
+// node instead of on the page, and progressive rendering still works because
+// the container is attached from the start.
+let generation = 0;
 
 async function route() {
     if (!me) return;
@@ -270,6 +283,7 @@ async function route() {
     // stops before the next one starts. Without this, navigating away from a
     // job detail leaves its EventSource open for the life of the tab.
     if (leaveScreen) { leaveScreen(); leaveScreen = null; }
+    const mine = ++generation;
 
     const parts = parseHash();
     const [section, ...rest] = parts.length ? parts : ['repositories'];
@@ -278,12 +292,18 @@ async function route() {
     }
 
     const screens = SCREENS[section];
-    const view = clear($('view'));
+    const view = el('div');
+    clear($('view')).append(view);
     if (!screens) return void view.append(notBuiltNode('Not found', 'No such screen.'));
 
     const screen = screens[Math.min(rest.length, screens.length - 1)];
     try {
-        leaveScreen = (await screen(view, ...rest)) || null;
+        const leave = (await screen(view, ...rest)) || null;
+        // A stale screen's cleanup belongs to nobody, so run it rather than
+        // store it over the live screen's -- otherwise the newer screen's
+        // subscription is the one that never gets stopped.
+        if (mine !== generation) return void (leave && leave());
+        leaveScreen = leave;
     } catch (err) {
         if (err instanceof ApiError && err.status === 401) return showSignin();
         view.append(banner(err));
@@ -1524,6 +1544,48 @@ async function screenConnection(view, name) {
         me.is_admin
             ? el('div', { class: 'split' }, connectionForm(c), details)
             : details);
+}
+
+// ---------------------------------------------------------------------------
+// services
+// ---------------------------------------------------------------------------
+
+async function screenServices(view) {
+    const { items } = await api('/services');
+
+    view.append(
+        el('h1', {}, 'Services'),
+        el('p', { class: 'subtitle' },
+            'A hosted service is the one artifact that outlives its job. It is ',
+            'published by a workspace and refreshed by re-running it \u2014 there ',
+            'is nothing to create here.'));
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty' },
+            'No hosted services. A workspace publishes one by declaring an ',
+            'output of type service/static (or /pwa, /dashboard) and returning ',
+            'a built directory.'));
+        return;
+    }
+
+    view.append(table(
+        ['Name', 'Type', 'Published by', 'Source job', 'Updated', ''],
+        items.map((s) => el('tr', {},
+            el('td', {}, s.name),
+            el('td', {}, s.type.replace(/^service\//, '')),
+            el('td', {}, el('a', {
+                href: `#/repositories/${encodeURIComponent(s.repository)}`
+                      + `/${encodeURIComponent(s.workspace)}`,
+            }, `${s.repository}/${s.workspace}`)),
+            el('td', {}, s.source_job
+                ? el('a', { href: '#/jobs/' + s.source_job }, s.source_job.slice(0, 8))
+                // ON DELETE SET NULL: the job's records can be cleaned up
+                // without taking the URL down with them.
+                : el('span', { class: 'hint' }, '\u2014')),
+            el('td', {}, when(s.updated_at)),
+            // A normal link, not an in-app route: the target is a built site
+            // served by this server, not a screen of this application.
+            el('td', {}, el('a', { href: s.url, target: '_blank' }, 'open'))))));
 }
 
 // ---------------------------------------------------------------------------

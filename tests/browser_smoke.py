@@ -1,4 +1,4 @@
-"""Drive the Schedules, Automations and Connections screens in a real browser.
+"""Drive the Schedules, Automations, Connections and Services screens in a browser.
 
 Not a test module -- it needs a running server and a real account, so it will
 not work under pytest and does not try to:
@@ -40,6 +40,13 @@ PASSWORD = os.environ.get("DS_SMOKE_PASSWORD", "")
 SCHEDULE = "_ui-smoke-schedule"
 AUTOMATION = "_ui-smoke-automation"
 CONNECTION = "_ui-smoke-connection"
+
+# Not created by this script: it is whatever `Testing/site` publishes, because a
+# service name belongs to the workspace that declares it. Running the smoke
+# leaves it registered, which is correct -- there is no route that unpublishes
+# one, and re-running the workspace is how a hosted site is meant to be updated.
+SERVICE = "_fixture-site"
+SERVICE_HEADING = "_ui-smoke-hosted-page"
 
 # Distinctive enough to search the whole rendered page for. The point of the
 # connections checks is that this string reaches the database and never comes
@@ -128,6 +135,7 @@ def main() -> int:
             schedules(page)
             automations(page)
             connections(page)
+            services(page)
         except Exception as exc:            # noqa: BLE001 - recorded, not raised
             # Recorded rather than propagated, because cleanup has to run and a
             # `finally` that calls cleanup will throw away this exception the
@@ -163,7 +171,15 @@ def schedules(page) -> None:
     # heading still on display and the assertion below reads the old screen.
     # That is a flaky pass, not a failure, which is the worse kind.
     page.wait_for_selector("#view >> text=New schedule")
-    check("list renders", page.locator("#view h1").first.inner_text() == "Schedules")
+    # The count is asserted, not just `.first`. This check found a route race --
+    # the landing screen's fetch resolving after this screen had rendered, and
+    # appending its heading into the same view -- and it found it only half the
+    # time, because which of the two headings lands first is a coin toss. One
+    # h1 is the claim; `.first` was a weaker one that agreed with the bug.
+    heads = page.locator("#view h1")
+    found = [heads.nth(i).inner_text() for i in range(heads.count())]
+    check("list renders, and nothing else rendered into it",
+          found == ["Schedules"], repr(found))
 
     page.click("#view >> text=New schedule")
     page.wait_for_selector("form.panel")
@@ -309,6 +325,61 @@ def connections(page) -> None:
           "never tested" not in page.locator(".panel").last.inner_text())
 
 
+def services(page) -> None:
+    print("\nservices")
+
+    # The one check here that cannot manufacture its own subject. A hosted
+    # service exists only because a job produced a directory, so without a
+    # worker there is nothing to publish one -- and a run with no worker waits
+    # in the queue until the poll below gives up, which reads as a broken screen
+    # rather than a missing process. Say which it is.
+    health = page.request.get(BASE + "/health").json()
+    if health.get("worker") != "running":
+        print("  skip  no worker running -- nothing can publish a service")
+        return
+
+    # page.request carries the browser context's cookies, so this is the signed
+    # in session submitting a job, not a bearer token borrowed for the occasion.
+    r = page.request.post(BASE + "/rest/v1/transformations/submit/Testing/site",
+                          data={"params": {"HEADING": SERVICE_HEADING}})
+    check("the session can submit a job", r.status == 202, str(r.status))
+    if r.status != 202:
+        return
+    job = r.json()["id"]
+
+    state = {}
+    for _ in range(60):
+        state = page.request.get(
+            f"{BASE}/rest/v1/transformations/jobs/id/{job}").json()
+        if state["status"] in ("complete", "failed", "cancelled"):
+            break
+        page.wait_for_timeout(500)
+    check("the job completed", state.get("status") == "complete",
+          repr(state.get("status")))
+
+    page.goto(BASE + "/ui#/services")
+    page.wait_for_selector(f"#view >> tr:has-text('{SERVICE}')")
+    check("list renders", page.locator("#view h1").first.inner_text() == "Services")
+    row = page.locator(f"tr:has-text('{SERVICE}')").inner_text()
+    check("row shows the type", "static" in row, repr(row))
+    check("row credits the workspace", "Testing/site" in row, repr(row))
+    # The re-run case, seen from the screen: the row has to name the job that
+    # just ran, not the first one that ever published this name.
+    check("row names the job that published it", job[:8] in row, repr(row))
+
+    # The part only a browser can show. /serve/ is in COOKIE_PATHS -- unlike
+    # /stream/ and /download/, which execute a workspace and so refuse cookies
+    # -- because a hosted dashboard that the signed-in person it was built for
+    # cannot open is not hosted. A top-level navigation is exactly the request
+    # that distinguishes the two, and this is one.
+    page.goto(f"{BASE}/serve/{SERVICE}/")
+    check("the signed-in browser is served the built page",
+          page.locator("h1").inner_text() == SERVICE_HEADING)
+    # The stylesheet is not asserted here on purpose: the browser fetches it
+    # because the page links it, and a 404 on a subpath is reported by the
+    # response watcher. Asserting it as well would only prove httpx works.
+
+
 def cleanup(page) -> None:
     print("\ncleanup")
     for section, name in (("schedules", SCHEDULE), ("automations", AUTOMATION),
@@ -317,7 +388,13 @@ def cleanup(page) -> None:
         # Not `#view h1`: arriving from a detail screen that also has one, it
         # matches the screen still on display and the count below is read before
         # the list has fetched. The New button exists only on the list.
-        page.wait_for_selector("#view >> text=New ")
+        #
+        # And the button is named in full, because "New " matched the *previous*
+        # list's button too -- arriving at Connections straight from Automations,
+        # "New automation" satisfied the wait, the count ran against the old
+        # screen and cleanup reported nothing to remove while leaving the row in
+        # the database. A leak that announces itself as success.
+        page.wait_for_selector(f"#view >> text=New {section[:-1]}")
         if page.locator(f"tr:has-text('{name}')").count() == 0:
             print(f"  no {name} to remove")
             continue

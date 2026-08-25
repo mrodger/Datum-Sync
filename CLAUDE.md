@@ -11,9 +11,8 @@ Full design spec: `spec/` directory. Read `spec/overview.md` first.
 
 ## Status
 
-**Implementing.** Steps 1–9 of the build order are done; step 10 (hosted
-services) is next. Build order is in `spec/overview.md` — follow it, don't skip
-ahead.
+**Implementing.** Steps 1–10 of the build order are done. Build order is in
+`spec/overview.md` — follow it, don't skip ahead.
 
 Three gates, all of which must pass before a step is called done:
 `pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`.
@@ -99,7 +98,12 @@ workspace with a broken manifest never costs a process launch.
    runs with its own authority, and the submitter never chose its connections
 4. `MANIFEST.md` present with all five sections **non-empty** — "N/A", "TBD" and
    an HTML comment all count as empty
-5. Smoke test exits 0, if `manifest.json` sets `"smoke_test": true`. Opt-in
+5. Every `service/*` output is a type this server can actually host, and its
+   name is not already served by a **different** workspace. A service name is a
+   URL, so it is a namespace: two workspaces claiming one would mean the last
+   job to finish decides what the URL serves. Refused at publish, where it can
+   be fixed, rather than at run time, where it silently swaps a live site
+6. Smoke test exits 0, if `manifest.json` sets `"smoke_test": true`. Opt-in
    because a workspace with no `--smoke` handler ignores the flag and runs for
    real, so an always-on check would report a pass having done the side effects
 
@@ -111,6 +115,46 @@ before the gate runs, so a broken workspace is never mistaken for a removed one.
 Without `--as` it publishes as an unrestricted local admin, which is honest:
 anyone who can run it already has the database URL and the decryption key.
 `--dry-run` skips the smoke test — it promises to change nothing.
+
+## Hosted services
+
+`datum_sync/services.py`, served at `GET /serve/{name}/{path}`. A hosted service
+is the one artifact that outlives its job: a workspace returns an output of type
+`service/static` (or `/pwa`, `/dashboard`) whose `path` is a **directory**, and
+the URL then serves that job's artifacts until the workspace is run again.
+
+- **The artifact is the site.** Nothing is copied to a webroot. `register()`
+  points `hosted_services.path` at the job's artifact directory, so re-running a
+  workspace swings the URL to the new job and leaves the old job's artifacts
+  alone — which is what makes a bad deploy recoverable.
+- **A service output must be a directory and a directory must be a service
+  output.** Both halves are enforced in `runner._reconcile`, because either one
+  alone lets a mismatch through as a job that succeeded.
+- **Re-registration is a conditional upsert.** `ON CONFLICT (name) DO UPDATE`
+  carries a `WHERE` restricting it to the same repository *and* workspace, so a
+  workspace can move its own URL and nobody else's. The publish gate refuses the
+  collision earlier; this is the check that holds if the gate is ever bypassed.
+- **`status` is `'running'` for a static service.** It describes the URL, not a
+  process: the row existing is what makes `/serve/` answer. The other values are
+  for the supervised family, which is **not built** — declaring `service/api` or
+  `service/mcp` is refused at publish rather than accepted and ignored.
+- **`resolve()` is the only path in this project built from a caller-supplied
+  fragment.** It compares *resolved* paths with `is_relative_to`, which is what
+  catches a symlink out and a sibling sharing a prefix (`/data/app` vs
+  `/data/app-secrets`) — neither of which a string check sees.
+- **`/serve/` accepts the session cookie**, unlike `/stream/` and `/download/`.
+  Those execute a workspace, so a top-level navigation to one is CSRF; this one
+  reads files a job already wrote and executes nothing. A hosted dashboard the
+  signed-in person it was built for cannot open is not hosted.
+- The Services screen is **read-only by design** — there is nothing to create,
+  because publishing is what a workspace does and re-running is how it updates.
+
+`repositories/Testing/site` is the fixture. It is the only workspace that returns
+a directory, so it is the only thing exercising `child._store`'s copytree, the
+`_reconcile` correspondence check, `register`, and a real GET on `/serve/`. The
+browser smoke runs it and leaves `_fixture-site` registered — correct, since
+nothing unpublishes a service, so **no test may assume `hosted_services` is
+empty**. One did, and passed only until the feature was used once.
 
 ## Connection tier model
 
