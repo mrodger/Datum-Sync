@@ -11,8 +11,8 @@ Full design spec: `spec/` directory. Read `spec/overview.md` first.
 
 ## Status
 
-**Implementing.** Steps 1–10 of the build order are done. Build order is in
-`spec/overview.md` — follow it, don't skip ahead.
+**Deployed.** Steps 1–10 of the build order are done and the app is running on
+the Stratum VM (192.168.88.112:8200). Build order is in `spec/overview.md`.
 
 Three gates, all of which must pass before a step is called done:
 `pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`.
@@ -48,9 +48,92 @@ with the argon2 settings the login path verifies against.
 - Host: Stratum VM (192.168.88.112), isolated from datum-ui
 - Public access: geofabnz tunnel (HTTPS)
 - MCP endpoint: `https://geofabnz.com/mcp`
-- Database: PostgreSQL + PostGIS, dedicated instance on vm112
+- Database: PostgreSQL 16 + PostGIS 3.4 (native, port 5432, loopback only)
 - Python: 3.12
 - Framework: FastAPI
+
+## Deployed instance — 192.168.88.112
+
+**Live at `http://192.168.88.112:8200` (LAN). Beside FME Flow on :80.**
+
+### Layout on host
+
+| Path | Purpose |
+|---|---|
+| `/home/ubuntu/datum-sync/` | Working tree (cloned from bare repo) |
+| `/home/ubuntu/datum-sync.git/` | Bare repo (`origin` for the dev box) |
+| `/home/ubuntu/datum-sync/.env` | Config (chmod 600, gitignored) |
+| `/home/ubuntu/datum-sync/data/` | Job artifacts, uploads (persist forever by design) |
+| `/etc/systemd/system/datum-sync-api.service` | API unit |
+| `/etc/systemd/system/datum-sync-worker.service` | Worker unit |
+
+### Services
+
+```
+sudo systemctl {start,stop,restart,status} datum-sync-api datum-sync-worker
+sudo journalctl -u datum-sync-api -f
+sudo journalctl -u datum-sync-worker -f
+```
+
+**One worker only.** It holds a Postgres advisory lock. A second instance exits
+rather than racing — don't add `--concurrency` to the API or start two workers.
+
+### Database
+
+Native Postgres 16. `datumsync` role owns the `datumsync` database.
+Password and DSN are in `.env` — not in this file, not in source control.
+PostGIS and pgcrypto were pre-installed as superuser before migrations ran
+(the migration's `CREATE EXTENSION IF NOT EXISTS` requires superuser; the
+`datumsync` role does not have it).
+
+```
+sudo -u postgres psql -d datumsync   # admin access
+psql "$(grep DATABASE_URL .env | cut -d= -f2-)"  # app access
+python -m datum_sync.migrate --status
+```
+
+### Redeploy
+
+```bash
+# On dev box:
+cd ~/projects/datum-sync
+git push origin main
+
+# On vm112:
+cd /home/ubuntu/datum-sync
+git pull
+.venv/bin/pip install -r requirements.txt   # if requirements changed
+python -m datum_sync.migrate                # if new migrations
+sudo systemctl restart datum-sync-api datum-sync-worker
+```
+
+### What the pytest suite must NOT do against this instance
+
+`tests/conftest.py` issues `DELETE FROM jobs`, `DELETE FROM repositories`, and
+`DELETE FROM service_accounts` against `DATABASE_URL`. Its `db` fixture also
+skips rather than fails when a worker is running — so pointing the suite at the
+deployed database either silently deletes real rows or reports guards as
+unproven (skip ≠ fail). **Run the suite only against the dev-box database.**
+The gate for the deployed instance is the browser smoke:
+
+```bash
+DS_SMOKE_URL=http://192.168.88.112:8200 DS_SMOKE_USER=admin DS_SMOKE_PASSWORD=... \
+  python3 tests/browser_smoke.py
+```
+
+### Rollback
+
+```bash
+sudo systemctl disable --now datum-sync-api datum-sync-worker
+sudo rm /etc/systemd/system/datum-sync-{api,worker}.service
+sudo systemctl daemon-reload
+sudo -u postgres psql -c "DROP DATABASE datumsync; DROP ROLE datumsync;"
+sudo apt-get remove postgresql-16-postgis-3  # only if not wanted for other DBs
+rm -rf /home/ubuntu/datum-sync /home/ubuntu/datum-sync.git
+```
+
+Nothing outside those paths and port 8200 is modified. FME Flow on :80 and
+`stratum.service` on :3030 are unaffected.
 
 ## Locked design decisions
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=Datum-Sync worker
+After=datum-sync-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/datum-sync
+EnvironmentFile=/home/ubuntu/datum-sync/.env
+ExecStart=/home/ubuntu/datum-sync/.venv/bin/python -m datum_sync.worker --concurrency 4
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
