@@ -215,15 +215,31 @@ async function refreshEngines() {
 // routing
 // ---------------------------------------------------------------------------
 
+/* Ordered to match FME Flow's rail, so someone who knows Flow finds each
+ * section where they expect it. Flow's order, with our equivalents:
+ *
+ *   Run Workspace / Workspaces   -> Repositories   (its entry point, and ours)
+ *   Automations                  -> Automations
+ *   Schedules                    -> Schedules
+ *   Jobs                         -> Jobs
+ *   Connections & Parameters     -> Connections
+ *   Resources                    -> Resources
+ *   -- (Flow's wider gap before its administration group) --
+ *   User Management              -> Admin
+ *
+ * Services has no Flow counterpart -- nothing in Flow hosts a job's output as
+ * a site -- so it sits at the end of the working group rather than being
+ * forced into a position Flow does not have.
+ */
 const SECTIONS = [
     { id: 'repositories', label: 'Repositories' },
-    { id: 'jobs', label: 'Jobs' },
-    { id: 'schedules', label: 'Schedules' },
     { id: 'automations', label: 'Automations' },
+    { id: 'schedules', label: 'Schedules' },
+    { id: 'jobs', label: 'Jobs' },
     { id: 'connections', label: 'Connections' },
     { id: 'resources', label: 'Resources' },
     { id: 'services', label: 'Services' },
-    { id: 'admin', label: 'Admin', adminOnly: true },
+    { id: 'admin', label: 'Admin', adminOnly: true, group: true },
 ];
 
 function buildNav() {
@@ -232,6 +248,9 @@ function buildNav() {
         // Hidden, not disabled -- and hiding is presentation only. Every route
         // behind Admin checks is_admin for itself; this just declutters.
         if (section.adminOnly && !me.is_admin) continue;
+        // The rule belongs to the group below it, so hiding Admin hides the
+        // rule too rather than leaving a divider with nothing under it.
+        if (section.group) nav.append(el('hr', {}));
         nav.append(el('a', {
             href: '#/' + section.id,
             id: 'nav-' + section.id,
@@ -304,6 +323,14 @@ async function route() {
         // subscription is the one that never gets stopped.
         if (mine !== generation) return void (leave && leave());
         leaveScreen = leave;
+        // "This screen, and it is the live one, and it has finished."
+        //
+        // Every flaky wait in the browser smoke has come from having to infer
+        // that from the content -- a heading that every screen has, a button
+        // label that two screens share. Those are guesses about rendering;
+        // this is the fact itself, and it is set only past the generation
+        // check, so a stale screen cannot claim it. Waits belong on this.
+        view.dataset.ready = parts.length ? parts.join('/') : 'repositories';
     } catch (err) {
         if (err instanceof ApiError && err.status === 401) return showSignin();
         view.append(banner(err));
@@ -370,19 +397,73 @@ function table(headings, rows) {
         el('tbody', {}, rows));
 }
 
+/* Flow's list-page header: the page title, then one row carrying a search
+ * field on the left and the action buttons packed against the right. Every
+ * list page in Flow is laid out this way, so it is one component here rather
+ * than a flex container re-typed in each screen.
+ *
+ * `search` is a placeholder string; omit it for a page with nothing worth
+ * filtering. `actions` is an array of button/link nodes, in Flow's own
+ * left-to-right order (create first, destructive last).
+ *
+ * The filter is client-side, over the rows already rendered. That is a real
+ * limitation and not a hidden one: there is no search endpoint, so it matches
+ * what was fetched. Every list here fetches in full, which makes the two the
+ * same thing today -- but a list that ever paginates server-side would need
+ * this to become a query, because otherwise it would silently search only the
+ * page on screen and report "no matches" for a row that exists.
+ */
+function listbar(view, title, opts) {
+    const o = opts || {};
+    view.append(el('h1', {}, title));
+    if (o.subtitle) view.append(el('p', { class: 'subtitle' }, o.subtitle));
+
+    const bar = el('div', { class: 'listbar' });
+
+    if (o.search) {
+        const input = el('input', {
+            type: 'search',
+            placeholder: o.search,
+            'aria-label': o.search,
+            oninput: () => filterRows(view, input.value),
+        });
+        bar.append(el('div', { class: 'search' }, input));
+    }
+
+    if (o.actions && o.actions.length) {
+        bar.append(el('div', { class: 'actions' }, o.actions));
+    }
+
+    // A bar with neither a search nor an action is just a margin. Screens that
+    // drop both on some paths (the connection create form) would otherwise
+    // leave a gap under the title with nothing in it.
+    if (bar.firstChild) view.append(bar);
+    return bar;
+}
+
+/* Hidden, not removed: the row goes back when the term is cleared, and
+ * nothing else on the page holds a reference to it that would go stale. */
+function filterRows(view, term) {
+    const needle = term.trim().toLowerCase();
+    for (const row of view.querySelectorAll('tbody tr, .cards > .card')) {
+        row.hidden = needle !== '' && !row.textContent.toLowerCase().includes(needle);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // repositories
 // ---------------------------------------------------------------------------
 
 async function screenRepositories(view) {
     const { items } = await api('/repositories');
-    view.append(el('h1', {}, 'Repositories'));
     if (!items.length) {
+        view.append(el('h1', {}, 'Repositories'));
         view.append(el('div', { class: 'empty' },
             'Nothing published. Use the ', el('code', {}, 'repos'),
             ' CLI to add a repository.'));
         return;
     }
+    listbar(view, 'Repositories', { search: 'Search repositories by name' });
     view.append(el('div', { class: 'cards' }, items.map((repo) =>
         el('a', { class: 'card', href: '#/repositories/' + encodeURIComponent(repo.name) },
             el('h3', {}, repo.name),
@@ -575,7 +656,7 @@ async function screenJobs(view) {
     const query = filter ? '?status=' + encodeURIComponent(filter) : '';
     const { items } = await api('/transformations/jobs' + query);
 
-    const select = el('select', { style: 'width:auto' },
+    const select = el('select', {},
         el('option', { value: '', selected: !filter }, 'All statuses'),
         STATUSES.map((s) => el('option', { value: s, selected: s === filter }, s)));
     // Redraws via hashchange. Calling route() here as well would render twice,
@@ -583,9 +664,12 @@ async function screenJobs(view) {
     select.addEventListener('change', () =>
         go(select.value ? '#/jobs?status=' + select.value : '#/jobs'));
 
-    view.append(
-        el('div', { style: 'display:flex;justify-content:space-between;align-items:center' },
-            el('h1', {}, 'Jobs'), select));
+    // The status filter is an action, not a search: it re-queries the server,
+    // where the search box only filters what is already on screen.
+    listbar(view, 'Jobs', {
+        search: 'Search jobs by workspace or user',
+        actions: [select],
+    });
 
     if (!items.length) {
         view.append(el('div', { class: 'empty' }, 'No jobs', filter ? ' with this status.' : ' yet.'));
@@ -874,9 +958,10 @@ function paramsPanel(controls) {
 
 async function screenSchedules(view) {
     const { items } = await api('/schedules');
-    view.append(el('div', { class: 'toolbar' },
-        el('h1', {}, 'Schedules'),
-        el('a', { class: 'button', href: '#/schedules/' + NEW }, 'New schedule')));
+    listbar(view, 'Schedules', {
+        search: 'Search schedules by name or workspace',
+        actions: [el('a', { id: 'create', class: 'button', href: '#/schedules/' + NEW }, 'Create')],
+    });
 
     if (!items.length) {
         view.append(el('div', { class: 'empty' },
@@ -1132,9 +1217,10 @@ function triggerSummary(config) {
 
 async function screenAutomations(view) {
     const { items } = await api('/automations');
-    view.append(el('div', { class: 'toolbar' },
-        el('h1', {}, 'Automations'),
-        el('a', { class: 'button', href: '#/automations/' + NEW }, 'New automation')));
+    listbar(view, 'Automations', {
+        search: 'Search automations by name',
+        actions: [el('a', { id: 'create', class: 'button', href: '#/automations/' + NEW }, 'Create')],
+    });
 
     if (!items.length) {
         view.append(el('div', { class: 'empty' },
@@ -1427,11 +1513,12 @@ async function screenConnections(view) {
      * named "new" unreachable from the UI. */
     const creating = hashQuery().has('new');
 
-    view.append(el('div', { class: 'toolbar' },
-        el('h1', {}, 'Connections'),
-        me.is_admin && !creating
-            ? el('a', { class: 'button', href: '#/connections?new=1' }, 'New connection')
-            : null));
+    listbar(view, 'Connections', {
+        search: !creating && items.length ? 'Search connections by name' : null,
+        actions: me.is_admin && !creating
+            ? [el('a', { id: 'create', class: 'button', href: '#/connections?new=1' }, 'Create')]
+            : [],
+    });
 
     if (!key_configured) {
         // Said before the fields are filled in, not as a 500 on save. Without
@@ -1553,12 +1640,12 @@ async function screenConnection(view, name) {
 async function screenServices(view) {
     const { items } = await api('/services');
 
-    view.append(
-        el('h1', {}, 'Services'),
-        el('p', { class: 'subtitle' },
-            'A hosted service is the one artifact that outlives its job. It is ',
-            'published by a workspace and refreshed by re-running it \u2014 there ',
-            'is nothing to create here.'));
+    listbar(view, 'Services', {
+        subtitle: 'A hosted service is the one artifact that outlives its job. It is '
+            + 'published by a workspace and refreshed by re-running it \u2014 there '
+            + 'is nothing to create here.',
+        search: items.length ? 'Search services by name or workspace' : null,
+    });
 
     if (!items.length) {
         view.append(el('div', { class: 'empty' },

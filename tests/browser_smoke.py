@@ -166,11 +166,11 @@ def schedules(page) -> None:
     # [hidden], so a bare h1 locator matches two elements and waits forever for
     # the wrong one.
     #
-    # And waited on by the New button rather than by `#view h1`, because every
+    # And waited on by `data-ready` rather than by `#view h1`, because every
     # screen has an h1: arriving from another one, the selector matches the
     # heading still on display and the assertion below reads the old screen.
     # That is a flaky pass, not a failure, which is the worse kind.
-    page.wait_for_selector("#view >> text=New schedule")
+    page.wait_for_selector("#view > [data-ready='schedules']")
     # The count is asserted, not just `.first`. This check found a route race --
     # the landing screen's fetch resolving after this screen had rendered, and
     # appending its heading into the same view -- and it found it only half the
@@ -181,7 +181,7 @@ def schedules(page) -> None:
     check("list renders, and nothing else rendered into it",
           found == ["Schedules"], repr(found))
 
-    page.click("#view >> text=New schedule")
+    page.click("#view #create")
     page.wait_for_selector("form.panel")
     check("form renders", page.locator("form.panel").count() == 1)
 
@@ -236,10 +236,10 @@ def schedules(page) -> None:
 def automations(page) -> None:
     print("\nautomations")
     page.goto(BASE + "/ui#/automations")
-    page.wait_for_selector("#view >> text=New automation")
+    page.wait_for_selector("#view > [data-ready='automations']")
     check("list renders", page.locator("#view h1").first.inner_text() == "Automations")
 
-    page.click("#view >> text=New automation")
+    page.click("#view #create")
     page.wait_for_selector("textarea.yaml")
     check("template is offered",
           "job_complete" in page.locator("textarea.yaml").input_value())
@@ -274,10 +274,10 @@ def automations(page) -> None:
 def connections(page) -> None:
     print("\nconnections")
     page.goto(BASE + "/ui#/connections")
-    page.wait_for_selector("#view >> text=New connection")
+    page.wait_for_selector("#view > [data-ready='connections']")
     check("list renders", page.locator("#view h1").first.inner_text() == "Connections")
 
-    page.click("#view >> text=New connection")
+    page.click("#view #create")
     page.wait_for_selector("form.panel")
 
     texts = page.locator("form.panel input[type=text]")
@@ -385,23 +385,34 @@ def cleanup(page) -> None:
     for section, name in (("schedules", SCHEDULE), ("automations", AUTOMATION),
                           ("connections", CONNECTION)):
         page.goto(f"{BASE}/ui#/{section}")
-        # Not `#view h1`: arriving from a detail screen that also has one, it
-        # matches the screen still on display and the count below is read before
-        # the list has fetched. The New button exists only on the list.
+        # `data-ready` is set by route() only after the screen's fetch has
+        # resolved and only past its generation check, so it means this exact
+        # screen, live, finished -- which is the thing being waited for.
         #
-        # And the button is named in full, because "New " matched the *previous*
-        # list's button too -- arriving at Connections straight from Automations,
-        # "New automation" satisfied the wait, the count ran against the old
-        # screen and cleanup reported nothing to remove while leaving the row in
-        # the database. A leak that announces itself as success.
-        page.wait_for_selector(f"#view >> text=New {section[:-1]}")
+        # It replaces two guesses that each shipped a bug. `#view h1` matched
+        # the detail screen still on display, so the count below ran before the
+        # list had fetched. Naming the New button dodged that but not the
+        # neighbouring list: "New " matched the *previous* list's button, so
+        # arriving at Connections straight from Automations the count ran
+        # against the old screen and cleanup reported nothing to remove while
+        # leaving the row in the database -- a leak that announces itself as
+        # success. Both were inferences about rendering; this is the fact.
+        page.wait_for_selector(f"#view > [data-ready='{section}']")
         if page.locator(f"tr:has-text('{name}')").count() == 0:
             print(f"  no {name} to remove")
             continue
         page.click(f"#view >> tr:has-text('{name}') >> text={name}")
         page.wait_for_selector("#view >> text=Delete")
         page.click("#view >> text=Delete")
-        page.wait_for_selector("#view h1")
+        # The same fact again, and for the same reason. Deleting navigates back
+        # to the list, but `#view h1` matched the *detail* screen still on
+        # display, so this returned before that navigation had run. The next
+        # iteration then issued its own navigation into the gap, the late one
+        # landed second and won, and the loop sat on the wrong screen until it
+        # timed out -- the connections pass failed having never been shown a
+        # connections screen. `data-ready` tells the two apart: the detail
+        # screen carries 'automations/367', only the list carries 'automations'.
+        page.wait_for_selector(f"#view > [data-ready='{section}']")
         check(f"{name} deleted", page.locator(f"tr:has-text('{name}')").count() == 0)
 
 

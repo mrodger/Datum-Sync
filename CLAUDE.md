@@ -14,8 +14,9 @@ Full design spec: `spec/` directory. Read `spec/overview.md` first.
 **Deployed.** Steps 1–10 of the build order are done and the app is running on
 the Stratum VM (192.168.88.112:8200). Build order is in `spec/overview.md`.
 
-Three gates, all of which must pass before a step is called done:
-`pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`.
+Four gates, all of which must pass before a step is called done:
+`pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`
+· `python tests/flow_geometry.py` (the last two need a running server).
 Stop the worker before running the suite — a live worker claims the tests' jobs,
 and a job left queued afterwards silently *skips* the UI tests rather than
 failing them, which looks like a clean run.
@@ -27,6 +28,26 @@ back with guards unproven in bulk, check `pytest -q` for skips before believing
 any of them. An API server also queues jobs — it runs the scheduler, so one left
 running quietly refills the queue from any enabled schedule, and no worker means
 those jobs stay `queued` forever.
+
+**Nothing else can see layout drift.** `flow_geometry.py` measures the rendered
+chrome against the pixel scan of FME Flow 2026.2 in
+`~/vault/fme/knowledge/flow_ui_map.md`, because the other three gates are blind
+to it: the pytest suite renders nothing, and `browser_smoke.py` drives the whole
+application successfully with the sidebar at *any* width at all. The place a
+20px discrepancy shows up is a side-by-side demo, and by then it is being shown
+to somebody. The numbers in it are measurements, not preferences — change them
+only if Flow itself is re-scanned.
+
+**Wait on `data-ready`, never on rendered content.** `route()` sets
+`view.dataset.ready` to the hash path after the screen's fetch resolves and only
+past its generation check, so it means "this screen, live, finished". Every
+flaky wait in the browser smoke came from inferring that from content instead:
+`#view h1` matches whichever screen is still on display (every screen has an
+h1), and a button label matches the neighbouring list too — that one let cleanup
+report nothing to remove while leaving the row in the database, a leak that
+announces itself as success. Note the list and its detail screen carry different
+values (`automations` vs `automations/367`), which is what makes the wait after a
+delete unambiguous.
 
 ## Running it for hand-testing
 
