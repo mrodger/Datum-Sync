@@ -117,6 +117,11 @@ unproven (skip ≠ fail). **Run the suite only against the dev-box database.**
 The gate for the deployed instance is the browser smoke:
 
 ```bash
+# On vm112 (playwright is in the venv there):
+DS_SMOKE_URL=http://192.168.88.112:8200 DS_SMOKE_USER=admin DS_SMOKE_PASSWORD=... \
+  .venv/bin/python tests/browser_smoke.py
+
+# From vm102 (playwright is system python3 there):
 DS_SMOKE_URL=http://192.168.88.112:8200 DS_SMOKE_USER=admin DS_SMOKE_PASSWORD=... \
   python3 tests/browser_smoke.py
 ```
