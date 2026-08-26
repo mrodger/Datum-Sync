@@ -1,59 +1,67 @@
 /* Datum-Sync web UI.
  *
- * Layout mirrors FME Flow: fixed top bar, collapsible left nav, content area.
- * Colours are the Datum palette (spec/components.md section 11).
+ * Layout mirrors FME Flow 2026.2: dark nav rail, light topbar + content area.
+ * Datum brand colours (navy #1D3A5C, amber #C89632) are used for accents and
+ * the primary action; structural geometry is taken from the live Flow instance
+ * screenshotted at ~/vault/fme/knowledge/flow-screenshots/.
  *
- * The three named typefaces are asked for by name and fall back to the
- * system stack. Nothing is fetched from a CDN: this runs on machines that
- * may have no route to the internet, and a self-hosted runner that renders
- * unstyled when a font host is unreachable is worse than one that renders in
- * the system font. Vendoring the woff2 files is a packaging task, not a
- * reason to add a network dependency to the sign-in page.
+ * Dark zone:  .signin, .brand, .sidebar
+ * Light zone: .topbar, .view  (variables overridden at those roots)
+ *
+ * Nothing is fetched from a CDN: self-hosted or falls back to the system font.
  */
 
 :root {
-    --navy: #1D3A5C;
-    --amber: #C89632;
-    --bg: #0F1923;
+    /* Brand */
+    --navy:   #1D3A5C;
+    --amber:  #C89632;
 
-    /* Derived surfaces. Two levels so a card can sit on a panel and still
-     * read as raised without a border doing all the work. */
-    --panel: #16232F;
+    /* Dark zone defaults (used by .signin, .brand, .sidebar) */
+    --bg:      #0F1923;
+    --panel:   #16232F;
     --surface: #1B2C3D;
-    --border: #27394B;
+    --border:  #27394B;
+    --text:    #E8EEF4;
+    --muted:   #8FA3B5;
 
-    --text: #E8EEF4;
-    --muted: #8FA3B5;
+    /* Job status colours -- same in both zones */
+    --running:   var(--amber);
+    --complete:  #4E9A6B;
+    --failed:    #C2564B;
+    --queued:    #6B7F91;
+    --cancelled: #6B7F91;
 
-    --running: var(--amber);
-    --complete: #4E9A6B;
-    --failed: #C2564B;
-    --queued: #6B7F91;
-
-    --body: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    /* Type */
+    --body:    "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     --heading: "Space Grotesk", var(--body);
-    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-    /* Layout geometry is taken from a pixel scan of FME Flow 2026.2
-     * (~/vault/fme/knowledge/flow_ui_map.md, 2026-08-02) so the two can be
-     * driven side by side without the eye having to re-learn where anything
-     * is. Colours are ours; the measurements are theirs.
-     *
-     *   nav item   x=8  w=234  h=36, one every 44px  -> first item at y=82
-     *   content    starts at x=290 -> 250px rail + 40px gutter
-     *   search     h=40   action buttons h=35   tabs h=36   pager 40x40
-     *
-     * --topbar is the one number the scan does not give (it measures no
-     * header element), so it is chosen to put the first nav item at y=82
-     * exactly: 64 + 18 = 82. */
-    --nav-width: 250px;
+    /* Layout — pixel-matched from the Flow 2026.2 screenshot set.
+     *   nav item   x=8  w=234  h=36, pitch=44px, first at y=82
+     *   content    x=290 (250px rail + 40px gutter)
+     *   search     h=40   buttons h=35   tabs h=36   pager h=40  */
+    --nav-width:           250px;
     --nav-width-collapsed: 3.5rem;
-    --topbar: 64px;
+    --topbar:  64px;
     --nav-item: 36px;
     --nav-pitch: 44px;
     --gutter: 40px;
     --control: 35px;
-    --search: 40px;
+    --search:  40px;
+}
+
+/* ── Light zone: topbar header + main content ──────────────────────────────
+ * Override the custom properties inside these two elements so that every rule
+ * that uses --panel, --border, --text, etc. automatically renders light when
+ * it lives inside .topbar or .view. The rail and sign-in form are siblings of
+ * these elements, not children, so they keep the dark :root values. */
+.topbar, .view {
+    --bg:      #f5f5f5;
+    --panel:   #ffffff;
+    --surface: #f9f9f9;
+    --border:  #e2e2e2;
+    --text:    #0d0d0c;
+    --muted:   #5e5e5e;
 }
 
 * { box-sizing: border-box; }
@@ -118,15 +126,19 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
 }
 
 .app.collapsed { grid-template-columns: var(--nav-width-collapsed) 1fr; }
-.app.collapsed .nav-label, .app.collapsed .brand-name { display: none; }
+.app.collapsed .nav-label,
+.app.collapsed .brand-name,
+.app.collapsed .nav-group-label,
+.app.collapsed .nav-footer { display: none; }
 
+/* Brand / logo bar — dark, same tone as the rail */
 .brand {
     grid-area: brand;
     display: flex;
     align-items: center;
     gap: .6rem;
     padding: 0 8px;
-    background: var(--navy);
+    background: var(--panel);      /* dark panel from :root */
     font-family: var(--heading);
     font-weight: 600;
     font-size: 1.05rem;
@@ -145,15 +157,17 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     display: flex;
 }
 
+/* Topbar — light zone (variables overridden above) */
 .topbar {
     grid-area: top;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 1rem;
-    padding: 0 1rem;
-    background: var(--navy);
+    padding: 0 1.5rem;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
+    color: var(--text);
 }
 
 .engines { color: var(--muted); font-size: .8rem; }
@@ -164,11 +178,12 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     align-items: center;
     gap: .5rem;
     font-size: .85rem;
+    color: var(--text);
 }
 
 .account .badge-admin {
     background: var(--amber);
-    color: var(--bg);
+    color: var(--navy);
     border-radius: .2rem;
     padding: 0 .3rem;
     font-size: .7rem;
@@ -176,8 +191,6 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     text-transform: uppercase;
 }
 
-/* Deliberately not the amber of .badge-admin: "admin" is a normal state and
-   this is not one, so it should not be possible to mistake at a glance. */
 .account .badge-insecure {
     background: var(--failed);
     color: #fff;
@@ -188,27 +201,29 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     text-transform: uppercase;
 }
 
-/* The rail is a flex column so the 44px pitch comes from `gap`. Margins on the
-   items themselves cannot do it: adjacent vertical margins collapse, so 4px
-   above and below each item produces a 4px gap, not 8, and the rail scanned
-   40px instead of 44 -- a miss small enough to look like nothing.
-   The edge is an inset shadow rather than a border-right for the same reason
-   in reverse: a border is inside the 250px column, so it takes a pixel off
-   every item's width (234 -> 233) while looking like pure decoration.
-   With that: first item at 64 (topbar) + 18 = y82, and 8 + 234 + 8 = 250. */
+/* Topbar sign-out button — secondary style but in the light zone */
+.topbar button.secondary {
+    border-color: var(--border);
+    color: var(--text);
+    background: transparent;
+}
+.topbar button.secondary:hover { background: var(--surface); }
+
+/* -- rail ----------------------------------------------------------------
+ * Gap between items comes from the flex gap (pitch − item height), not from
+ * item margins, because adjacent vertical margins collapse and produce half
+ * the intended gap. Box-shadow instead of border-right keeps the 250px column
+ * clean (a border eats 1px from every nav item width). */
 .sidebar {
     grid-area: nav;
     display: flex;
     flex-direction: column;
-    gap: calc(var(--nav-pitch) - var(--nav-item));
     background: var(--panel);
     box-shadow: inset -1px 0 0 var(--border);
-    padding: 18px 8px;
+    padding: 18px 8px 0;
     overflow-y: auto;
 }
 
-/* height, not vertical padding: the item box is 36px whatever the label's
-   line-height turns out to be. */
 .sidebar a {
     display: flex;
     align-items: center;
@@ -221,24 +236,47 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     font-size: .9rem;
     white-space: nowrap;
     border-left: 3px solid transparent;
+    /* Explicit margin-bottom reproduces the 44px pitch: 36px item + 8px gap */
+    margin-bottom: calc(var(--nav-pitch) - var(--nav-item));
 }
 
 .sidebar a:hover { color: var(--text); background: var(--surface); text-decoration: none; }
 .sidebar a.active { color: var(--text); background: var(--surface); border-left-color: var(--amber); }
 .sidebar svg { flex: none; }
 
-/* Flow leaves a wider gap before its administration group: Resources y=610,
-   Analytics y=708, so 98px across the divide against the usual 44. The rail's
-   own gap contributes 8 on each side of the rule, so the margins carry the
-   rest -- 36 + 8 + (22 + 1 + 23) + 8 = 98. */
-.sidebar hr {
-    border: 0;
-    border-top: 1px solid var(--border);
-    margin: 22px .5rem 23px;
+/* ADMIN group divider — label + rule, matching Flow's wider gap before it */
+.nav-group-label {
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 .75rem;
+    margin: 14px 0 6px;
     flex: none;
 }
 
-.view { grid-area: view; overflow-y: auto; padding: 1.75rem var(--gutter); }
+/* Version / copyright footer — pushed to the bottom of the rail */
+.nav-footer {
+    margin-top: auto;
+    padding: 1rem .75rem .85rem;
+    border-top: 1px solid var(--border);
+    font-size: .72rem;
+    color: var(--muted);
+    line-height: 1.6;
+    flex: none;
+}
+.nav-footer b { color: var(--text); font-weight: 600; }
+
+/* -- content area -------------------------------------------------------- */
+
+.view {
+    grid-area: view;
+    overflow-y: auto;
+    padding: 1.75rem var(--gutter);
+    background: var(--bg);
+    color: var(--text);
+}
 
 /* -- shared pieces ------------------------------------------------------- */
 
@@ -266,10 +304,8 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     background: var(--panel);
 }
 
-/* Flow's action buttons are all 35px tall and sized to their label
-   (Create 77, Edit 73, Upload 79, Remove 87, Actions 95) -- so height is
-   fixed here and width is left to the text, which reproduces those widths
-   without hard-coding a number per button. */
+/* -- buttons -------------------------------------------------------------- */
+
 button, .button {
     display: inline-flex;
     align-items: center;
@@ -281,38 +317,39 @@ button, .button {
     border-radius: .25rem;
     border: 1px solid var(--amber);
     background: var(--amber);
-    color: var(--bg);
+    color: var(--navy);
     font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
 }
 
-button:hover:not(:disabled) { filter: brightness(1.1); }
+button:hover:not(:disabled) { filter: brightness(1.08); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
 button.secondary { background: transparent; color: var(--text); border-color: var(--border); }
-button.danger { background: transparent; color: var(--failed); border-color: var(--failed); }
+button.danger    { background: transparent; color: var(--failed); border-color: var(--failed); }
+
+/* -- inputs -------------------------------------------------------------- */
 
 input, select, textarea {
     font-family: var(--body);
     font-size: .9rem;
     padding: .5rem .7rem;
-    background: var(--bg);
+    background: var(--panel);      /* white inside .view, dark panel inside .signin */
     border: 1px solid var(--border);
     border-radius: .25rem;
     color: var(--text);
     width: 100%;
 }
 
-/* Single-line controls only. A textarea keeps its rows. */
+/* Single-line controls only */
 input:not([type="checkbox"]), select { height: var(--control); }
 
 input[type="checkbox"] { width: auto; height: auto; accent-color: var(--amber); }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 
-/* Flow's list rows sit on a 78px pitch, which is what makes its tables read
-   as a list of things rather than a spreadsheet. Matched here with row
-   padding rather than a fixed height, so a wrapped cell still grows. */
+/* -- tables -------------------------------------------------------------- */
+
 table {
     width: 100%;
     border-collapse: collapse;
@@ -345,6 +382,8 @@ td {
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--surface); }
 
+/* -- badges -------------------------------------------------------------- */
+
 .badge {
     display: inline-block;
     padding: .1rem .5rem;
@@ -353,19 +392,17 @@ tbody tr:hover { background: var(--surface); }
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: .03em;
-    color: var(--bg);
+    /* Hardcoded: 'color: var(--bg)' becomes #f5f5f5 inside .view (light),
+     * producing low contrast. Dark navy text reads on every badge colour. */
+    color: #0f1923;
     background: var(--queued);
 }
 
 .badge.running   { background: var(--running); }
-.badge.complete  { background: var(--complete); }
-.badge.failed    { background: var(--failed); }
+.badge.complete  { background: var(--complete); color: #fff; }
+.badge.failed    { background: var(--failed);   color: #fff; }
 .badge.cancelled { background: var(--queued); }
 
-/* A schedule or automation is enabled or paused, not queued or running.
- * Outlined rather than filled, and deliberately not reusing .complete for
- * enabled: a solid green pill beside a schedule reads as "it ran and
- * succeeded", which is a different claim from "it is switched on". */
 .badge.enabled {
     background: transparent;
     color: var(--amber);
@@ -377,7 +414,7 @@ tbody tr:hover { background: var(--surface); }
     box-shadow: inset 0 0 0 1px var(--border);
 }
 
-/* -- toolbar: a heading with its primary action beside it ---------------- */
+/* -- toolbar ------------------------------------------------------------- */
 
 .toolbar {
     display: flex;
@@ -388,13 +425,10 @@ tbody tr:hover { background: var(--surface); }
 }
 .toolbar h1 { margin: 0; }
 
-/* -- list page: title, then a search/actions row ------------------------- */
+/* -- listbar ------------------------------------------------------------- */
 
-/* Flow's list pages all share one row: the search box on the left, the
-   action buttons packed against the right (Repositories has Create 858,
-   Upload 939, Edit 1022, Remove 1099 -- right-aligned and butted together).
-   The row is one component here so every list screen inherits it rather
-   than each one re-inventing a flex container. */
+/* Flow's list pages all share one row: search on the left, actions packed
+ * against the right. One component so every list screen inherits it. */
 .listbar {
     display: flex;
     align-items: center;
@@ -403,45 +437,272 @@ tbody tr:hover { background: var(--surface); }
 }
 
 .listbar .search {
-    /* 560px is Flow's widest search field; it shrinks rather than pushing
-       the buttons off the right on a narrow window. */
     flex: 0 1 560px;
-    height: var(--search);
+    position: relative;
 }
 
-.listbar .search input { height: var(--search); }
+.listbar .search input {
+    height: var(--search);
+    padding-left: 2.2rem;  /* room for the icon */
+}
 
-/* Buttons keep their natural width and stay together on the right. The auto
-   margin is here rather than on the search field so that a bar with no search
-   still puts them on the right -- with it on the search, Connections drew its
-   Create button hard against the left while every other screen had it right,
-   which reads as a half-finished screen rather than a deliberate one. */
+/* Magnifying glass icon inside the search field */
+.listbar .search::before {
+    content: '';
+    position: absolute;
+    left: .75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 15px;
+    height: 15px;
+    background: var(--muted);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") center/contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") center/contain no-repeat;
+    pointer-events: none;
+    z-index: 1;
+}
+
 .listbar .actions { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
 
 .listbar select { width: auto; }
 
-/* -- the automation editor ----------------------------------------------- */
-
-/* No wrapping and no soft tabs: YAML is whitespace-significant, and a line
- * that wraps looks exactly like a line that is indented. */
-textarea.yaml {
-    font-family: var(--mono);
+/* Pagination bar — shows "Showing N to N of N entries" + prev/next */
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: .75rem;
     font-size: .82rem;
-    line-height: 1.5;
-    tab-size: 2;
-    white-space: pre;
-    overflow-wrap: normal;
-    overflow-x: auto;
+    color: var(--muted);
+    flex-wrap: wrap;
 }
 
-pre.mono {
-    margin: 0;
-    padding: .6rem .75rem;
-    background: var(--bg);
+.pager-btns { display: flex; gap: 2px; }
+
+.pager-btns button {
+    height: 32px;
+    width: 32px;
+    padding: 0;
+    font-size: .8rem;
     border: 1px solid var(--border);
-    border-radius: 4px;
-    overflow-x: auto;
+    background: var(--panel);
+    color: var(--text);
+    border-radius: .2rem;
+    font-weight: 400;
 }
+.pager-btns button.cur { background: var(--amber); border-color: var(--amber); color: var(--navy); font-weight: 600; }
+.pager-btns button:hover:not(:disabled):not(.cur) { background: var(--surface); }
+
+/* -- stub screens -------------------------------------------------------- */
+
+.stub-empty {
+    max-width: 520px;
+    margin: 4rem auto;
+    text-align: center;
+    color: var(--muted);
+}
+.stub-empty svg { opacity: .25; margin-bottom: 1rem; }
+.stub-empty h2 { color: var(--text); margin-bottom: .4rem; }
+.stub-empty p { font-size: .9rem; line-height: 1.6; }
+
+/* -- dashboard ----------------------------------------------------------- */
+
+/* Two-column layout matching Flow's dashboard structure:
+ *   main column — create tiles, published repos, recent jobs, job overview
+ *   right rail  — quick links, engine status */
+.dash-grid {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 1.5rem;
+    align-items: start;
+    margin-top: 1.25rem;
+}
+
+@media (max-width: 900px) {
+    .dash-grid { grid-template-columns: 1fr; }
+}
+
+.dashboard h2 { font-size: 1.05rem; margin: 1.75rem 0 .75rem; }
+.dashboard h2:first-of-type { margin-top: 0; }
+
+/* Create tiles — outlined pills with '+' badge, matching Flow's style */
+.tiles { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: .25rem; }
+
+.tile {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    height: 56px;
+    padding: 0 1.1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: .4rem;
+    color: var(--text);
+    font-family: var(--heading);
+    font-size: .88rem;
+    font-weight: 600;
+}
+
+.tile:hover { border-color: var(--amber); background: var(--surface); text-decoration: none; }
+.tile svg { color: var(--amber); }
+
+.tile-plus {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--amber);
+    color: var(--navy);
+    font-size: .75rem;
+    font-weight: 700;
+    line-height: 1;
+    margin-left: .15rem;
+}
+
+/* Published workspace cards — icon + name + meta, 210×90px */
+.ws-cards { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.ws-card {
+    display: flex;
+    flex-direction: column;
+    gap: .35rem;
+    width: 210px;
+    min-height: 90px;
+    padding: .85rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: .4rem;
+    color: var(--text);
+}
+.ws-card:hover { border-color: var(--amber); text-decoration: none; }
+.ws-card svg { color: var(--amber); flex: none; }
+.ws-card .ws-name { font-family: var(--heading); font-weight: 600; font-size: .88rem;
+    line-height: 1.25; overflow-wrap: anywhere; }
+.ws-card .ws-meta { color: var(--muted); font-size: .75rem; margin-top: auto; }
+
+/* Right rail cards */
+.rail-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: .5rem;
+    padding: 1.1rem 1.1rem .8rem;
+    margin-bottom: 1rem;
+}
+.rail-card h3 { margin-bottom: .75rem; font-size: .95rem; }
+
+/* Job counters — max-width pins them to Flow's measured 854px so the counter
+ * widths (278px × 3 / 422px × 2) match the flow_geometry.py assertions. */
+.counters { max-width: 854px; }
+.counter-row { display: grid; gap: 10px; margin-bottom: 10px; }
+.counter-row:nth-child(1) { grid-template-columns: repeat(3, 1fr); }
+.counter-row:nth-child(2) { grid-template-columns: repeat(2, 1fr); }
+
+.counter {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 72px;
+    padding: 0 1.25rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--queued);
+    border-radius: .4rem;
+    color: var(--text);
+}
+
+.counter:hover { background: var(--surface); text-decoration: none; }
+.counter.failed    { border-left-color: var(--failed); }
+.counter.complete  { border-left-color: var(--complete); }
+.counter.running   { border-left-color: var(--running); }
+.counter .label    { color: var(--muted); font-size: .88rem; }
+.counter .n        { font-family: var(--heading); font-size: 1.75rem; font-weight: 600; }
+
+/* Link cards in the right rail */
+.link-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .6rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: .3rem;
+    color: var(--text);
+    margin-bottom: .4rem;
+}
+.link-card:hover { background: var(--surface); text-decoration: none; }
+.link-card .lc-text b { display: block; font-family: var(--heading); font-size: .85rem; }
+.link-card .lc-text span { color: var(--muted); font-size: .75rem; }
+.link-card .lc-arrow { color: var(--muted); font-size: 1rem; }
+
+/* -- workspace detail ---------------------------------------------------- */
+
+.split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: .5rem;
+    padding: 1.25rem;
+}
+
+.hint { font-size: .78rem; color: var(--muted); margin-top: .2rem; }
+
+.field { margin-bottom: .9rem; }
+.field label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: .25rem; }
+.field .req { color: var(--amber); }
+.field .check { display: flex; align-items: center; gap: .5rem; }
+.field .check label { margin: 0; }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; font-size: .85rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--mono); overflow-wrap: break-word; }
+
+/* -- job log ------------------------------------------------------------- */
+
+.log {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: .25rem;
+    padding: .75rem;
+    height: 26rem;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: .8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text);
+}
+
+/* -- progress ------------------------------------------------------------ */
+
+.progress { margin: .75rem 0 1rem; }
+.progress .track {
+    height: .4rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: .25rem;
+    overflow: hidden;
+}
+.progress .fill {
+    height: 100%;
+    background: var(--amber);
+    transition: width .2s linear;
+}
+.progress .caption {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: .78rem;
+    color: var(--muted);
+    margin-top: .3rem;
+}
+
+.log div { padding: .05rem 0; }
+.log .lvl { color: var(--muted); display: inline-block; width: 5.5rem; }
+.log .error .lvl, .log .error { color: var(--failed); }
+.log .warning .lvl { color: var(--amber); }
 
 /* -- cards --------------------------------------------------------------- */
 
@@ -465,186 +726,23 @@ a.card:hover { border-color: var(--amber); text-decoration: none; }
 .card p { color: var(--muted); font-size: .85rem; margin: .25rem 0 0; }
 .card .meta { color: var(--muted); font-size: .75rem; margin-top: .75rem; font-family: var(--mono); }
 
-/* -- dashboard ----------------------------------------------------------- */
+/* -- automation editor --------------------------------------------------- */
 
-/* Every number here is Flow's, from the same scan as the chrome above:
- *
- *   create tiles   h=56, 12px apart, content-width, left-aligned
- *   recent cards   210x130, 8px apart
- *   job counters   278x72 x3 / 422x72 x2, 10px apart, 82px row pitch
- *   help links     400x55, stacked flush
- *
- * The two counter rows come to the same total width -- 3x278 + 2x10 and
- * 2x422 + 10 are both 854 -- which is why they are two equal-column grids
- * inside one 854px block rather than five tiles with hardcoded widths. Set the
- * block width and Flow's numbers fall out of the arithmetic. */
-
-/* Scoped to the dashboard: h2 is the group heading here, but elsewhere it is a
- * panel title sitting inside a form, where 2rem of air above it would open a
- * gap in the middle of the panel. */
-.dashboard h2 {
-    font-size: 1.05rem;
-    margin: 2rem 0 .75rem;
+textarea.yaml {
+    font-family: var(--mono);
+    font-size: .82rem;
+    line-height: 1.5;
+    tab-size: 2;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
 }
 
-.tiles { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 1.25rem; }
-
-.tile {
-    display: flex;
-    align-items: center;
-    gap: .5rem;
-    height: 56px;
-    padding: 0 1.25rem;
+pre.mono {
+    margin: 0;
+    padding: .6rem .75rem;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: .4rem;
-    color: var(--text);
-    font-family: var(--heading);
-    font-weight: 600;
+    border-radius: 4px;
+    overflow-x: auto;
 }
-
-.tile:hover { border-color: var(--amber); background: var(--navy); text-decoration: none; }
-.tile svg { color: var(--amber); }
-
-.recent { display: flex; flex-wrap: wrap; gap: 8px; }
-
-.recent-card {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: .35rem;
-    width: 210px;
-    height: 130px;
-    padding: .85rem;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: .4rem;
-    color: var(--text);
-}
-
-.recent-card:hover { border-color: var(--amber); text-decoration: none; }
-/* The workspace name is the identifying line, so it gets the room. A long one
- * wraps to two lines and then clips rather than growing the card, which would
- * break the row into uneven heights. */
-.recent-card .name {
-    font-family: var(--heading);
-    font-weight: 600;
-    line-height: 1.25;
-    overflow: hidden;
-    overflow-wrap: anywhere;
-}
-.recent-card .repo { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
-.recent-card .ago { color: var(--muted); font-size: .72rem; font-family: var(--mono); margin-top: auto; }
-
-.counters { max-width: 854px; }
-.counter-row { display: grid; gap: 10px; margin-bottom: 10px; }
-.counter-row:nth-child(1) { grid-template-columns: repeat(3, 1fr); }
-.counter-row:nth-child(2) { grid-template-columns: repeat(2, 1fr); }
-
-.counter {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 72px;
-    padding: 0 1.25rem;
-    background: var(--panel);
-    /* The state's colour is a left edge rather than a fill: five saturated
-     * blocks on the landing page would read as five alerts. */
-    border: 1px solid var(--border);
-    border-left: 4px solid var(--queued);
-    border-radius: .4rem;
-    color: var(--text);
-}
-
-.counter:hover { background: var(--surface); text-decoration: none; }
-.counter.failed { border-left-color: var(--failed); }
-.counter.complete { border-left-color: var(--complete); }
-.counter.running { border-left-color: var(--running); }
-.counter .label { color: var(--muted); font-size: .9rem; }
-.counter .n { font-family: var(--heading); font-size: 1.75rem; font-weight: 600; }
-
-.links { max-width: 400px; }
-
-.link-card {
-    display: block;
-    height: 55px;
-    padding: .5rem .9rem;
-    border: 1px solid var(--border);
-    color: var(--text);
-}
-
-.link-card:hover { background: var(--surface); text-decoration: none; }
-.link-card b { font-family: var(--heading); display: block; font-size: .9rem; }
-.link-card span { color: var(--muted); font-size: .78rem; }
-
-/* -- workspace detail ---------------------------------------------------- */
-
-.split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
-
-.panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: .5rem;
-    padding: 1.25rem;
-}
-
-.hint { font-size: .78rem; color: var(--muted); margin-top: .2rem; }
-
-.field { margin-bottom: .9rem; }
-.field label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: .25rem; }
-.field .req { color: var(--amber); }
-.field .check { display: flex; align-items: center; gap: .5rem; }
-.field .check label { margin: 0; }
-
-.kv { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; font-size: .85rem; }
-.kv dt { color: var(--muted); }
-/* break-word, not break-all: these are identifiers a person reads, and
-   break-all splits `data_streaming` mid-word. A value with no break
-   opportunity at all -- an id, a path -- still wraps. */
-.kv dd { margin: 0; font-family: var(--mono); overflow-wrap: break-word; }
-
-/* -- job log ------------------------------------------------------------- */
-
-.log {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: .25rem;
-    padding: .75rem;
-    height: 26rem;
-    overflow-y: auto;
-    font-family: var(--mono);
-    font-size: .8rem;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-/* -- progress ------------------------------------------------------------ */
-
-.progress { margin: .75rem 0 1rem; }
-.progress .track {
-    height: .4rem;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: .25rem;
-    overflow: hidden;
-}
-.progress .fill {
-    height: 100%;
-    background: var(--amber);
-    /* Eases the step between two reports so the bar reads as motion rather
-       than as a series of jumps. Width only -- nothing here animates layout. */
-    transition: width .2s linear;
-}
-.progress .caption {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    font-size: .78rem;
-    color: var(--muted);
-    margin-top: .3rem;
-}
-
-.log div { padding: .05rem 0; }
-.log .lvl { color: var(--muted); display: inline-block; width: 5.5rem; }
-.log .error .lvl, .log .error { color: var(--failed); }
-.log .warning .lvl { color: var(--amber); }

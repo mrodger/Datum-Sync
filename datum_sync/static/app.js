@@ -59,15 +59,28 @@ const SVG = 'http://www.w3.org/2000/svg';
  * assets are vendored -- deliberately plain, so nobody mistakes them for the
  * finished article. */
 const GLYPHS = {
-    dashboard: 'M4 4h7v7H4zM13 4h7v5h-7zM13 13h7v7h-7zM4 15h7v5H4z',
-    repositories: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
-    jobs: 'M4 6h16M4 12h16M4 18h10',
-    schedules: 'M5 5h14v14H5zM5 9h14M9 3v4M15 3v4',
-    automations: 'M13 3 5 14h6l-2 7 8-11h-6z',
-    connections: 'M9 7V4M15 7V4M7 7h10v5a5 5 0 0 1-10 0zM12 17v4',
-    resources: 'M6 3h7l5 5v13H6zM13 3v5h5',
-    services: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c5 6 5 12 0 18-5-6-5-12 0-18z',
-    admin: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',
+    dashboard:       'M4 4h7v7H4zM13 4h7v5h-7zM13 13h7v7h-7zM4 15h7v5H4z',
+    repositories:    'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+    jobs:            'M4 6h16M4 12h16M4 18h10',
+    schedules:       'M5 5h14v14H5zM5 9h14M9 3v4M15 3v4',
+    automations:     'M13 3 5 14h6l-2 7 8-11h-6z',
+    connections:     'M9 7V4M15 7V4M7 7h10v5a5 5 0 0 1-10 0zM12 17v4',
+    resources:       'M6 3h7l5 5v13H6zM13 3v5h5',
+    services:        'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c5 6 5 12 0 18-5-6-5-12 0-18z',
+    admin:           'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',
+    // stub sections
+    notifications:   'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0',
+    streams:         'M2 12c1.5-3 3.5-4.5 5-4.5s3.5 1.5 5 4.5 3.5 4.5 5 4.5M2 6c1.5-3 3.5-4.5 5-4.5s3.5 1.5 5 4.5 3.5 4.5 5 4.5',
+    'data-virt':     'M4 7c0 1.7 3.6 3 8 3s8-1.3 8-3-3.6-3-8-3-8 1.3-8 3zM4 7v5c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 16v1c0 1.7 3.6 3 8 3s8-1.3 8-3v-1',
+    mcp:             'M5 3h14v8H5zM3 11h18M8 11v6M16 11v6M12 11v10',
+    'flow-apps':     'M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z',
+    workspaces:      'M2 7l10-4 10 4v10l-10 4-10-4zM2 7l10 4 10-4M12 11v10',
+    projects:        'M3 5a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v5M9.5 12.5h5',
+    analytics:       'M18 20V10M12 20V4M6 20v-6',
+    'auth-services': 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4',
+    'system-config': 'M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41M12 2v2M12 20v2',
+    'queue-control': 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+    migration:       'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12',
 };
 
 function icon(name) {
@@ -233,15 +246,27 @@ async function refreshEngines() {
  * forced into a position Flow does not have.
  */
 const SECTIONS = [
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'repositories', label: 'Repositories' },
-    { id: 'automations', label: 'Automations' },
-    { id: 'schedules', label: 'Schedules' },
-    { id: 'jobs', label: 'Jobs' },
-    { id: 'connections', label: 'Connections' },
-    { id: 'resources', label: 'Resources' },
-    { id: 'services', label: 'Services' },
-    { id: 'admin', label: 'Admin', adminOnly: true, group: true },
+    { id: 'dashboard',      label: 'Dashboard' },
+    { id: 'repositories',   label: 'Repositories' },
+    { id: 'automations',    label: 'Automations' },
+    { id: 'notifications',  label: 'Notifications',       stub: true },
+    { id: 'streams',        label: 'Streams',             stub: true },
+    { id: 'data-virt',      label: 'Data Virtualization', stub: true },
+    { id: 'mcp',            label: 'MCP Servers',         stub: true },
+    { id: 'flow-apps',      label: 'Flow Apps',           stub: true },
+    { id: 'schedules',      label: 'Schedules' },
+    { id: 'jobs',           label: 'Jobs' },
+    { id: 'workspaces',     label: 'Workspaces',          stub: true },
+    { id: 'projects',       label: 'Projects',            stub: true },
+    { id: 'connections',    label: 'Connections' },
+    { id: 'resources',      label: 'Resources',           stub: true },
+    { id: 'analytics',      label: 'Analytics',           stub: true },
+    { id: 'services',       label: 'Services' },
+    { id: 'admin',          label: 'Admin',               adminOnly: true, group: true },
+    { id: 'auth-services',  label: 'Authentication Services', adminOnly: true, stub: true },
+    { id: 'system-config',  label: 'System Configuration',   adminOnly: true, stub: true },
+    { id: 'queue-control',  label: 'Queue Control',           adminOnly: true, stub: true },
+    { id: 'migration',      label: 'Backup & Restore',        adminOnly: true, stub: true },
 ];
 
 function buildNav() {
@@ -250,14 +275,16 @@ function buildNav() {
         // Hidden, not disabled -- and hiding is presentation only. Every route
         // behind Admin checks is_admin for itself; this just declutters.
         if (section.adminOnly && !me.is_admin) continue;
-        // The rule belongs to the group below it, so hiding Admin hides the
-        // rule too rather than leaving a divider with nothing under it.
-        if (section.group) nav.append(el('hr', {}));
+        // The label belongs to the group below it, so hiding Admin hides the
+        // label too rather than leaving a divider with nothing under it.
+        if (section.group) nav.append(el('div', { class: 'nav-group-label' }, 'ADMIN'));
         nav.append(el('a', {
             href: '#/' + section.id,
             id: 'nav-' + section.id,
         }, icon(section.id), el('span', { class: 'nav-label' }, section.label)));
     }
+    nav.append(el('div', { class: 'nav-footer' },
+        el('b', {}, 'Datum-Sync'), el('br', {}), 'Workspace runner'));
 }
 
 /* Where an empty hash lands. Named because it is written down in three places
@@ -279,15 +306,28 @@ function parseHash() {
 }
 
 const SCREENS = {
-    dashboard: [screenDashboard],
-    repositories: [screenRepositories, screenRepository, screenWorkspace],
-    jobs: [screenJobs, screenJob],
-    schedules: [screenSchedules, screenSchedule],
-    automations: [screenAutomations, screenAutomation],
-    connections: [screenConnections, screenConnection],
-    resources: [(view) => notBuilt(view, 'Resources', null)],
-    services: [screenServices],
-    admin: [screenAdmin],
+    dashboard:        [screenDashboard],
+    repositories:     [screenRepositories, screenRepository, screenWorkspace],
+    jobs:             [screenJobs, screenJob],
+    schedules:        [screenSchedules, screenSchedule],
+    automations:      [screenAutomations, screenAutomation],
+    connections:      [screenConnections, screenConnection],
+    services:         [screenServices],
+    admin:            [screenAdmin],
+    // stub sections — visible in the nav, no backend
+    notifications:    [(v) => stubScreen(v, 'Notifications')],
+    streams:          [(v) => stubScreen(v, 'Streams')],
+    'data-virt':      [(v) => stubScreen(v, 'Data Virtualization')],
+    mcp:              [(v) => stubScreen(v, 'MCP Servers')],
+    'flow-apps':      [(v) => stubScreen(v, 'Flow Apps')],
+    workspaces:       [(v) => stubScreen(v, 'Workspaces')],
+    projects:         [(v) => stubScreen(v, 'Projects')],
+    resources:        [(v) => stubScreen(v, 'Resources')],
+    analytics:        [(v) => stubScreen(v, 'Analytics')],
+    'auth-services':  [(v) => stubScreen(v, 'Authentication Services')],
+    'system-config':  [(v) => stubScreen(v, 'System Configuration')],
+    'queue-control':  [(v) => stubScreen(v, 'Queue Control')],
+    migration:        [(v) => stubScreen(v, 'Backup & Restore')],
 };
 
 let leaveScreen = null;
@@ -371,6 +411,20 @@ function notBuilt(view, title, step) {
         ? `No API for this yet. It arrives with build step ${step}.`
         : 'No API for this yet.';
     view.append(notBuiltNode(title, detail));
+}
+
+/* Stub screen for sections that have no Datum-Sync backend yet. Unlike
+ * notBuilt() (which was used internally with step numbers), this is the
+ * user-facing empty state for sections that exist in FME Flow but are not
+ * part of the current Datum-Sync scope. */
+function stubScreen(view, label) {
+    view.append(
+        el('h1', {}, label),
+        el('div', { class: 'stub-empty' },
+            el('h2', {}, 'Not yet available'),
+            el('p', {}, 'This section is not part of the current Datum-Sync build. '
+                + 'Working sections: Repositories, Jobs, Schedules, Automations, '
+                + 'Connections, and Services.')));
 }
 
 // ---------------------------------------------------------------------------
@@ -486,59 +540,73 @@ async function screenDashboard(view) {
     view.className = 'dashboard';
     view.append(el('h1', {}, 'Dashboard'));
 
-    // Local rather than module-level only because of NEW, which is declared
-    // further down the file and would still be in its temporal dead zone.
+    // Create tiles — local rather than module-level only because of NEW, which
+    // is declared further down and would still be in its temporal dead zone.
     const tiles = [
         ['Run Workspace', 'repositories', '#/repositories'],
         ['Create Schedule', 'schedules', '#/schedules/' + NEW],
         ['Create Automation', 'automations', '#/automations/' + NEW],
-        // Creating a connection is admin-only at the API, and the connections
-        // screen hides its own Create button for that reason. Offering it here
-        // unconditionally would put a form nobody may submit one click from
-        // the landing page, which is the case the other screen bothers about.
+        // Creating a connection is admin-only at the API. Offering it here
+        // unconditionally would put a form nobody may submit one click away.
         me.is_admin && ['Create Connection', 'connections', '#/connections?new=1'],
     ].filter(Boolean);
     view.append(el('div', { class: 'tiles' }, tiles.map(([label, glyph, href]) =>
         el('a', { class: 'tile', href }, icon(glyph), el('span', {}, label)))));
 
-    // Together, so the two round trips overlap, and so that either one failing
-    // fails the whole screen. A dashboard that draws half of itself and no
-    // error is worse than one that says what went wrong.
-    const [recent, summary] = await Promise.all([
+    // Two-column grid: main content on the left, right rail on the right.
+    const main = el('div', { class: 'dash-main' });
+    const rail = el('div', { class: 'dash-rail' });
+    view.append(el('div', { class: 'dash-grid' }, main, rail));
+
+    // All three requests overlap; any one failing fails the whole screen.
+    const [reposData, recent, summary] = await Promise.all([
+        api('/repositories'),
         api('/transformations/jobs?limit=5'),
         api('/transformations/jobs/summary'),
     ]);
 
-    view.append(el('h2', {}, 'Recent jobs'));
-    view.append(recent.items.length
-        ? el('div', { class: 'recent' }, recent.items.map((job) =>
-            el('a', { class: 'recent-card', href: '#/jobs/' + job.id },
-                badge(job.status),
-                el('span', { class: 'name' }, job.workspace),
-                el('span', { class: 'repo' }, job.repository),
-                el('span', { class: 'ago' }, when(job.submitted_at)))))
+    // Published repositories as workspace cards.
+    if (reposData.items.length) {
+        main.append(el('h2', {}, 'Repositories'));
+        main.append(el('div', { class: 'ws-cards' }, reposData.items.map((repo) =>
+            el('a', { class: 'ws-card',
+                href: '#/repositories/' + encodeURIComponent(repo.name) },
+                icon('repositories'),
+                el('span', { class: 'ws-name' }, repo.name),
+                el('span', { class: 'ws-meta' },
+                    repo.workspaces, ' workspace', repo.workspaces === 1 ? '' : 's')))));
+    }
+
+    // Recent jobs table.
+    main.append(el('h2', {}, 'Recent jobs'));
+    main.append(recent.items.length
+        ? table(['Status', 'Workspace', 'Submitted', ''],
+            recent.items.map((job) => el('tr', {},
+                el('td', {}, badge(job.status)),
+                el('td', {}, job.repository + '/' + job.workspace),
+                el('td', {}, when(job.submitted_at)),
+                el('td', {}, el('a', { href: '#/jobs/' + job.id }, 'open')))))
         : el('div', { class: 'empty' }, 'Nothing has run yet.'));
 
-    view.append(el('h2', {}, 'Jobs'));
+    // Job counters — links into the filtered job list, same as Flow.
     const counts = summary.counts;
-    view.append(el('div', { class: 'counters' }, COUNTERS.map((row) =>
+    main.append(el('h2', {}, 'Jobs'));
+    main.append(el('div', { class: 'counters' }, COUNTERS.map((row) =>
         el('div', { class: 'counter-row' }, row.map(([status, label]) =>
-            // Links, because being the way into the filtered list is the whole
-            // job of a counter. Flow's navigate too.
             el('a', { class: 'counter ' + status, href: '#/jobs?status=' + status },
                 el('span', { class: 'label' }, label),
                 el('span', { class: 'n' }, counts[status])))))));
 
-    view.append(el('h2', {}, 'Reference'));
-    view.append(el('div', { class: 'links' },
-        // One link, and it resolves. Flow's three go to its community, its
-        // academy and its support desk; inventing Datum equivalents would put
-        // three dead links on the first screen anybody sees.
+    // Right rail — reference link.
+    rail.append(el('div', { class: 'rail-card' },
+        el('h3', {}, 'Reference'),
         el('a', { class: 'link-card', href: '/docs', target: '_blank', rel: 'noopener' },
-            el('b', {}, 'REST API'),
-            el('span', {}, 'Every route this page calls, with its schema'))));
+            el('div', { class: 'lc-text' },
+                el('b', {}, 'REST API'),
+                el('span', {}, 'Every route this page calls, with its schema')),
+            el('span', { class: 'lc-arrow' }, '\u2192'))));
 
-    // Same rule as the jobs list: repoll only while something is moving.
+    // Repoll only while something is moving.
     if (counts.queued || counts.running) {
         const timer = setTimeout(route, 4000);
         return () => clearTimeout(timer);

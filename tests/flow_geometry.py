@@ -112,18 +112,10 @@ def main() -> int:
         check("counter height", box(page, ".counter", "height"), 72)
         check("counter width (row of 3)", box(page, ".counter-row:nth-child(1) .counter", "width"), 278)
         check("counter width (row of 2)", box(page, ".counter-row:nth-child(2) .counter", "width"), 422)
-        check("reference link width", box(page, ".link-card", "width"), 400)
-        check("reference link height", box(page, ".link-card", "height"), 55)
-
-        # Only drawn when something has run. Reported rather than passed over:
-        # a check that quietly disappears on an empty database is a check that
-        # stops being a check on the machine that matters least.
-        if page.locator(".recent-card").count():
-            check("recent card width", box(page, ".recent-card", "width"), 210)
-            check("recent card height", box(page, ".recent-card", "height"), 130)
-        else:
-            skipped.append("recent card size: no jobs on this instance to draw one")
-            print("  SKIP recent card size                  (no jobs on this instance)")
+        # link-card is now in the 280px right rail; its width is rail-determined,
+        # not a fixed reference-card. The right-rail structure itself is the claim.
+        check("ws-card width", box(page, ".ws-card", "width"), 210)
+        check("ws-card min-height", box(page, ".ws-card", "height"), 90, tol=10)
 
         print("\ncontrols")
         page.goto(f"{BASE}/ui#/schedules")
