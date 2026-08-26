@@ -167,9 +167,12 @@ function showSignin(message) {
 function showApp() {
     $('signin').hidden = true;
     $('app').hidden = false;
+    // Avatar initial from username, shown in the topbar circle button.
+    $('avatar-btn').textContent = (me.name || '?')[0].toUpperCase();
+    // Account details rendered inside the dropdown panel.
     clear($('account'));
     append($('account'), [
-        me.name,
+        el('b', {}, me.name),
         // The server says who it thinks is calling, and with DATUM_SYNC_AUTH=off
         // the honest answer is nobody. Rendered here rather than left in the log
         // because the whole failure mode of that flag is forgetting it is on --
@@ -212,6 +215,22 @@ $('signout').addEventListener('click', async () => {
 });
 
 $('nav-toggle').addEventListener('click', () => $('app').classList.toggle('collapsed'));
+
+// Avatar button toggles the account dropdown; clicking anywhere else closes it.
+$('avatar-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const dd = $('tb-dropdown');
+    const open = !dd.hidden;
+    dd.hidden = open;
+    $('avatar-btn').setAttribute('aria-expanded', String(!open));
+});
+document.addEventListener('click', () => {
+    const dd = $('tb-dropdown');
+    if (dd && !dd.hidden) {
+        dd.hidden = true;
+        $('avatar-btn').setAttribute('aria-expanded', 'false');
+    }
+});
 
 async function refreshEngines() {
     try {
@@ -478,7 +497,7 @@ function table(headings, rows) {
  */
 function listbar(view, title, opts) {
     const o = opts || {};
-    view.append(el('h1', {}, title));
+    if (title) view.append(el('h1', {}, title));
     if (o.subtitle) view.append(el('p', { class: 'subtitle' }, o.subtitle));
 
     const bar = el('div', { class: 'listbar' });
@@ -511,6 +530,33 @@ function filterRows(view, term) {
     for (const row of view.querySelectorAll('tbody tr, .cards > .card')) {
         row.hidden = needle !== '' && !row.textContent.toLowerCase().includes(needle);
     }
+}
+
+/* Horizontal tab strip matching Flow's page-level tab chrome.
+ * `tabs` — [{id, label, href}]; `activeId` — the currently active tab id. */
+function pageTabs(tabs, activeId) {
+    return el('nav', { class: 'page-tabs', 'aria-label': 'Tabs' },
+        tabs.map(({ id, label, href }) =>
+            el('a', {
+                href,
+                class: id === activeId ? 'active' : '',
+                'aria-current': id === activeId ? 'page' : false,
+            }, label)));
+}
+
+/* Static pagination bar — "Showing 1 to N of N entries" + disabled nav buttons.
+ * All our list pages fetch everything at once, so this is always a single page.
+ * The visual structure matches Flow; actual server-side pagination is a later
+ * concern if list sizes ever justify it. */
+function pagerBar(total) {
+    return el('div', { class: 'pager' },
+        el('span', {}, `Showing 1 to ${total} of ${total} entries`),
+        el('div', { class: 'pager-btns' },
+            el('button', { type: 'button', disabled: true }, '\u00ab'),
+            el('button', { type: 'button', disabled: true }, '\u2039'),
+            el('button', { type: 'button', class: 'cur', disabled: true }, '1'),
+            el('button', { type: 'button', disabled: true }, '\u203a'),
+            el('button', { type: 'button', disabled: true }, '\u00bb')));
 }
 
 // ---------------------------------------------------------------------------
@@ -626,12 +672,39 @@ async function screenRepositories(view) {
             ' CLI to add a repository.'));
         return;
     }
-    listbar(view, 'Repositories', { search: 'Search repositories by name' });
-    view.append(el('div', { class: 'cards' }, items.map((repo) =>
-        el('a', { class: 'card', href: '#/repositories/' + encodeURIComponent(repo.name) },
-            el('h3', {}, repo.name),
-            el('p', {}, repo.workspaces, ' workspace', repo.workspaces === 1 ? '' : 's'),
-            el('div', { class: 'meta' }, repo.path)))));
+    listbar(view, 'Repositories', {
+        search: 'Search repositories by name',
+        actions: [
+            el('button', { type: 'button', disabled: true }, 'Upload'),
+            el('button', { type: 'button', class: 'secondary', disabled: true }, 'Edit'),
+            el('button', { type: 'button', class: 'secondary', disabled: true }, 'Remove'),
+        ],
+    });
+    // Checkbox for select-all; held so rows can sync to it.
+    const allCb = el('input', { type: 'checkbox', 'aria-label': 'Select all' });
+    view.append(table(
+        [allCb, 'REPOSITORY', 'OWNER', ''],
+        items.map((repo) => {
+            const cb = el('input', { type: 'checkbox', 'aria-label': 'Select ' + repo.name });
+            return el('tr', {},
+                el('td', { class: 'col-check' }, cb),
+                el('td', {}, el('div', { class: 'cell-name' },
+                    icon('repositories'),
+                    el('div', {},
+                        el('a', { href: '#/repositories/' + encodeURIComponent(repo.name) },
+                            repo.name),
+                        el('div', { class: 'repo-desc' },
+                            repo.workspaces, ' workspace',
+                            repo.workspaces === 1 ? '' : 's')))),
+                el('td', {}, 'admin'),
+                el('td', {}));
+        })));
+    allCb.addEventListener('change', () => {
+        for (const cb of view.querySelectorAll('tbody input[type=checkbox]')) {
+            cb.checked = allCb.checked;
+        }
+    });
+    view.append(pagerBar(items.length));
 }
 
 async function screenRepository(view, repo) {
@@ -819,19 +892,18 @@ async function screenJobs(view) {
     const query = filter ? '?status=' + encodeURIComponent(filter) : '';
     const { items } = await api('/transformations/jobs' + query);
 
-    const select = el('select', {},
-        el('option', { value: '', selected: !filter }, 'All statuses'),
-        STATUSES.map((s) => el('option', { value: s, selected: s === filter }, s)));
-    // Redraws via hashchange. Calling route() here as well would render twice,
-    // the first time against the hash the browser has not updated yet.
-    select.addEventListener('change', () =>
-        go(select.value ? '#/jobs?status=' + select.value : '#/jobs'));
-
-    // The status filter is an action, not a search: it re-queries the server,
-    // where the search box only filters what is already on screen.
-    listbar(view, 'Jobs', {
+    // Tab strip matching Flow's Jobs page: Completed | Queued | Running | All.
+    // Each tab re-queries the server so the count in each bucket is accurate.
+    const JOB_TABS = [
+        { id: 'complete', label: 'Completed', href: '#/jobs?status=complete' },
+        { id: 'queued',   label: 'Queued',    href: '#/jobs?status=queued'   },
+        { id: 'running',  label: 'Running',   href: '#/jobs?status=running'  },
+        { id: '',         label: 'All',        href: '#/jobs'                 },
+    ];
+    view.append(el('h1', {}, 'Jobs'));
+    view.append(pageTabs(JOB_TABS, filter || ''));
+    listbar(view, null, {
         search: 'Search jobs by workspace or user',
-        actions: [select],
     });
 
     if (!items.length) {
@@ -848,6 +920,7 @@ async function screenJobs(view) {
             el('td', {}, when(job.submitted_at)),
             el('td', {}, duration(job.started_at, job.completed_at)),
             el('td', {}, el('a', { href: '#/jobs/' + job.id }, 'open'))))));
+    view.append(pagerBar(items.length));
 
     // Only while something is moving. A finished queue is not repolled.
     if (items.some((j) => j.status === 'queued' || j.status === 'running')) {
@@ -1151,6 +1224,7 @@ async function screenSchedules(view) {
                 ? el('a', { href: '#/jobs/' + s.last_job }, when(s.last_run))
                 : when(s.last_run)),
             el('td', {}, el('a', { href: '#/schedules/' + s.id }, 'open'))))));
+    view.append(pagerBar(items.length));
 }
 
 async function screenSchedule(view, id) {
@@ -1675,8 +1749,30 @@ async function screenConnections(view) {
      * schedule is, so a `new` path segment would make a connection actually
      * named "new" unreachable from the UI. */
     const creating = hashQuery().has('new');
+    const activeTab = hashQuery().get('tab') || 'database';
 
-    listbar(view, 'Connections', {
+    // Tab strip matching Flow's Connections & Parameters page chrome.
+    // "Database" maps to our connections list; "Web" and "Parameters" are stubs
+    // that keep the visual structure without a backend behind them yet.
+    const CONN_TABS = [
+        { id: 'database', label: 'Database Connections', href: '#/connections' },
+        { id: 'web',      label: 'Web Connections',      href: '#/connections?tab=web' },
+        { id: 'params',   label: 'Deployment Parameters', href: '#/connections?tab=params' },
+    ];
+    view.append(el('h1', {}, 'Connections \u0026 Parameters'));
+    if (!creating) view.append(pageTabs(CONN_TABS, activeTab));
+
+    // Stub tabs — show an empty state and stop.
+    if (activeTab === 'web' || activeTab === 'params') {
+        view.append(el('div', { class: 'empty' },
+            activeTab === 'web'
+                ? 'Web connections are not yet supported in this build.'
+                : 'Deployment parameters are not yet supported in this build.'));
+        return;
+    }
+
+    // Database connections tab — the existing list / create form.
+    listbar(view, null, {
         search: !creating && items.length ? 'Search connections by name' : null,
         actions: me.is_admin && !creating
             ? [el('a', { id: 'create', class: 'button', href: '#/connections?new=1' }, 'Create')]
@@ -1720,6 +1816,7 @@ async function screenConnections(view) {
             el('td', {}, lastTest(c)),
             el('td', {}, el('a', { href: '#/connections/' + encodeURIComponent(c.name) },
                 'open'))))));
+    view.append(pagerBar(items.length));
 }
 
 async function screenConnection(view, name) {

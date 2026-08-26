@@ -40,8 +40,16 @@
 
   <header class="topbar">
     <div class="engines" id="engines"></div>
-    <div class="account" id="account"></div>
-    <button type="button" class="secondary" id="signout">Sign out</button>
+    <div class="tb-right">
+      <button type="button" class="tb-icon" title="Help" aria-label="Help">?</button>
+      <div class="tb-user">
+        <button type="button" class="tb-avatar" id="avatar-btn" aria-label="Account menu" aria-expanded="false"></button>
+        <div class="tb-dropdown" id="tb-dropdown" hidden>
+          <div class="tb-acct" id="account"></div>
+          <button type="button" id="signout">Sign out</button>
+        </div>
+      </div>
+    </div>
   </header>
 
   <nav class="sidebar" id="nav" aria-label="Sections"></nav>

@@ -162,8 +162,7 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     grid-area: top;
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 1rem;
+    justify-content: space-between;
     padding: 0 1.5rem;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
@@ -173,41 +172,98 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
 .engines { color: var(--muted); font-size: .8rem; }
 .engines b { color: var(--text); font-weight: 600; }
 
-.account {
+/* Right cluster: help icon + avatar + signout dropdown */
+.tb-right {
     display: flex;
     align-items: center;
     gap: .5rem;
-    font-size: .85rem;
-    color: var(--text);
 }
 
-.account .badge-admin {
-    background: var(--amber);
-    color: var(--navy);
-    border-radius: .2rem;
-    padding: 0 .3rem;
-    font-size: .7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-}
-
-.account .badge-insecure {
-    background: var(--failed);
-    color: #fff;
-    border-radius: .2rem;
-    padding: 0 .3rem;
-    font-size: .7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-}
-
-/* Topbar sign-out button — secondary style but in the light zone */
-.topbar button.secondary {
-    border-color: var(--border);
-    color: var(--text);
+/* Round icon button (help ?) */
+.tb-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
     background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: .85rem;
+    font-weight: 700;
+    font-family: var(--body);
+    padding: 0;
 }
-.topbar button.secondary:hover { background: var(--surface); }
+.tb-icon:hover { background: var(--surface); color: var(--text); }
+
+/* Avatar circle — first letter of username, Datum navy fill */
+.tb-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--navy);
+    border: 0;
+    color: #fff;
+    cursor: pointer;
+    font-size: .75rem;
+    font-weight: 700;
+    font-family: var(--heading);
+    padding: 0;
+}
+.tb-avatar:hover { filter: brightness(1.2); }
+
+/* Dropdown that opens below the avatar */
+.tb-user { position: relative; }
+.tb-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 190px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: .375rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12);
+    padding: .5rem;
+    z-index: 100;
+}
+.tb-acct {
+    padding: .35rem .5rem .65rem;
+    font-size: .8rem;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: .4rem;
+}
+.tb-acct b { display: block; color: var(--text); font-size: .875rem; margin-bottom: .2rem; }
+.tb-acct .badge-admin {
+    background: var(--amber); color: var(--navy);
+    border-radius: .2rem; padding: 0 .3rem;
+    font-size: .7rem; font-weight: 600; text-transform: uppercase;
+}
+.tb-acct .badge-insecure {
+    background: var(--failed); color: #fff;
+    border-radius: .2rem; padding: 0 .3rem;
+    font-size: .7rem; font-weight: 600; text-transform: uppercase;
+}
+.tb-dropdown button {
+    display: flex;
+    width: 100%;
+    justify-content: flex-start;
+    background: transparent;
+    border: 0;
+    color: var(--text);
+    font-weight: 400;
+    font-size: .875rem;
+    height: 32px;
+    border-radius: .2rem;
+    padding: 0 .5rem;
+    cursor: pointer;
+}
+.tb-dropdown button:hover { background: var(--surface); }
 
 /* -- rail ----------------------------------------------------------------
  * Gap between items comes from the flex gap (pitch − item height), not from
@@ -465,6 +521,37 @@ tbody tr:hover { background: var(--surface); }
 .listbar .actions { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
 
 .listbar select { width: auto; }
+
+/* -- page tabs ----------------------------------------------------------- */
+/* Horizontal tab strip under the page h1: flat labels, amber underline on
+ * the active tab. Matches Flow's section-level tab chrome exactly. */
+.page-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+    gap: 0;
+}
+.page-tabs a {
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
+    padding: 0 1rem;
+    font-size: .88rem;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+}
+.page-tabs a:hover { color: var(--text); text-decoration: none; }
+.page-tabs a.active { color: var(--text); border-bottom-color: var(--amber); font-weight: 600; }
+
+/* Checkbox and icon columns in list tables */
+.col-check { width: 42px; }
+.col-check input { margin: 0; }
+.cell-name { display: flex; align-items: flex-start; gap: .65rem; }
+.cell-name > div { flex: 1; min-width: 0; }
+.cell-name svg { flex: none; margin-top: .15rem; color: var(--amber); }
+.repo-desc { font-size: .78rem; color: var(--muted); margin-top: .1rem; }
 
 /* Pagination bar — shows "Showing N to N of N entries" + prev/next */
 .pager {
