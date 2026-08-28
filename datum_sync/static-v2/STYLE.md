@@ -267,26 +267,60 @@ Confirmed from the reference screenshots (`reference-images/`):
 | Avatar menu | yes | drawn, inert |
 | Auto-refresh while a job runs | yes, `setTimeout(route, 4000)` | n/a |
 | Live log + progress over SSE | yes, `EventSource` | n/a |
-| **Sortable column headers** | **none at all** | arrow drawn, inert |
-| **Row selection enables Edit / Remove** | select-all box only, wired to nothing | both drawn disabled — Flow's *initial* state, so it looks right and does nothing |
-| **Pagination** | **cosmetic** — every button `disabled`, always "1 to N of N" | drawn, inert |
-| **Page-size select** | none | drawn, inert |
+| Sortable column headers | none at all | **done** — `table.js` |
+| Row selection enables Edit / Remove | select-all box only, wired to nothing | **done** — `table.js` |
+| Pagination and page size | cosmetic — every button `disabled`, always "1 to N of N" | **done** — `table.js` |
 | Column chooser (toolbar's rightmost icon) | none | drawn, inert |
 
-Two known divergences, both deliberate for now:
+Three known divergences, all deliberate:
 
 - Flow's collapse control is a **floating circular chevron straddling the
   sidebar/content edge**; ours is a hamburger inside the brand bar. Ours keeps
   the control inside the grid instead of overlapping two areas.
 - The column chooser's function is **inferred from its icon**, not observed.
   Do not build it off that guess.
+- **Cancel enables for any selection**, including a job that already finished.
+  Making it state-aware needs per-row status, which belongs with real data
+  rather than mock rows.
 
-The three in bold are the real work, and they interact: sorting and paging
-both reorder rows, and selection state has to survive both or Remove deletes
-the wrong row. Client-side search already has this problem documented at
-`listbar()` in v1 — it filters what was fetched, which is the whole list today
-but would silently become "the page on screen" the moment paging goes server
--side.
+### table.js
+
+Sorting, selection and paging are one module because they are one problem.
+Each is trivially correct alone and wrong in combination. Four decisions, only
+the first of which is forced:
+
+1. **A row's identity is its original index**, baked into `data-row-key` once
+   at init. Position cannot be the key — that is the thing sorting changes.
+2. **Selection survives sorting and paging, and is cleared by the filter.**
+   Sort and page still show the same result set, so a selection off screen is
+   only out of view, and the `.sel-count` hint keeps saying how many. A filter
+   removes rows from the set, and a selection you can no longer reach by
+   scrolling is a Remove aimed at something invisible.
+3. **Select-all covers the current page**, and goes indeterminate when the page
+   is partly selected. A box that silently picks up 400 off-screen rows is the
+   same hazard as (2).
+4. **Edit needs exactly one row, Remove needs one or more.** Flow's screenshots
+   only show both disabled at zero selection; the rest is our decision, not an
+   observation of Flow.
+
+Buttons declare their own requirement in the markup (`data-needs="one|many"`)
+rather than being matched on their label, so renaming one cannot silently
+unwire it. They render `disabled`, which is both Flow's initial state and the
+correct state with nothing selected — the page is right before any script runs
+and stays right if `table.js` never loads.
+
+The sort arrow is always the `caret-up` glyph; descending rotates it 180°,
+which is exactly `caret-down`. One icon covers both, so `table.js` never has to
+build SVG and never needs `icons.js` in the browser.
+
+The mock Jobs table carries **twelve rows against a page size of ten** on
+purpose: pagination, and a selection surviving a page change, cannot be shown
+on a list that never pages. The pre-JS markup lists all twelve and says so —
+writing "1 to 10 of 12" there would be a lie about a file that lists twelve.
+
+Client-side search has a limitation already documented at `listbar()` in v1: it
+filters what was fetched. That is the whole list today, but would silently
+become "the page on screen" the moment paging goes server-side.
 
 ## Verification
 
@@ -302,3 +336,9 @@ Two lessons worth keeping:
   `xvfb-run` with `headless=False`, where a real one measures 15px.
 
 Before trusting any check, confirm it fails on a known-bad input.
+`tools/break_style_check.py` does that for `table.js` — it deletes one
+guarantee at a time and requires `check_style.py` to exit 1. It paid for
+itself on its first run: the row-key break came back MISSED, and the fault was
+in the checker. "Selection survived the sort" only counted ticked boxes, so a
+row keyed on screen position — where a different job slides under a tick that
+never moves — read as a pass. The check now asserts *which* row, by job id.

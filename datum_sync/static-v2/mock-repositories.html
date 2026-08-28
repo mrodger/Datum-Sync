@@ -99,10 +99,11 @@
         <input type="search" placeholder="Search repositories by name">
       </div>
       <div class="actions">
+        <span class="sel-count" aria-live="polite"></span>
         <button type="button">Create</button>
         <button type="button" class="secondary">Upload</button>
-        <button type="button" class="secondary" disabled>Edit</button>
-        <button type="button" class="secondary" disabled>Remove</button>
+        <button type="button" class="secondary" data-needs="one" disabled>Edit</button>
+        <button type="button" class="secondary" data-needs="many" disabled>Remove</button>
         <button type="button" class="secondary icon" aria-label="Choose columns"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M104,32H64A16,16,0,0,0,48,48V208a16,16,0,0,0,16,16h40a16,16,0,0,0,16-16V48A16,16,0,0,0,104,32Zm0,176H64V48h40ZM192,32H152a16,16,0,0,0-16,16V208a16,16,0,0,0,16,16h40a16,16,0,0,0,16-16V48A16,16,0,0,0,192,32Zm0,176H152V48h40Z"/></svg></button>
       </div>
     </div>
@@ -111,9 +112,9 @@
       <thead>
         <tr>
           <th class="col-check"><input type="checkbox" aria-label="Select all"></th>
-          <th class="sortable sorted">Repository <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
-          <th>Owner</th>
-          <th>Workspaces</th>
+          <th class="sortable sorted" aria-sort="ascending">Repository <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
+          <th class="sortable" aria-sort="none">Owner <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
+          <th class="sortable" aria-sort="none">Workspaces <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
           <th></th>
         </tr>
       </thead>
@@ -175,7 +176,7 @@
         <span class="hint">Showing 1 to 3 of 3 entries</span>
         <div class="pager-per-page">
           <select aria-label="Rows per page">
-            <option>25</option><option>50</option><option selected>100</option>
+            <option>10</option><option>25</option><option>50</option><option selected>100</option>
           </select>
         </div>
       </div>
@@ -184,5 +185,6 @@
 </div>
 
 <script src="nav-collapse.js"></script>
+<script src="table.js"></script>
 </body>
 </html>

@@ -145,6 +145,81 @@ async def main():
           return hit === t ? 'flyout' : (hit ? (hit.className || hit.tagName) : 'nothing');
         }""")
         chk('flyout unclipped by the rail', clip, 'flyout')
+
+        # Sort, selection and paging. Not three checks bolted together: the
+        # assertions that matter are the ones where they interact, because
+        # each is trivially correct alone and wrong in combination. A
+        # selection keyed on row position survives none of this, and the
+        # failure mode is Remove deleting a row the user never picked.
+        await pg.goto('http://127.0.0.1:8250/mock-jobs.html')
+        ids = lambda: pg.eval_on_selector_all(
+            'tbody tr td:nth-child(2)', 'e => e.map(x => x.textContent.trim())')
+        state = lambda: pg.evaluate("""() => {
+          const btn = l => [...document.querySelectorAll('.actions button')]
+                .find(b => b.textContent.trim() === l);
+          const all = document.querySelector('thead input');
+          return {
+            onPage: document.querySelectorAll('tbody tr input:checked').length,
+            // WHICH rows, not how many. Counting alone cannot tell a surviving
+            // selection from a selection that stayed on a screen position
+            // while a different row slid under it -- and that is the bug.
+            picked: [...document.querySelectorAll('tbody tr')]
+                      .filter(r => r.querySelector('input:checked'))
+                      .map(r => r.cells[1].textContent.trim()).join(','),
+            count:  document.querySelector('.sel-count').textContent,
+            cancel: btn('Cancel').disabled,
+            hint:   document.querySelector('.pager .hint').textContent,
+            pages:  document.querySelectorAll('.pager-btns button[data-page]').length,
+            allBox: all.indeterminate ? 'mixed' : String(all.checked),
+          };
+        }""")
+
+        print('\ntable behaviour:')
+        s = await state()
+        chk('pages to 10 of 12', s['hint'], 'Showing 1 to 10 of 12 entries')
+        chk('two page buttons', s['pages'], 2)
+        chk('nothing selected disables Cancel', s['cancel'], True)
+
+        first = (await ids())[0]
+        await pg.click('tbody tr:nth-child(1) input')
+        s = await state()
+        chk('the picked row is the first one', s['picked'], first)
+        chk('selecting enables Cancel', s['cancel'], False)
+        chk('selection is counted', s['count'], '1 selected')
+        chk('header box goes indeterminate', s['allBox'], 'mixed')
+
+        # Sort by a different column, then page away and back. The selected
+        # row moves and then leaves the page entirely; it must still be the
+        # same row, and the count must keep saying so while it is off screen.
+        await pg.click('th.sortable:nth-child(5)')
+        moved = await ids()
+        chk('sort actually reordered', moved[0] != first, True)
+        chk('the SAME row is still picked', (await state())['picked'], first)
+        chk('selection survived the sort', (await state())['count'], '1 selected')
+        await pg.click('.pager-btns button[aria-label=Next]')
+        s = await state()
+        chk('page 2 shows the remainder', s['hint'], 'Showing 11 to 12 of 12 entries')
+        chk('off-screen selection still announced', s['count'], '1 selected')
+        await pg.click('.pager-btns button[aria-label=First]')
+        s = await state()
+        chk('selection restored on return', s['onPage'], 1)
+        chk('and it is still the same row', s['picked'], first)
+
+        # Select-all is page-scoped, so page 2 must come back untouched.
+        await pg.click('thead input')
+        chk('select-all takes the page only', (await state())['count'], '10 selected')
+        await pg.click('.pager-btns button[aria-label=Next]')
+        chk('page 2 not swept up', (await state())['onPage'], 0)
+
+        # Filtering removes rows from the set, so the selection goes with it.
+        await pg.click('.pager-btns button[aria-label=First]')
+        await pg.fill('input[type=search]', 'chatty')
+        s = await state()
+        chk('filter narrows the count', s['hint'], 'Showing 1 to 2 of 2 entries')
+        chk('filter clears the selection', s['count'], '')
+        await pg.fill('input[type=search]', 'zzzz')
+        chk('no matches says so',
+            await pg.text_content('td.empty-row'), 'No rows match "zzzz".')
         await b.close()
 
 asyncio.run(main())

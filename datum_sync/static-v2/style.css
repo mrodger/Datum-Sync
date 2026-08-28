@@ -550,7 +550,9 @@ th {
     user-select: none;
 }
 
-/* Sortable header */
+/* Sortable header. Flow shows an arrow only on the column actually sorted, so
+   the others reserve the space rather than hiding it -- visibility, not
+   display, or every header would shift a few px on its first click. */
 th.sortable { cursor: pointer; }
 th.sortable:hover { color: var(--text); }
 th .sort-arrow {
@@ -559,8 +561,15 @@ th .sort-arrow {
     font-size: .6rem;
     vertical-align: middle;
     color: var(--muted);
+    visibility: hidden;
 }
-th.sorted .sort-arrow { color: var(--amber); }
+th.sortable:hover .sort-arrow { visibility: visible; }
+th.sorted .sort-arrow { color: var(--amber); visibility: visible; }
+
+/* The arrow is always the caret-up glyph; descending is that glyph turned
+   over. caret-down is its exact 180deg rotation, so one icon covers both and
+   table.js never has to inject SVG markup it would need icons.js to build. */
+th.sorted.desc .sort-arrow { transform: rotate(180deg); }
 
 td {
     padding: 1.15rem;
@@ -669,6 +678,23 @@ tbody tr:hover { background: var(--surface); }
 
 .action-bar .filters { display: flex; gap: .35rem; }
 .action-bar .actions { display: flex; align-items: center; gap: .4rem; margin-left: auto; }
+
+/* Selection count. Sorting and paging can put a selected row off screen, so
+   the number of rows Remove would take has to be readable without finding
+   them. Empty string when nothing is selected, so it costs no space. */
+.action-bar .sel-count {
+    font-size: .8rem;
+    color: var(--muted);
+    margin-right: .35rem;
+    white-space: nowrap;
+}
+
+/* Filtered down to nothing. An empty tbody reads as a broken page. */
+td.empty-row {
+    padding: 2rem 1.15rem;
+    text-align: center;
+    color: var(--muted);
+}
 
 /* Filter dropdown buttons — grey outline, matching Flow */
 .filter-btn {

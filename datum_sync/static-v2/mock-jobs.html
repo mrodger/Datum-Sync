@@ -106,9 +106,10 @@
         <input type="search" placeholder="Search jobs by workspace or user">
       </div>
       <div class="actions">
+        <span class="sel-count" aria-live="polite"></span>
         <button type="button">Run Workspace</button>
-        <button type="button" class="secondary" disabled>Cancel</button>
-        <button type="button" class="secondary" disabled>Remove</button>
+        <button type="button" class="secondary" data-needs="many" disabled>Cancel</button>
+        <button type="button" class="secondary" data-needs="many" disabled>Remove</button>
         <button type="button" class="secondary icon" aria-label="Choose columns"><svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M104,32H64A16,16,0,0,0,48,48V208a16,16,0,0,0,16,16h40a16,16,0,0,0,16-16V48A16,16,0,0,0,104,32Zm0,176H64V48h40ZM192,32H152a16,16,0,0,0-16,16V208a16,16,0,0,0,16,16h40a16,16,0,0,0,16-16V48A16,16,0,0,0,192,32Zm0,176H152V48h40Z"/></svg></button>
       </div>
     </div>
@@ -117,11 +118,11 @@
       <thead>
         <tr>
           <th class="col-check"><input type="checkbox" aria-label="Select all"></th>
-          <th class="sortable sorted">Job <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"/></svg></span></th>
-          <th>Status</th>
-          <th>Workspace</th>
-          <th>Requested by</th>
-          <th>Duration</th>
+          <th class="sortable sorted desc" aria-sort="descending">Job <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
+          <th class="sortable" aria-sort="none">Status <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
+          <th class="sortable" aria-sort="none">Workspace <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
+          <th class="sortable" aria-sort="none">Requested by <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
+          <th class="sortable" aria-sort="none">Duration <span class="sort-arrow"><svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,165.66a8,8,0,0,1-11.32,0L128,91.31,53.66,165.66a8,8,0,0,1-11.32-11.32l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,213.66,165.66Z"/></svg></span></th>
         </tr>
       </thead>
       <tbody>
@@ -181,6 +182,118 @@
           <td>admin</td>
           <td>&mdash;</td>
         </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4817"></td>
+          <td><a href="#/jobs/4817">4817</a></td>
+          <td><span class="badge complete"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> complete</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/Testing/site">site</a>
+                <div class="desc">Testing</div>
+              </div>
+            </div>
+          </td>
+          <td>admin</td>
+          <td>1.9s</td>
+        </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4816"></td>
+          <td><a href="#/jobs/4816">4816</a></td>
+          <td><span class="badge complete"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> complete</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/SCIMAC/site_plan">site_plan</a>
+                <div class="desc">SCIMAC</div>
+              </div>
+            </div>
+          </td>
+          <td>marcus</td>
+          <td>11.7s</td>
+        </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4815"></td>
+          <td><a href="#/jobs/4815">4815</a></td>
+          <td><span class="badge failed"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M165.66,101.66,139.31,128l26.35,26.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> failed</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/Testing/echo_file">echo_file</a>
+                <div class="desc">Testing</div>
+              </div>
+            </div>
+          </td>
+          <td>marcus</td>
+          <td>0.4s</td>
+        </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4814"></td>
+          <td><a href="#/jobs/4814">4814</a></td>
+          <td><span class="badge complete"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> complete</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/Testing/chatty">chatty</a>
+                <div class="desc">Testing</div>
+              </div>
+            </div>
+          </td>
+          <td>admin</td>
+          <td>2.8s</td>
+        </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4813"></td>
+          <td><a href="#/jobs/4813">4813</a></td>
+          <td><span class="badge complete"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> complete</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/Testing/slow">slow</a>
+                <div class="desc">Testing</div>
+              </div>
+            </div>
+          </td>
+          <td>marcus</td>
+          <td>30.2s</td>
+        </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4812"></td>
+          <td><a href="#/jobs/4812">4812</a></td>
+          <td><span class="badge complete"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> complete</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/SCIMAC/site_plan">site_plan</a>
+                <div class="desc">SCIMAC</div>
+              </div>
+            </div>
+          </td>
+          <td>admin</td>
+          <td>13.0s</td>
+        </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4811"></td>
+          <td><a href="#/jobs/4811">4811</a></td>
+          <td><span class="badge failed"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M165.66,101.66,139.31,128l26.35,26.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> failed</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/Testing/site">site</a>
+                <div class="desc">Testing</div>
+              </div>
+            </div>
+          </td>
+          <td>marcus</td>
+          <td>0.6s</td>
+        </tr>
+        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select job 4810"></td>
+          <td><a href="#/jobs/4810">4810</a></td>
+          <td><span class="badge complete"><svg width="13" height="13" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></svg> complete</span></td>
+          <td>
+            <div class="cell-name"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></svg>
+              <div><a href="#/repositories/Testing/echo_file">echo_file</a>
+                <div class="desc">Testing</div>
+              </div>
+            </div>
+          </td>
+          <td>admin</td>
+          <td>0.7s</td>
+        </tr>
       </tbody>
     </table>
 
@@ -193,10 +306,10 @@
         <button type="button" disabled aria-label="Last"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M141.66,133.66l-80,80a8,8,0,0,1-11.32-11.32L124.69,128,50.34,53.66A8,8,0,0,1,61.66,42.34l80,80A8,8,0,0,1,141.66,133.66Zm80-11.32-80-80a8,8,0,0,0-11.32,11.32L204.69,128l-74.35,74.34a8,8,0,0,0,11.32,11.32l80-80A8,8,0,0,0,221.66,122.34Z"/></svg></button>
       </div>
       <div class="pager-right">
-        <span class="hint">Showing 1 to 4 of 4 entries</span>
+        <span class="hint">Showing 1 to 12 of 12 entries</span>
         <div class="pager-per-page">
           <select aria-label="Rows per page">
-            <option>25</option><option>50</option><option selected>100</option>
+            <option selected>10</option><option>25</option><option>50</option><option>100</option>
           </select>
         </div>
       </div>
@@ -205,5 +318,6 @@
 </div>
 
 <script src="nav-collapse.js"></script>
+<script src="table.js"></script>
 </body>
 </html>

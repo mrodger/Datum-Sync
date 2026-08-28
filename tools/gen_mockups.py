@@ -111,18 +111,30 @@ def shell(active, title, body):
 </div>
 
 <script src="nav-collapse.js"></script>
+<script src="table.js"></script>
 </body>
 </html>
 '''
 
 
 def action_bar(placeholder, buttons):
-    """buttons: list of (label, kind) where kind is primary/secondary/disabled."""
+    """buttons: list of (label, kind).
+
+    kind is primary/secondary/disabled, or 'one'/'many' for a button table.js
+    enables from the selection ('one' = exactly one row, 'many' = one or more).
+
+    Those two render disabled, which is both Flow's initial state and the
+    correct state with nothing selected -- so the page is right before any
+    script runs, and stays right if table.js never loads. The requirement is
+    declared in the markup rather than matched on the label in table.js, so
+    renaming a button here cannot silently unwire it.
+    """
     out = []
     for label, kind in buttons:
         cls = '' if kind == 'primary' else ' class="secondary"'
-        dis = ' disabled' if kind == 'disabled' else ''
-        out.append(f'        <button type="button"{cls}{dis}>{label}</button>')
+        needs = f' data-needs="{kind}"' if kind in ('one', 'many') else ''
+        dis = ' disabled' if kind in ('one', 'many', 'disabled') else ''
+        out.append(f'        <button type="button"{cls}{needs}{dis}>{label}</button>')
     out.append('        <button type="button" class="secondary icon" '
                f'aria-label="Choose columns">{ico("columns", 16)}</button>')
     return f'''    <div class="action-bar">
@@ -130,30 +142,49 @@ def action_bar(placeholder, buttons):
         <input type="search" placeholder="{placeholder}">
       </div>
       <div class="actions">
+        <span class="sel-count" aria-live="polite"></span>
 {chr(10).join(out)}
       </div>
     </div>'''
 
 
-def pager(shown, total, first_last_disabled=True):
-    d = ' disabled' if first_last_disabled else ''
+def pager(total, per_page=100):
+    """The pre-JS pager, describing what the markup below it actually shows.
+
+    All `total` rows are in the tbody, so the hint says so and all four arrows
+    are disabled -- there is no second page until something paginates. table.js
+    then slices to `per_page` and rewrites the hint, the arrows and the number
+    buttons. Writing "1 to 10 of 12" here instead would be a lie about the
+    file: read on its own it lists twelve.
+
+    table.js is a synchronous script at the end of body, so it runs before the
+    first paint and the corrected state is the only one ever rendered.
+    """
+    opts = ''.join(f'<option{" selected" if n == per_page else ""}>{n}</option>'
+                   for n in (10, 25, 50, 100))
     return f'''    <div class="pager">
       <div class="pager-btns">
-        <button type="button"{d} aria-label="First">{ico('page-first', 14)}</button>
-        <button type="button"{d} aria-label="Previous">{ico('page-prev', 14)}</button>
+        <button type="button" disabled aria-label="First">{ico('page-first', 14)}</button>
+        <button type="button" disabled aria-label="Previous">{ico('page-prev', 14)}</button>
         <button type="button" class="cur">1</button>
-        <button type="button"{d} aria-label="Next">{ico('page-next', 14)}</button>
-        <button type="button"{d} aria-label="Last">{ico('page-last', 14)}</button>
+        <button type="button" disabled aria-label="Next">{ico('page-next', 14)}</button>
+        <button type="button" disabled aria-label="Last">{ico('page-last', 14)}</button>
       </div>
       <div class="pager-right">
-        <span class="hint">Showing 1 to {shown} of {total} entries</span>
+        <span class="hint">Showing 1 to {total} of {total} entries</span>
         <div class="pager-per-page">
           <select aria-label="Rows per page">
-            <option>25</option><option>50</option><option selected>100</option>
+            {opts}
           </select>
         </div>
       </div>
     </div>'''
+
+
+# One glyph for both directions: caret-down is caret-up turned over, and
+# style.css rotates it on th.sorted.desc. table.js therefore never has to
+# build SVG, which would mean shipping icons.js to the browser as well.
+ARROW = f'<span class="sort-arrow">{ico("sort-asc", 12)}</span>'
 
 
 def tabs(items, active):
@@ -190,15 +221,15 @@ def screen_repositories():
 
 {action_bar('Search repositories by name',
             [('Create', 'primary'), ('Upload', 'secondary'),
-             ('Edit', 'disabled'), ('Remove', 'disabled')])}
+             ('Edit', 'one'), ('Remove', 'many')])}
 
     <table>
       <thead>
         <tr>
           <th class="col-check"><input type="checkbox" aria-label="Select all"></th>
-          <th class="sortable sorted">Repository <span class="sort-arrow">{ico('sort-asc', 12)}</span></th>
-          <th>Owner</th>
-          <th>Workspaces</th>
+          <th class="sortable sorted" aria-sort="ascending">Repository {ARROW}</th>
+          <th class="sortable" aria-sort="none">Owner {ARROW}</th>
+          <th class="sortable" aria-sort="none">Workspaces {ARROW}</th>
           <th></th>
         </tr>
       </thead>
@@ -207,7 +238,7 @@ def screen_repositories():
       </tbody>
     </table>
 
-{pager(3, 3)}'''
+{pager(len(rows))}'''
     return shell('repositories', 'Repositories', body)
 
 
@@ -219,11 +250,23 @@ def screen_jobs():
     # a Datum-Sync workspace is a directory holding main.py and manifest.json,
     # not a single file. The ".fmw" these used to show was Flow's, and one of
     # them named a workspace that has never existed here.
+    # Twelve rows, not four, because ten of them fit a page and the other two
+    # do not. Pagination, and a selection surviving a page change, cannot be
+    # demonstrated on a list that never pages -- and a jobs list is the one
+    # screen here that really does run long.
     rows = [
         (4821, 'complete', 'SCIMAC', 'site_plan', 'marcus', '12.4s'),
         (4820, 'failed', 'Testing', 'chatty', 'marcus', '3.1s'),
         (4819, 'running', 'Testing', 'echo_file', 'admin', '0.8s'),
         (4818, 'queued', 'Testing', 'slow', 'admin', '&mdash;'),
+        (4817, 'complete', 'Testing', 'site', 'admin', '1.9s'),
+        (4816, 'complete', 'SCIMAC', 'site_plan', 'marcus', '11.7s'),
+        (4815, 'failed', 'Testing', 'echo_file', 'marcus', '0.4s'),
+        (4814, 'complete', 'Testing', 'chatty', 'admin', '2.8s'),
+        (4813, 'complete', 'Testing', 'slow', 'marcus', '30.2s'),
+        (4812, 'complete', 'SCIMAC', 'site_plan', 'admin', '13.0s'),
+        (4811, 'failed', 'Testing', 'site', 'marcus', '0.6s'),
+        (4810, 'complete', 'Testing', 'echo_file', 'admin', '0.7s'),
     ]
     # Icon per status.
     badge_ico = {'complete': 'ok', 'failed': 'fail',
@@ -249,18 +292,18 @@ def screen_jobs():
 {tabs(['Completed', 'Queued', 'Running', 'Dashboards'], 'Completed')}
 
 {action_bar('Search jobs by workspace or user',
-            [('Run Workspace', 'primary'), ('Cancel', 'disabled'),
-             ('Remove', 'disabled')])}
+            [('Run Workspace', 'primary'), ('Cancel', 'many'),
+             ('Remove', 'many')])}
 
     <table>
       <thead>
         <tr>
           <th class="col-check"><input type="checkbox" aria-label="Select all"></th>
-          <th class="sortable sorted">Job <span class="sort-arrow">{ico('sort-desc', 12)}</span></th>
-          <th>Status</th>
-          <th>Workspace</th>
-          <th>Requested by</th>
-          <th>Duration</th>
+          <th class="sortable sorted desc" aria-sort="descending">Job {ARROW}</th>
+          <th class="sortable" aria-sort="none">Status {ARROW}</th>
+          <th class="sortable" aria-sort="none">Workspace {ARROW}</th>
+          <th class="sortable" aria-sort="none">Requested by {ARROW}</th>
+          <th class="sortable" aria-sort="none">Duration {ARROW}</th>
         </tr>
       </thead>
       <tbody>
@@ -268,7 +311,7 @@ def screen_jobs():
       </tbody>
     </table>
 
-{pager(4, 4)}'''
+{pager(len(rows), per_page=10)}'''
     return shell('jobs', 'Jobs', body)
 
 
