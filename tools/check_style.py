@@ -15,7 +15,16 @@ makes the sidebar's 0 meaningful; without it the check proves nothing.
 import asyncio, sys
 from playwright.async_api import async_playwright
 
-PAGES = ['mock-repositories','mock-jobs','mock-connections','mock-run-workspace']
+PAGES = ['mock-dashboard','mock-repositories','mock-jobs','mock-job',
+         'mock-schedules','mock-automations','mock-connections','mock-run-workspace']
+
+# Row pitch by page. 78 is the list-table figure in STYLE.md: two lines of
+# content plus the td padding. The dashboard's recent-jobs table is a
+# different object -- one line per row, no description under the name -- so it
+# comes out at 59 on the same padding. Locking one number for both would mean
+# either loosening the list tables or padding the dashboard to match, and
+# neither is what the design says. Pages absent from here take the default.
+PITCH = {'mock-dashboard': 59}
 FAIL = []
 
 def chk(label, got, want):
@@ -68,7 +77,7 @@ async def main():
             chk('nav overflow @1080', m['navOverflow'], 0)
             chk('horizontal overflow', m['docOver'], 0)
             if m['pitchRows'] is not None:
-                chk('table row pitch', m['pitchRows'], 78)
+                chk('table row pitch', m['pitchRows'], PITCH.get(n, 78))
         print('\nconsole/page errors:', errs or 'none')
         if errs: FAIL.append('console errors')
 
@@ -220,6 +229,34 @@ async def main():
         await pg.fill('input[type=search]', 'zzzz')
         chk('no matches says so',
             await pg.text_content('td.empty-row'), 'No rows match "zzzz".')
+
+        # The dashboard ring. Both assertions exist because the ring failed
+        # each way once. The segments are stroke:currentColor, so with no
+        # per-status colour rule they inherit --text and the whole thing
+        # paints as one solid near-black arc -- which looks like a chart of a
+        # single outcome, not like a missing stylesheet. And the arcs are
+        # computed from counts, so a hand-edited dasharray leaves a gap or an
+        # overlap that no amount of reading the markup shows.
+        await pg.goto('http://127.0.0.1:8250/mock-dashboard.html')
+        ring = await pg.evaluate("""() => {
+          const c = [...document.querySelectorAll('.ring-chart circle')];
+          const len = c.reduce((t, x) =>
+            t + parseFloat(x.getAttribute('stroke-dasharray').split(' ')[0]), 0);
+          const circ = parseFloat(
+            c[0].getAttribute('stroke-dasharray').split(' ')[1]);
+          return {
+            n: c.length,
+            colours: new Set(c.map(x => getComputedStyle(x).stroke)).size,
+            inherited: c.filter(x => getComputedStyle(x).stroke ===
+                                     getComputedStyle(document.body).color).length,
+            closes: Math.abs(len - circ) < 0.5,
+          };
+        }""")
+        print('\ndashboard ring:')
+        chk('three segments', ring['n'], 3)
+        chk('three distinct colours', ring['colours'], 3)
+        chk('none left inheriting the text colour', ring['inherited'], 0)
+        chk('the arcs close the circle', ring['closes'], True)
         await b.close()
 
 asyncio.run(main())

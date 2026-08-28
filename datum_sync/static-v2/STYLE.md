@@ -59,6 +59,13 @@ Sized to Flow, verified by measuring the rendered pages.
 | `td` padding | `1.15rem` | row pitch 78px |
 | `th` padding | `.7rem 1.15rem` | — |
 
+78px is a **list-table** row: two lines of content plus that padding. The
+dashboard's recent-jobs table is a different object — one line per row, no
+description under the name — and comes out at **59px on the same padding**.
+`check_style.py` locks the two separately (`PITCH`). Collapsing them to one
+number would mean either loosening the list tables or padding the dashboard,
+and neither is what the design says.
+
 Fonts: DM Sans (body), Space Grotesk (headings), JetBrains Mono (code).
 
 **Raising the root is not enough on its own.** At 16px with the old
@@ -250,6 +257,53 @@ then the pager. Repositories and Jobs are the models.
 **Form page** — h1, then stacked bordered cards of label/control rows, with
 the submit row at the bottom left. Run Workspace is the model.
 
+Two screens are neither. **Dashboard** is a two-column `.dash-grid` of
+heterogeneous cards; **Job detail** is a `.split` of a metadata panel beside a
+live log. They are one-offs, so their geometry is pinned by the mockups rather
+than by an archetype.
+
+### Screen coverage
+
+Eight mockups: dashboard, repositories, jobs, job, schedules, automations,
+connections, run-workspace. Still absent: services, admin, workspaces,
+projects, resources, analytics.
+
+Every block on these screens maps onto something v1's `app.js` already
+fetches — the columns, the trigger strings, the counter grouping and the
+paused-schedule em-dash are all read out of `screenSchedules`,
+`screenAutomations`, `screenJob` and `COUNTERS`, not copied off Flow. Flow's
+schedule prose ("Once a day") and its `.fmw` filenames are deliberately not
+reproduced; ours are cron expressions and repository paths because that is
+what we store.
+
+Three things to know about them:
+
+- **The ring chart is a stated gap, not a feature.** `style.css` has carried
+  `.ring-chart` from the start and Flow draws one, but v1 computes no such
+  breakdown. The mockup draws it over the three *settled* states only — a
+  queued job has no outcome to colour, and folding it in would make the total
+  drift as work starts. The arcs are computed in `gen_mockups.py`, not
+  hand-written, so they always close; `check_style.py` asserts closure to
+  within half a unit.
+- **Automations is populated, where Flow's screenshot is an empty state.**
+  Connections already carries the empty-state pattern and a second copy locks
+  no new geometry. Automations is the only screen with a `Last error` column,
+  which is the only place `--failed` appears as text rather than as a badge —
+  an empty table would never show it.
+- **The dashboard's card grid is repositories, where Flow's is workspaces.** A
+  Datum-Sync workspace is a directory of files, not a file; the repository is
+  the unit a user publishes.
+
+Job detail shows a **running** job on purpose. The progress bar exists only
+while one is live (`app.js:949` — progress is announced over SSE and never
+stored), so a complete job would leave `.progress` unrendered and nothing
+would pin its geometry. Cancel-instead-of-Resubmit follows from the same
+`showActions()` swap.
+
+`.lvl` holds the **level**, not a timestamp. The log stream sends
+`entry.level` and `entry.message` and there is no time field. Timestamps would
+look right and lock a column the real screen cannot fill.
+
 ## Dynamic behaviour — the gap against Flow
 
 Standing rule: if Flow does something dynamic, we do it too. The mockups draw
@@ -334,6 +388,16 @@ Two lessons worth keeping:
 - **Headless Chromium paints no scrollbars at all**, so a gutter measurement
   reads 0 whether or not one is hidden. Run scrollbar checks under
   `xvfb-run` with `headless=False`, where a real one measures 15px.
+- **Zero console errors and zero overflow is not "it renders".** Both new
+  faults on the dashboard and job screens passed every automated check and
+  were only found by opening the PNGs. The ring painted as one solid
+  near-black arc, because `stroke="currentColor"` with no per-status `color`
+  rule inherits `--text` — and that reads as a chart of a single outcome, not
+  as a missing stylesheet. The log had a blank line between every entry,
+  because `.log` is `white-space: pre-wrap` and the newline plus indent
+  between two generated `<div>`s is painted; `app.js` appends elements with no
+  text nodes between them, so the generator joins them with nothing. Both are
+  now asserted, but the assertions were written *after* looking.
 
 Before trusting any check, confirm it fails on a known-bad input.
 `tools/break_style_check.py` does that for `table.js` — it deletes one
@@ -342,3 +406,8 @@ itself on its first run: the row-key break came back MISSED, and the fault was
 in the checker. "Selection survived the sort" only counted ticked boxes, so a
 row keyed on screen position — where a different job slides under a tick that
 never moves — read as a pass. The check now asserts *which* row, by job id.
+
+The ring check was falsified the same way by hand: deleting the three
+`.ring-chart` colour rules (asserting the deletion matched exactly once, so a
+no-op break could not masquerade as a pass) turned "three distinct colours"
+into `got 1 want 3` and exited 1.

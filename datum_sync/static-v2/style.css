@@ -954,6 +954,17 @@ td.empty-row {
 .ring-chart .center .n { font-size: 1.6rem; font-weight: 700; color: var(--text); }
 .ring-chart .center .label { font-size: .72rem; color: var(--muted); }
 
+/* Segments carry the same status colours as the badges and the counter
+   borders, so a ring, a row and a counter all name a state the same way.
+   They are strokes on currentColor rather than a stroke: rule because that
+   is how every other svg here is coloured. Without these the segments
+   inherit --text and the whole ring paints one solid near-black arc --
+   which is exactly how it first rendered, and it reads as a chart with no
+   data rather than as a bug. */
+.ring-chart .complete  { color: var(--complete); }
+.ring-chart .failed    { color: var(--failed); }
+.ring-chart .cancelled { color: var(--cancelled); }
+
 /* Link cards in right rail */
 .link-card {
     display: flex;

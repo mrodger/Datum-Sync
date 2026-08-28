@@ -9,7 +9,7 @@ Icons are read from static-v2/icons.js rather than re-derived here, so the
 mockups and the eventual app cannot drift apart: if a slot is remapped, this
 regenerates against the same map the application will use.
 """
-import json, re, pathlib
+import json, math, re, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / 'datum_sync' / 'static-v2'
@@ -397,6 +397,319 @@ def screen_run_workspace():
     return shell('jobs', 'Run Workspace', body)
 
 
+def screen_dashboard():
+    """Flow's dashboard geometry over the data v1's screenDashboard already has.
+
+    Every block below except the ring maps 1:1 onto something app.js fetches
+    today: tiles, repository cards, a recent-jobs table, the five counters and
+    the reference rail. The ring is the exception and is called out in
+    STYLE.md -- style.css has carried .ring-chart from the start, Flow draws
+    one, and v1 does not, so it is a gap the mockup states rather than hides.
+    """
+    tiles = [('Run Workspace', 'run'), ('Create Schedule', 'schedules'),
+             ('Create Automation', 'automations'), ('Create Connection', 'connections')]
+
+    # Repository cards, not workspace cards. Flow's tile grid is "Last
+    # Published Workspaces"; ours is repositories, because that is the unit a
+    # Datum-Sync user publishes -- a directory of workspaces, not a file.
+    repos = [('SCIMAC', 6), ('Testing', 4), ('Samples', 3), ('Sandbox', 1)]
+
+    recent = [(4821, 'complete', 'SCIMAC/site_plan', '2 minutes ago'),
+              (4820, 'failed', 'Testing/chatty', '6 minutes ago'),
+              (4819, 'running', 'Testing/echo_file', '7 minutes ago'),
+              (4818, 'queued', 'Testing/slow', '7 minutes ago'),
+              (4817, 'complete', 'Testing/site', '20 minutes ago')]
+    badge_ico = {'complete': 'ok', 'failed': 'fail',
+                 'running': 'run', 'queued': 'pending'}
+
+    # Same grouping as COUNTERS in app.js: the three settled states on one
+    # row, the two live ones on a wider row beneath. .counter-row's nth-child
+    # rules are what set 3-up then 2-up, so the order here is load-bearing.
+    counts = {'failed': 18, 'complete': 143, 'cancelled': 2,
+              'queued': 1, 'running': 1}
+    counters = [[('failed', 'Failed'), ('complete', 'Successful'),
+                 ('cancelled', 'Cancelled')],
+                [('queued', 'Queued'), ('running', 'Running')]]
+
+    # Ring over the three settled states only -- a queued job has no outcome
+    # to colour, and folding it in would make the total drift as work starts.
+    # Arithmetic here rather than in the markup so the segments always close:
+    # hand-written dasharrays leave a hairline gap the moment a number moves.
+    ring = [('complete', counts['complete']), ('failed', counts['failed']),
+            ('cancelled', counts['cancelled'])]
+    settled = sum(n for _, n in ring)
+    circ = 2 * math.pi * 70
+    segs, run = [], 0.0
+    for state, n in ring:
+        length = circ * n / settled
+        segs.append(f'        <circle class="{state}" cx="80" cy="80" r="70" fill="none"\n'
+                    f'                stroke="currentColor" stroke-width="14"\n'
+                    f'                stroke-dasharray="{length:.2f} {circ:.2f}"\n'
+                    f'                stroke-dashoffset="{-run:.2f}"></circle>')
+        run += length
+
+    body = f'''    <h1>Dashboard</h1>
+
+    <div class="tiles">
+{chr(10).join(f'      <a class="tile" href="#/{sid}">{ico(sid, 18)}<span>{label}</span></a>'
+              for label, sid in tiles)}
+    </div>
+
+    <div class="dash-grid">
+      <div class="dash-main">
+        <h2>Repositories</h2>
+        <div class="ws-cards">
+{chr(10).join(f"""          <a class="ws-card" href="#/repositories/{name}">{ico('repositories', 18)}
+            <span class="ws-name">{name}</span>
+            <span class="ws-meta">{n} workspace{'' if n == 1 else 's'}</span>
+          </a>""" for name, n in repos)}
+        </div>
+
+        <h2>Recent jobs</h2>
+        <table>
+          <thead>
+            <tr><th>Status</th><th>Workspace</th><th>Submitted</th><th></th></tr>
+          </thead>
+          <tbody>
+{chr(10).join(f"""            <tr>
+              <td><span class="badge {st}">{ico(badge_ico[st], 13)} {st}</span></td>
+              <td>{ws}</td>
+              <td>{ago}</td>
+              <td><a href="#/jobs/{jid}">open</a></td>
+            </tr>""" for jid, st, ws, ago in recent)}
+          </tbody>
+        </table>
+
+        <h2>Jobs</h2>
+        <div class="counters">
+{chr(10).join('          <div class="counter-row">' + ''.join(
+    f'<a class="counter {st}" href="#/jobs?status={st}">'
+    f'<span class="label">{label}</span><span class="n">{counts[st]}</span></a>'
+    for st, label in row) + '</div>' for row in counters)}
+        </div>
+      </div>
+
+      <div class="dash-rail">
+        <div class="rail-card">
+          <h3>Job outcomes</h3>
+          <div class="ring-chart">
+            <svg viewBox="0 0 160 160" role="img"
+                 aria-label="{counts['complete']} successful, {counts['failed']} failed, {counts['cancelled']} cancelled">
+{chr(10).join(segs)}
+            </svg>
+            <div class="center">
+              <span class="n">{settled}</span>
+              <span class="label">Completed</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="rail-card">
+          <h3>Reference</h3>
+          <a class="link-card" href="/docs">
+            <span class="lc-text"><b>REST API</b>
+              <span>Every route this page calls, with its schema</span></span>
+            <span class="lc-arrow">&rarr;</span>
+          </a>
+          <a class="link-card" href="#/resources">
+            <span class="lc-text"><b>Resources</b>
+              <span>Engines, drivers and disk</span></span>
+            <span class="lc-arrow">&rarr;</span>
+          </a>
+        </div>
+      </div>
+    </div>'''
+    # .dashboard scopes the h2 rule -- elsewhere an h2 titles a panel, so
+    # without it every heading on this screen renders a size too large.
+    return shell('dashboard', 'Dashboard', body).replace(
+        'class="view" id="view"', 'class="view dashboard" id="view"')
+
+
+def screen_schedules():
+    # Trigger strings are triggerOf()'s in app.js: a cron expression or a
+    # fixed interval, never Flow's "Once a day" prose. Paused schedules show
+    # an em-dash for the next run rather than a stale time -- app.js:1227
+    # gives the reason, and repeating the display here keeps the mockup
+    # honest about a state the real screen has.
+    rows = [
+        ('nightly-site-plans', 'SCIMAC/site_plan', '0 2 * * *', 'enabled',
+         'in 6 hours', '4821'),
+        ('hourly-smoke', 'Testing/echo_file', 'every 1h', 'enabled',
+         'in 41 minutes', '4819'),
+        ('weekly-archive', 'SCIMAC/job_archive', '0 3 * * 1', 'enabled',
+         'in 3 days', '4788'),
+        ('backup-config', 'Samples/backup', '0 4 * * *', 'paused',
+         '&mdash;', '4501'),
+    ]
+    badge_ico = {'enabled': 'ok', 'paused': 'pending'}
+    trs = []
+    for name, ws, trig, state, nxt, job in rows:
+        trs.append(f'''        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select {name}"></td>
+          <td><span class="badge {state}">{ico(badge_ico[state], 13)} {state}</span></td>
+          <td>
+            <div class="cell-name">{ico('schedules', 18)}
+              <div><a href="#/schedules/{name}">{name}</a>
+                <div class="desc">{ws}</div>
+              </div>
+            </div>
+          </td>
+          <td><code>{trig}</code></td>
+          <td>{nxt}</td>
+          <td><a href="#/jobs/{job}">{job}</a></td>
+        </tr>''')
+    body = f'''    <h1>Schedules</h1>
+    <p class="page-desc">A schedule runs one workspace on a cron expression or a
+      fixed interval. Pausing one stops it firing without discarding it.</p>
+
+{action_bar('Search schedules by name or workspace',
+            [('Create', 'primary'), ('Pause', 'many'),
+             ('Edit', 'one'), ('Remove', 'many')])}
+
+    <table>
+      <thead>
+        <tr>
+          <th class="col-check"><input type="checkbox" aria-label="Select all"></th>
+          <th class="sortable" aria-sort="none">Status {ARROW}</th>
+          <th class="sortable sorted" aria-sort="ascending">Name {ARROW}</th>
+          <th class="sortable" aria-sort="none">Trigger {ARROW}</th>
+          <th class="sortable" aria-sort="none">Next run {ARROW}</th>
+          <th class="sortable" aria-sort="none">Last job {ARROW}</th>
+        </tr>
+      </thead>
+      <tbody>
+{chr(10).join(trs)}
+      </tbody>
+    </table>
+
+{pager(len(rows))}'''
+    return shell('schedules', 'Schedules', body)
+
+
+def screen_automations():
+    # Flow's own screenshot of this screen is an empty state, but connections
+    # already carries that pattern and a second copy locks no new geometry.
+    # Populated instead, because the column this screen has and no other does
+    # is Last error -- .error is the only place --failed appears as text
+    # rather than as a badge, and an empty table would never show it.
+    rows = [
+        ('publish-site-plans', 'job complete &middot; SCIMAC/site_plan',
+         'run workspace', '2 minutes ago', 'enabled', ''),
+        ('notify-failures', 'job failed &middot; any repository',
+         'webhook', '6 minutes ago', 'enabled',
+         'POST https://hooks.internal/notify &rarr; 502'),
+        ('nightly-cleanup', 'job complete &middot; Testing/slow',
+         'run workspace, webhook', '9 hours ago', 'paused', ''),
+    ]
+    badge_ico = {'enabled': 'ok', 'paused': 'pending'}
+    trs = []
+    for name, trig, acts, fired, state, err in rows:
+        trs.append(f'''        <tr>
+          <td class="col-check"><input type="checkbox" aria-label="Select {name}"></td>
+          <td><span class="badge {state}">{ico(badge_ico[state], 13)} {state}</span></td>
+          <td>
+            <div class="cell-name">{ico('automations', 18)}
+              <div><a href="#/automations/{name}">{name}</a>
+                <div class="desc">{trig}</div>
+              </div>
+            </div>
+          </td>
+          <td>{acts}</td>
+          <td>{fired}</td>
+          <td class="error">{err}</td>
+        </tr>''')
+    body = f'''    <h1>Automations</h1>
+    <p class="page-desc">An automation watches for finished jobs and runs a
+      workspace or calls a URL when one matches.</p>
+
+{action_bar('Search automations by name',
+            [('Create', 'primary'), ('Pause', 'many'),
+             ('Edit', 'one'), ('Remove', 'many')])}
+
+    <table>
+      <thead>
+        <tr>
+          <th class="col-check"><input type="checkbox" aria-label="Select all"></th>
+          <th class="sortable" aria-sort="none">Status {ARROW}</th>
+          <th class="sortable sorted" aria-sort="ascending">Name {ARROW}</th>
+          <th class="sortable" aria-sort="none">Actions {ARROW}</th>
+          <th class="sortable" aria-sort="none">Last fired {ARROW}</th>
+          <th class="sortable" aria-sort="none">Last error {ARROW}</th>
+        </tr>
+      </thead>
+      <tbody>
+{chr(10).join(trs)}
+      </tbody>
+    </table>
+
+{pager(len(rows))}'''
+    return shell('automations', 'Automations', body)
+
+
+def screen_job():
+    # A RUNNING job, deliberately. The progress bar only exists while one is
+    # live -- app.js:949 explains that progress is announced and never
+    # stored, so it is hidden on load and absent again after a reload. A
+    # complete job would leave .progress unrendered and nothing here would
+    # pin its geometry. Cancel rather than Resubmit follows for the same
+    # reason: showActions() swaps them on the terminal states.
+    # .lvl holds the LEVEL, not a timestamp, because that is what the log
+    # stream sends -- app.js:1041 builds each line from entry.level and
+    # entry.message and there is no time field to render. Timestamps here
+    # would look right and lock a column the real screen cannot fill.
+    log = [
+        ('info', 'job 4819 claimed by engine-2'),
+        ('info', 'workspace Testing/echo_file rev 14'),
+        ('info', 'reading input: uploads/parcels.gpkg'),
+        ('warning', 'attribute "legal_desc" truncated to 255 chars'),
+        ('info', 'wrote 1,284 features'),
+        ('info', 'progress 62%'),
+    ]
+    body = f'''    <div class="crumbs">
+      <a href="#/jobs">Jobs</a><span>/</span>4819
+    </div>
+
+    <div class="page-header">
+      <h1>Job 4819</h1>
+      <div class="actions">
+        <button type="button" class="secondary">{ico('refresh', 15)} Resubmit</button>
+        <button type="button" class="danger">Cancel</button>
+      </div>
+    </div>
+
+    <div class="split">
+      <div class="panel">
+        <h2>Log</h2>
+        <div class="progress">
+          <div class="track"><div class="fill" style="width:62%"></div></div>
+          <div class="caption"><span>Writing features</span><span>62%</span></div>
+        </div>
+        <!-- Joined with nothing, and on one line: .log is white-space:
+             pre-wrap, so the newline and indent between two <div>s would be
+             painted as a blank line each. app.js appends elements with no
+             text nodes between them, which is the layout this has to match. -->
+        <div class="log">{''.join(
+            f'<div class="{lvl}"><span class="lvl">{lvl}</span>{msg}</div>'
+            for lvl, msg in log)}</div>
+      </div>
+
+      <div class="panel">
+        <h2>Details</h2>
+        <dl class="kv">
+          <dt>Status</dt><dd><span class="badge running">{ico('run', 13)} running</span></dd>
+          <dt>Workspace</dt><dd>Testing/echo_file</dd>
+          <dt>Requested by</dt><dd>admin</dd>
+          <dt>Engine</dt><dd>engine-2</dd>
+          <dt>Submitted</dt><dd>10:41:01</dd>
+          <dt>Started</dt><dd>10:41:02</dd>
+          <dt>Finished</dt><dd>&mdash;</dd>
+          <dt>Artifacts</dt><dd>&mdash;</dd>
+        </dl>
+      </div>
+    </div>'''
+    return shell('jobs', 'Job 4819', body)
+
+
 # ── Variations explorer ──────────────────────────────────────────────────
 # The only page here that carries JS, and deliberately so: type scale and
 # link colour are comparative judgements, and flipping one control on a live
@@ -526,8 +839,12 @@ apply();
 
 SCREENS = {
     'mock-variants.html': screen_variants,
+    'mock-dashboard.html': screen_dashboard,
     'mock-repositories.html': screen_repositories,
     'mock-jobs.html': screen_jobs,
+    'mock-job.html': screen_job,
+    'mock-schedules.html': screen_schedules,
+    'mock-automations.html': screen_automations,
     'mock-connections.html': screen_connections,
     'mock-run-workspace.html': screen_run_workspace,
 }
