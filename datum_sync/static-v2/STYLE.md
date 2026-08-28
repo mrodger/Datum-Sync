@@ -7,6 +7,9 @@ The brief: **Flow's geometry, Datum's identity.** Layout, spacing and
 component structure are pixel-matched to FME Flow 2026.2 from the 21-screenshot
 set in `reference-images/`. Colour, type, icons and the brand mark are Datum's.
 
+`PORT.md` is the companion: the plan for bringing v1's `app.js` onto this
+stylesheet, in chunks.
+
 ---
 
 ## Two zones
