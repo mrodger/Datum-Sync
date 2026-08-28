@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FME Flow UI Reference</title>
+<style>
+/* Datum-Sync design system — dark/light zone split, brand colours, type scale.
+ * Self-contained: no external CSS dependency so the hosted service works standalone. */
+
+:root {
+  --navy:   #1D3A5C;
+  --amber:  #C89632;
+  --bg:     #0F1923;
+  --panel:  #16232F;
+  --surface:#1B2C3D;
+  --border: #27394B;
+  --text:   #E8EEF4;
+  --muted:  #8FA3B5;
+
+  --body:    "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --heading: "Space Grotesk", var(--body);
+  --mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --nav-width: 250px;
+  --topbar: 56px;
+  --gutter: 32px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; background: var(--bg); color: var(--text);
+  font-family: var(--body); font-size: 14px; line-height: 1.5; }
+
+h1, h2, h3 { font-family: var(--heading); font-weight: 600; }
+
+/* ── Chrome: sidebar + topbar + content ─────────────────────────────── */
+
+.chrome {
+  display: grid;
+  grid-template-columns: var(--nav-width) 1fr;
+  grid-template-rows: var(--topbar) 1fr;
+  height: 100%;
+}
+
+.sidebar {
+  grid-row: 1 / -1;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 16px 0;
+  overflow-y: auto;
+}
+
+.brand {
+  padding: 0 16px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.brand h2 { font-size: 15px; color: var(--amber); letter-spacing: -0.02em; }
+.brand .subtitle { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.nav-section {
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  height: 36px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: all 0.12s;
+  user-select: none;
+}
+.nav-item:hover { color: var(--text); background: var(--surface); }
+.nav-item.active {
+  color: var(--text);
+  border-left-color: var(--amber);
+  background: var(--surface);
+}
+.nav-item .count {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--muted);
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.topbar {
+  background: #ffffff;
+  border-bottom: 1px solid #e2e2e2;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--gutter);
+  gap: 16px;
+}
+.topbar h1 { font-size: 17px; color: #0d0d0c; }
+.topbar .stats {
+  margin-left: auto;
+  display: flex;
+  gap: 20px;
+  font-size: 12px;
+  color: #5e5e5e;
+}
+.topbar .stat-val { font-weight: 600; color: var(--navy); font-family: var(--mono); }
+
+/* ── Content: light zone ────────────────────────────────────────────── */
+
+.content {
+  background: #f5f5f5;
+  overflow-y: auto;
+  padding: var(--gutter);
+}
+
+/* ── Filter bar ─────────────────────────────────────────────────────── */
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.chip {
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid #e2e2e2;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: #5e5e5e;
+  transition: all 0.12s;
+  font-family: var(--body);
+}
+.chip:hover { background: #f0f1f3; color: #0d0d0c; }
+.chip.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+/* ── Gallery grid ───────────────────────────────────────────────────── */
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e2e2e2;
+  overflow: hidden;
+  transition: box-shadow 0.15s, transform 0.15s, border-color 0.15s;
+}
+.card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); transform: translateY(-1px); }
+.card.starred { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(200,150,50,0.2); }
+
+.card .img-wrap {
+  cursor: pointer;
+  background: #e8eaed;
+  position: relative;
+  overflow: hidden;
+}
+.card .img-wrap img {
+  width: 100%;
+  display: block;
+  object-fit: contain;
+  max-height: 260px;
+  transition: transform 0.2s;
+}
+.card:hover .img-wrap img { transform: scale(1.02); }
+
+.card .badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(15,25,35,0.75);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  backdrop-filter: blur(4px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.card .meta {
+  padding: 12px 14px;
+}
+.card .top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.card .name { font-weight: 600; font-size: 13px; color: #0d0d0c; }
+
+.star-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: #d1d5db;
+  transition: color 0.12s, transform 0.12s;
+  padding: 0 2px;
+}
+.star-btn:hover { transform: scale(1.2); }
+.star-btn.on { color: var(--amber); }
+
+.card textarea {
+  width: 100%;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: var(--body);
+  font-size: 12px;
+  resize: vertical;
+  min-height: 34px;
+  color: #0d0d0c;
+  transition: border-color 0.15s;
+}
+.card textarea:focus { outline: none; border-color: var(--amber); }
+.card textarea::placeholder { color: #aaa; }
+
+/* ── Lightbox ───────────────────────────────────────────────────────── */
+
+.lightbox {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15,25,35,0.92);
+  z-index: 200;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  padding: 24px;
+}
+.lightbox.open { display: flex; }
+.lightbox img {
+  max-width: 92vw;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+}
+.lb-caption {
+  color: #fff;
+  font-size: 15px;
+  font-family: var(--heading);
+  font-weight: 600;
+  margin-top: 16px;
+}
+.lb-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+  max-width: 640px;
+  text-align: center;
+}
+.lb-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  border: none;
+  font-size: 26px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s;
+}
+.lb-nav:hover { background: rgba(255,255,255,0.22); }
+.lb-prev { left: 16px; }
+.lb-next { right: 16px; }
+.lb-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  border: none;
+  font-size: 20px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.lb-close:hover { background: rgba(255,255,255,0.22); }
+
+/* ── Action buttons (topbar style) ──────────────────────────────────── */
+
+.action-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #e2e2e2;
+  background: #fff;
+  color: #0d0d0c;
+  font-size: 12px;
+  font-family: var(--body);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.action-btn:hover { background: #f0f1f3; }
+.action-btn.primary {
+  background: var(--amber);
+  color: var(--navy);
+  border-color: var(--amber);
+  font-weight: 600;
+}
+.action-btn.primary:hover { filter: brightness(1.08); }
+
+/* ── Toast ──────────────────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--navy);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.3s;
+  z-index: 300;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+
+/* ── Empty state ────────────────────────────────────────────────────── */
+
+.empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: #5e5e5e;
+}
+.empty h3 { font-size: 16px; color: #0d0d0c; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+
+<div class="chrome">
+
+  <!-- Sidebar (dark zone) -->
+  <nav class="sidebar" id="sidebar">
+    <div class="brand">
+      <h2>Datum-Sync</h2>
+      <div class="subtitle">FME Flow UI Reference</div>
+    </div>
+    <div class="nav-section">Filters</div>
+    <div class="nav-item active" data-filter="all" onclick="setFilter('all', this)">
+      <span>All Pages</span>
+      <span class="count" id="countAll">21</span>
+    </div>
+    <div class="nav-item" data-filter="starred" onclick="setFilter('starred', this)">
+      <span>Starred</span>
+      <span class="count" id="countStarred">0</span>
+    </div>
+    <div class="nav-item" data-filter="annotated" onclick="setFilter('annotated', this)">
+      <span>Annotated</span>
+      <span class="count" id="countAnnotated">0</span>
+    </div>
+    <div class="nav-section">Pages</div>
+    <div id="pageNav"></div>
+  </nav>
+
+  <!-- Topbar (light zone) -->
+  <header class="topbar">
+    <h1 id="viewTitle">All Pages</h1>
+    <div class="stats">
+      <span><span class="stat-val" id="statTotal">21</span> screenshots</span>
+      <span><span class="stat-val" id="statStarred">0</span> starred</span>
+      <span><span class="stat-val" id="statAnnotated">0</span> annotated</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-left:16px">
+      <button class="action-btn" onclick="importAnnotations()">Import</button>
+      <button class="action-btn" onclick="exportAnnotations()">Export JSON</button>
+      <button class="action-btn primary" onclick="exportMarkdown()">Export Picks</button>
+    </div>
+  </header>
+
+  <!-- Content (light zone) -->
+  <main class="content" id="content">
+    <div class="filter-bar" id="filterBar"></div>
+    <div class="gallery" id="gallery"></div>
+  </main>
+
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox">
+  <button class="lb-close" onclick="closeLightbox()">&times;</button>
+  <button class="lb-nav lb-prev" onclick="lbNav(-1)">&lsaquo;</button>
+  <button class="lb-nav lb-next" onclick="lbNav(1)">&rsaquo;</button>
+  <img id="lbImg" src="" alt="">
+  <div class="lb-caption" id="lbCaption"></div>
+  <div class="lb-note" id="lbNote"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<input type="file" id="importInput" accept=".json" style="display:none" onchange="handleImport(event)">
+
+<script>
+/* FME Flow UI reference screenshots — 21 pages, alphabetical. */
+const PAGES = [
+  'analytics', 'auth-services', 'automations', 'connections', 'dashboard',
+  'data-virtualization', 'flow-apps', 'jobs', 'mcp', 'migration',
+  'notifications', 'projects', 'queue-control', 'repositories', 'resources',
+  'run-workspace', 'schedules', 'security', 'streams', 'system-config',
+  'workspaces'
+];
+
+const IMAGES = PAGES.map(name => ({
+  id: name,
+  name: name,
+  src: name + '.png',
+  label: titleCase(name),
+}));
+
+/* State: { [id]: { starred, note } } */
+const state = {};
+let currentFilter = 'all';
+let lbIndex = -1;
+let visibleImages = [];
+
+// Persist in localStorage keyed to this gallery
+const STORAGE_KEY = 'datum-sync-fme-reference';
+try {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) Object.assign(state, JSON.parse(saved));
+} catch(e) {}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+function getState(id) { return state[id] || { starred: false, note: '' }; }
+function setState(id, patch) {
+  state[id] = { ...getState(id), ...patch };
+  saveState();
+}
+
+function titleCase(s) {
+  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function counts() {
+  let starred = 0, annotated = 0;
+  for (const img of IMAGES) {
+    const s = getState(img.id);
+    if (s.starred) starred++;
+    if (s.note && s.note.trim()) annotated++;
+  }
+  return { total: IMAGES.length, starred, annotated };
+}
+
+function updateCounts() {
+  const c = counts();
+  document.getElementById('countAll').textContent = c.total;
+  document.getElementById('countStarred').textContent = c.starred;
+  document.getElementById('countAnnotated').textContent = c.annotated;
+  document.getElementById('statTotal').textContent = c.total;
+  document.getElementById('statStarred').textContent = c.starred;
+  document.getElementById('statAnnotated').textContent = c.annotated;
+}
+
+// Sidebar page nav
+function buildPageNav() {
+  const nav = document.getElementById('pageNav');
+  nav.innerHTML = '';
+  for (const img of IMAGES) {
+    const item = document.createElement('div');
+    item.className = 'nav-item';
+    item.dataset.page = img.id;
+    item.onclick = () => scrollToCard(img.id);
+    const s = getState(img.id);
+    item.innerHTML = `<span>${img.label}</span>` +
+      (s.starred ? `<span class="count" style="color:var(--amber)">&#9733;</span>` : '');
+    nav.appendChild(item);
+  }
+}
+
+function scrollToCard(id) {
+  // Switch to all view if not visible
+  if (currentFilter !== 'all') setFilter('all', document.querySelector('[data-filter="all"]'));
+  const el = document.getElementById('card-' + id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function setFilter(f, el) {
+  currentFilter = f;
+  document.querySelectorAll('.sidebar .nav-item').forEach(n => {
+    if (n.dataset.filter) n.classList.toggle('active', n.dataset.filter === f);
+  });
+  const titles = { all: 'All Pages', starred: 'Starred', annotated: 'Annotated' };
+  document.getElementById('viewTitle').textContent = titles[f] || 'All Pages';
+  render();
+}
+
+function render() {
+  const gal = document.getElementById('gallery');
+  gal.innerHTML = '';
+
+  visibleImages = IMAGES.filter(img => {
+    const s = getState(img.id);
+    if (currentFilter === 'starred') return s.starred;
+    if (currentFilter === 'annotated') return s.note && s.note.trim();
+    return true;
+  });
+
+  if (visibleImages.length === 0) {
+    gal.innerHTML = '<div class="empty"><h3>No images match</h3><p>Try a different filter.</p></div>';
+    updateCounts();
+    return;
+  }
+
+  visibleImages.forEach((img, idx) => {
+    const s = getState(img.id);
+    const card = document.createElement('div');
+    card.className = 'card' + (s.starred ? ' starred' : '');
+    card.id = 'card-' + img.id;
+    card.innerHTML = `
+      <div class="img-wrap" onclick="openLightbox(${idx})">
+        <img src="${img.src}" alt="${img.label}" loading="lazy">
+        <span class="badge">${img.label}</span>
+      </div>
+      <div class="meta">
+        <div class="top-row">
+          <span class="name">${img.label}</span>
+          <button class="star-btn ${s.starred ? 'on' : ''}"
+            onclick="toggleStar('${img.id}')">${s.starred ? '&#9733;' : '&#9734;'}</button>
+        </div>
+        <textarea placeholder="Add annotation..."
+          oninput="updateNote('${img.id}', this.value)">${s.note || ''}</textarea>
+      </div>`;
+    gal.appendChild(card);
+  });
+
+  updateCounts();
+}
+
+function toggleStar(id) {
+  const s = getState(id);
+  setState(id, { starred: !s.starred });
+  render();
+  buildPageNav();
+}
+
+function updateNote(id, val) {
+  setState(id, { note: val });
+  updateCounts();
+}
+
+// Lightbox
+function openLightbox(idx) {
+  lbIndex = idx;
+  updateLightbox();
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+function lbNav(dir) {
+  lbIndex = (lbIndex + dir + visibleImages.length) % visibleImages.length;
+  updateLightbox();
+}
+function updateLightbox() {
+  const img = visibleImages[lbIndex];
+  const s = getState(img.id);
+  document.getElementById('lbImg').src = img.src;
+  document.getElementById('lbCaption').textContent = img.label;
+  document.getElementById('lbNote').textContent = s.note || '';
+}
+document.addEventListener('keydown', e => {
+  const lb = document.getElementById('lightbox');
+  if (!lb.classList.contains('open')) return;
+  if (e.key === 'Escape') closeLightbox();
+  if (e.key === 'ArrowLeft') lbNav(-1);
+  if (e.key === 'ArrowRight') lbNav(1);
+  if (e.key === 's') {
+    const img = visibleImages[lbIndex];
+    toggleStar(img.id);
+    updateLightbox();
+  }
+});
+
+// Export / import
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function exportAnnotations() {
+  const data = { exported: new Date().toISOString(), annotations: state };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'fme-reference-annotations.json';
+  a.click();
+  toast('Exported annotations');
+}
+
+function importAnnotations() {
+  document.getElementById('importInput').click();
+}
+function handleImport(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const ann = data.annotations || data;
+      Object.assign(state, ann);
+      saveState();
+      render();
+      buildPageNav();
+      toast('Imported ' + Object.keys(ann).length + ' annotations');
+    } catch(err) { toast('Import failed: ' + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+function exportMarkdown() {
+  const starred = IMAGES.filter(img => getState(img.id).starred);
+  if (!starred.length) { toast('No starred images'); return; }
+  let md = '# FME Flow UI Reference — Selected Pages\n\n';
+  md += 'Exported: ' + new Date().toISOString().slice(0, 10) + '\n\n';
+  md += starred.length + ' of ' + IMAGES.length + ' selected.\n\n';
+  starred.forEach(img => {
+    const s = getState(img.id);
+    md += '## ' + img.label + '\n';
+    md += '- **File:** `' + img.src + '`\n';
+    if (s.note) md += '- **Notes:** ' + s.note + '\n';
+    md += '\n';
+  });
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'fme-reference-picks.md';
+  a.click();
+  toast('Exported ' + starred.length + ' picks');
+}
+
+// Init
+buildPageNav();
+render();
+</script>
+</body>
+</html>
