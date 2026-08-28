@@ -133,11 +133,62 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     height: 100%;
 }
 
+/* ── Collapsed nav ───────────────────────────────────────────────────── */
+
+/* Flow collapses its nav to an icon rail. The wordmark goes with it: the
+   brand bar is only 56px wide collapsed and the hamburger has to stay, since
+   it is the only way back out. */
 .app.collapsed { grid-template-columns: var(--nav-width-collapsed) 1fr; }
 .app.collapsed .nav-label,
 .app.collapsed .brand-name,
-.app.collapsed .nav-group-label,
 .app.collapsed .nav-footer { display: none; }
+
+/* Centre the glyph in the rail. The 0 .7rem padding is sized for a label
+   sitting beside it, and off-centres the icon once the label is gone. */
+.app.collapsed .sidebar a { justify-content: center; padding: 0; }
+
+/* The ADMIN heading is the only thing separating the admin group from the
+   working group, so collapsed it becomes a rule rather than vanishing --
+   hiding it outright ran Admin straight on from Services with no break. */
+.app.collapsed .nav-group-label {
+    height: 0;
+    margin: 6px 6px 10px;
+    padding: 0;
+    overflow: hidden;
+    border-top: 1px solid var(--border);
+}
+
+/* Collapsed, the label is the only thing naming an icon, so it comes back on
+   hover as a flyout.
+
+   position: fixed, not absolute, and the reason is worth keeping. .sidebar
+   sets overflow-y: auto, so overflow-x computes to auto too and it clips
+   horizontally at the 56px rail edge. Today `absolute` happens to survive
+   that -- .sidebar a is static, so the flyout's containing block is the
+   initial one and .sidebar never clips it. The moment anyone adds
+   `position: relative` to .sidebar a (for a badge, a status dot, anything)
+   the containing block becomes the item, .sidebar starts clipping, and the
+   tooltip silently disappears behind the rail. Measured, absolute + a
+   relative item: the flyout's own centre point hit the H1 underneath. Fixed
+   is immune to that, and with `top` left auto it still resolves to the item's
+   static position, so nothing has to place it in JS. */
+.app.collapsed .sidebar a:hover .nav-label,
+.app.collapsed .sidebar a:focus-visible .nav-label {
+    display: block;
+    position: fixed;
+    left: var(--nav-width-collapsed);
+    margin-left: 8px;
+    padding: .35rem .6rem;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: .3rem;
+    font-size: .8rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 40;
+}
 
 /* Brand bar */
 .brand {

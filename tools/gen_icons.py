@@ -31,7 +31,7 @@ NAV = [
     ('streams',        'Streams',                 'waveform',               ['broadcast', 'wave-sine']),
     ('data-virt',      'Data Virtualization',     'database',               ['stack', 'hard-drives']),
     ('mcp',            'MCP Servers',             'plugs-connected',        ['plug', 'circuitry']),
-    ('flow-apps',      'Flow Apps',               'app-window',             ['squares-four', 'browsers']),
+    ('apps',           'Apps',                    'app-window',             ['squares-four', 'browsers']),
     ('schedules',      'Schedules',               'calendar-dots',          ['calendar-blank', 'clock-clockwise']),
     ('jobs',           'Jobs',                    'list-checks',            ['queue', 'clipboard-text']),
     ('workspaces',     'Workspaces',              'cube',                   ['stack', 'shapes']),

@@ -112,6 +112,61 @@ We carry **21 nav items against Flow's 18**, so there is less headroom: at
 1080 it fits, below that it scrolls. Flow's own content runs to y≈1052 in its
 1080 screenshot, so it would scroll there too.
 
+### Collapsed rail
+
+The hamburger collapses the nav to a **56px icon rail**
+(`--nav-width-collapsed`), as Flow's does. `nav-collapse.js` owns the
+behaviour for every mockup and for `app.js`, so there is one definition:
+it toggles `.collapsed` on `.app`, flips the button's `aria-expanded` and
+`aria-label` (it is the only way back out, so a fixed label is wrong in one
+of the two states), and persists to `localStorage['datum-sync.nav-collapsed']`
+— Flow remembers the state, and a rail that springs back open on every
+navigation is a different and worse feature.
+
+Three things the collapse has to do beyond hiding labels:
+
+- **Re-centre the glyph.** `.sidebar a` padding is `0 .7rem`, sized for a
+  label beside the icon; left alone it off-centres the icon in the rail.
+- **Keep the ADMIN break.** That heading is the only thing dividing the admin
+  group from the working group. Hidden outright, Admin ran straight on from
+  Services, so collapsed it becomes a 1px rule instead.
+- **Bring the label back on hover**, as a flyout — collapsed, it is the only
+  thing naming an icon.
+
+The flyout is **`position: fixed`, not absolute**, and the reason is subtle
+enough to be worth stating. `.sidebar` is `overflow-y: auto`, which computes
+`overflow-x` to `auto` too, so it clips at the rail edge. `absolute` survives
+that *today* only because `.sidebar a` is static — the flyout's containing
+block is then the initial one, not the rail. Add `position: relative` to the
+nav item for a badge or a status dot and the tooltip silently vanishes behind
+the rail. `fixed` is immune, and with `top` left `auto` it still resolves to
+the item's static position, so nothing places it in JS.
+
+`check_style.py` asserts this by *stressing* it — it injects
+`position: relative` on the item and `pointer-events: auto` on the label,
+then requires the flyout's own centre point to hit the flyout. Without the
+stress the check passed with the rule regressed to `absolute`; with it, the
+regression fails and exits 1. The x-offset and `display` assertions read
+identically either way and prove nothing here.
+
+## Wording
+
+Labels carry no vendor's name, and stay generic. Repositories, Workspaces,
+Jobs, Connections and engines all name things the API really has
+(`/rest/v1/repositories/{repo}/workspaces/{ws}`, `/rest/v1/engines`), so they
+stay as they are. The one rename is **Flow Apps → Apps**.
+
+De-branding is a label change only — no id, route or endpoint moves with it.
+Worth knowing, though: Apps is an unimplemented stub and it overlaps
+**Services**, which is the built `/serve/{name}/` feature already hosting a
+job's `service/static`, `service/pwa` and `service/dashboard` output as a
+site. Both entries are kept on purpose; merging them is a product decision,
+not a naming one.
+
+Mockup data has to be real too. The Jobs table used to list `*.fmw` files; a
+Datum-Sync workspace is a **directory** holding `main.py` and `manifest.json`,
+and one of the four names had never existed in `repositories/` at all.
+
 ## Disabled states
 
 **One rule: a disabled control states its own colours. Never fade a copy.**
@@ -194,6 +249,44 @@ then the pager. Repositories and Jobs are the models.
 
 **Form page** — h1, then stacked bordered cards of label/control rows, with
 the submit row at the bottom left. Run Workspace is the model.
+
+## Dynamic behaviour — the gap against Flow
+
+Standing rule: if Flow does something dynamic, we do it too. The mockups draw
+every affordance Flow shows, but drawing a sort arrow is not sorting. This is
+the honest state of each, so `app.js` has a checklist rather than a vibe.
+
+Confirmed from the reference screenshots (`reference-images/`):
+
+| Behaviour | v1 `app.js` | v2 mockup |
+|---|---|---|
+| Nav collapse to a 56px icon rail | toggle only | **done** — persisted, tooltips, ADMIN rule |
+| Active nav item highlight | yes | yes (CSS) |
+| Row hover highlight | yes | yes (CSS) |
+| Live search filter | yes, client-side | drawn, inert |
+| Avatar menu | yes | drawn, inert |
+| Auto-refresh while a job runs | yes, `setTimeout(route, 4000)` | n/a |
+| Live log + progress over SSE | yes, `EventSource` | n/a |
+| **Sortable column headers** | **none at all** | arrow drawn, inert |
+| **Row selection enables Edit / Remove** | select-all box only, wired to nothing | both drawn disabled — Flow's *initial* state, so it looks right and does nothing |
+| **Pagination** | **cosmetic** — every button `disabled`, always "1 to N of N" | drawn, inert |
+| **Page-size select** | none | drawn, inert |
+| Column chooser (toolbar's rightmost icon) | none | drawn, inert |
+
+Two known divergences, both deliberate for now:
+
+- Flow's collapse control is a **floating circular chevron straddling the
+  sidebar/content edge**; ours is a hamburger inside the brand bar. Ours keeps
+  the control inside the grid instead of overlapping two areas.
+- The column chooser's function is **inferred from its icon**, not observed.
+  Do not build it off that guess.
+
+The three in bold are the real work, and they interact: sorting and paging
+both reorder rows, and selection state has to survive both or Remove deletes
+the wrong row. Client-side search already has this problem documented at
+`listbar()` in v1 — it filters what was fetched, which is the whole list today
+but would silently become "the page on screen" the moment paging goes server
+-side.
 
 ## Verification
 

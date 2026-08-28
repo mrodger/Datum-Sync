@@ -42,12 +42,17 @@ NAV = [
     ('dashboard', 'Dashboard'), ('repositories', 'Repositories'),
     ('automations', 'Automations'), ('notifications', 'Notifications'),
     ('streams', 'Streams'), ('data-virt', 'Data Virtualization'),
-    ('mcp', 'MCP Servers'), ('flow-apps', 'Flow Apps'),
+    ('mcp', 'MCP Servers'), ('apps', 'Apps'),
     ('schedules', 'Schedules'), ('jobs', 'Jobs'),
     ('workspaces', 'Workspaces'), ('projects', 'Projects'),
     ('connections', 'Connections'), ('resources', 'Resources'),
     ('analytics', 'Analytics'), ('services', 'Services'),
 ]
+# De-branded only -- "Flow Apps" became "Apps" and nothing moved. Apps is still
+# an unimplemented stub, and it overlaps Services, which is the built
+# /serve/{name}/ feature already hosting service/static, service/pwa and
+# service/dashboard outputs. Whether Apps earns a screen of its own is a
+# product question, deliberately left open rather than settled by a rename.
 NAV_ADMIN = [
     ('admin', 'Admin'), ('auth-services', 'Authentication Services'),
     ('system-config', 'System Configuration'),
@@ -105,6 +110,7 @@ def shell(active, title, body):
   </main>
 </div>
 
+<script src="nav-collapse.js"></script>
 </body>
 </html>
 '''
@@ -209,14 +215,17 @@ def screen_jobs():
     # Status strings are the API's own, because badge() in app.js uses the raw
     # status as BOTH the class and the label -- inventing "Succeeded" here would
     # style a class that does not exist and read nothing like the real screen.
+    # Workspace names are real ones out of repositories/ and carry no extension:
+    # a Datum-Sync workspace is a directory holding main.py and manifest.json,
+    # not a single file. The ".fmw" these used to show was Flow's, and one of
+    # them named a workspace that has never existed here.
     rows = [
-        (4821, 'complete', 'SCIMAC', 'site_plan.fmw', 'marcus', '12.4s'),
-        (4820, 'failed', 'SCIMAC', 'soil_log.fmw', 'marcus', '3.1s'),
-        (4819, 'running', 'Testing', 'echo_file.fmw', 'admin', '0.8s'),
-        (4818, 'queued', 'Testing', 'slow.fmw', 'admin', '&mdash;'),
+        (4821, 'complete', 'SCIMAC', 'site_plan', 'marcus', '12.4s'),
+        (4820, 'failed', 'Testing', 'chatty', 'marcus', '3.1s'),
+        (4819, 'running', 'Testing', 'echo_file', 'admin', '0.8s'),
+        (4818, 'queued', 'Testing', 'slow', 'admin', '&mdash;'),
     ]
-    # Icon per status. 'queued' has no .badge rule in style.css at all -- it is
-    # rendered here so the omission is visible rather than hypothetical.
+    # Icon per status.
     badge_ico = {'complete': 'ok', 'failed': 'fail',
                  'running': 'run', 'queued': 'pending'}
     trs = []

@@ -73,7 +73,7 @@ const GLYPHS = {
     streams:         'M2 12c1.5-3 3.5-4.5 5-4.5s3.5 1.5 5 4.5 3.5 4.5 5 4.5M2 6c1.5-3 3.5-4.5 5-4.5s3.5 1.5 5 4.5 3.5 4.5 5 4.5',
     'data-virt':     'M4 7c0 1.7 3.6 3 8 3s8-1.3 8-3-3.6-3-8-3-8 1.3-8 3zM4 7v5c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 16v1c0 1.7 3.6 3 8 3s8-1.3 8-3v-1',
     mcp:             'M5 3h14v8H5zM3 11h18M8 11v6M16 11v6M12 11v10',
-    'flow-apps':     'M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z',
+    apps:            'M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z',
     workspaces:      'M2 7l10-4 10 4v10l-10 4-10-4zM2 7l10 4 10-4M12 11v10',
     projects:        'M3 5a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v5M9.5 12.5h5',
     analytics:       'M18 20V10M12 20V4M6 20v-6',
@@ -263,6 +263,11 @@ async function refreshEngines() {
  * Services has no Flow counterpart -- nothing in Flow hosts a job's output as
  * a site -- so it sits at the end of the working group rather than being
  * forced into a position Flow does not have.
+ *
+ * Labels carry no vendor's name: Flow's "Flow Apps" is "Apps" here. That one
+ * is still a stub, and it overlaps Services, which already does the hosting.
+ * Left as-is on purpose -- de-branding a label should not quietly decide a
+ * product question.
  */
 const SECTIONS = [
     { id: 'dashboard',      label: 'Dashboard' },
@@ -272,7 +277,7 @@ const SECTIONS = [
     { id: 'streams',        label: 'Streams',             stub: true },
     { id: 'data-virt',      label: 'Data Virtualization', stub: true },
     { id: 'mcp',            label: 'MCP Servers',         stub: true },
-    { id: 'flow-apps',      label: 'Flow Apps',           stub: true },
+    { id: 'apps',           label: 'Apps',                stub: true },
     { id: 'schedules',      label: 'Schedules' },
     { id: 'jobs',           label: 'Jobs' },
     { id: 'workspaces',     label: 'Workspaces',          stub: true },
@@ -338,7 +343,7 @@ const SCREENS = {
     streams:          [(v) => stubScreen(v, 'Streams')],
     'data-virt':      [(v) => stubScreen(v, 'Data Virtualization')],
     mcp:              [(v) => stubScreen(v, 'MCP Servers')],
-    'flow-apps':      [(v) => stubScreen(v, 'Flow Apps')],
+    apps:             [(v) => stubScreen(v, 'Apps')],
     workspaces:       [(v) => stubScreen(v, 'Workspaces')],
     projects:         [(v) => stubScreen(v, 'Projects')],
     resources:        [(v) => stubScreen(v, 'Resources')],

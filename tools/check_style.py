@@ -88,6 +88,63 @@ async def main():
         chk('control shows a scrollbar', sb['control'], 15)   # proves the check discriminates
         chk('sidebar gutter', sb['sidebar'], 0)
         chk('sidebar really overflows', sb['overflow'] > 0, True)
+
+        # Collapsed rail.
+        await pg.set_viewport_size({'width': 1400, 'height': 1080})
+        await pg.goto('http://127.0.0.1:8250/mock-jobs.html')
+        await pg.click('#nav-toggle')
+        await pg.hover('.sidebar a:nth-of-type(2)')
+        cl = await pg.evaluate("""() => {
+          const s = document.querySelector('.sidebar');
+          const a = document.querySelectorAll('.sidebar a')[1];
+          const t = a.querySelector('.nav-label');
+          const g = document.querySelector('.nav-group-label');
+          const svg = a.querySelector('svg');
+          const R = e => e.getBoundingClientRect();
+          return {
+            railWidth: Math.round(R(s).width),
+            tipShown:  getComputedStyle(t).display,
+            tipX:      Math.round(R(t).x),
+            tipCentred: Math.round((R(t).y + R(t).height/2) - (R(a).y + R(a).height/2)),
+            iconOffCentre: Math.abs(Math.round(R(svg).x - R(a).x)
+                                  - Math.round(R(a).right - R(svg).right)),
+            dividerBorder: getComputedStyle(g).borderTopWidth,
+            stored: localStorage.getItem('datum-sync.nav-collapsed'),
+          };
+        }""")
+        print('\ncollapsed rail:')
+        chk('rail width', cl['railWidth'], 56)
+        chk('tooltip shown on hover', cl['tipShown'], 'block')
+        chk('tooltip escapes the rail', cl['tipX'] > 56, True)
+        chk('tooltip centred on item', cl['tipCentred'], 0)
+        chk('icon centred in rail', cl['iconOffCentre'], 0)
+        chk('ADMIN divider kept', cl['dividerBorder'], '1px')
+        chk('collapse persisted', cl['stored'], '1')
+
+        # The tooltip must be position:fixed, and none of the above proves it.
+        # .sidebar clips horizontally (overflow-y:auto forces overflow-x:auto),
+        # but an absolute flyout escapes anyway while .sidebar a is static --
+        # its containing block is then the initial one, not the rail. So the
+        # regression only bites once someone positions the nav item, and both
+        # x-offset and display read identically either way. This stresses it:
+        # position the item, make the flyout hit-testable, and require the
+        # flyout's own centre point to hit the flyout. Verified to fail (and
+        # exit 1) with the rule regressed to position:absolute.
+        await pg.evaluate("""() => {
+          const st = document.createElement('style');
+          st.textContent = `.app.collapsed .sidebar a { position: relative; }
+            .app.collapsed .sidebar a:hover .nav-label { pointer-events: auto; }`;
+          document.head.appendChild(st);
+        }""")
+        await pg.hover('.sidebar a:nth-of-type(3)')
+        await pg.hover('.sidebar a:nth-of-type(2)')
+        clip = await pg.evaluate("""() => {
+          const t = document.querySelectorAll('.sidebar a')[1].querySelector('.nav-label');
+          const r = t.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.x + r.width/2, r.y + r.height/2);
+          return hit === t ? 'flyout' : (hit ? (hit.className || hit.tagName) : 'nothing');
+        }""")
+        chk('flyout unclipped by the rail', clip, 'flyout')
         await b.close()
 
 asyncio.run(main())
