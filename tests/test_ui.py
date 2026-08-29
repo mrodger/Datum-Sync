@@ -596,6 +596,52 @@ def test_v2_labels_every_automation_action():
         f"stale: {sorted(labelled - set(automations.ACTIONS))}")
 
 
+def test_every_v2_form_label_names_its_control():
+    """A `<label>` with no `for` is decoration, and it looks identical.
+
+    The text sits where a label sits and is styled like one, so a screenshot
+    cannot tell the two apart. What is missing is only visible by trying it:
+    clicking the word does not focus the field, and a screen reader announces
+    the control with no name at all -- on a form whose fields are called
+    "Scope targets" and "Secret", where the name is the only thing saying what
+    to type.
+
+    v1's connection form is nine bare labels, and chunk 8 is the largest form
+    in the app -- porting it faithfully would have tripled the count of
+    unlabelled controls in one commit. Chunks 4 and 6 already do it properly,
+    so this is a rule the file follows and nothing was enforcing.
+
+    Checked both halves, because the second is the one a rename breaks. A
+    `for` naming an id that no control carries is worth less than no `for` at
+    all: it looks correct in the source and fails in exactly the same way on
+    the page. Only the control tags are read for ids -- `id:` also appears in
+    SECTIONS and in the two tab tables, where it names a route rather than an
+    element, and letting those count would let a label point at one.
+    """
+    src = (STATIC_V2_DIR / "app.js").read_text()
+
+    labels = re.findall(r"el\('label',\s*\{([^}]*)\}", src)
+    assert len(labels) >= 3, f"only found {len(labels)} labels; the parser drifted"
+    for attrs in labels:
+        assert "for:" in attrs, \
+            "a <label> names no control: el('label', {" + attrs + "}"
+
+    ids = set(re.findall(
+        r"el\('(?:input|select|textarea)',\s*\{[^}]*?\bid:\s*'([\w-]+)'", src))
+    assert len(ids) >= 8, f"only found {len(ids)} control ids; the parser drifted"
+
+    # Every label in the file goes through one of the local fieldOf() helpers,
+    # which take the id as their first argument and write it into both the
+    # label's `for` and nothing else -- so the call sites are where a
+    # mismatch is visible.
+    targets = re.findall(r"\bfieldOf\('([\w-]+)'", src)
+    assert len(targets) >= 10, f"only found {len(targets)} fields; the parser drifted"
+    missing = sorted(set(targets) - ids)
+    assert not missing, (
+        "a form label points at an id no input, select or textarea carries, so "
+        "the label is inert and the control is unnamed: " + ", ".join(missing))
+
+
 @pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
     """Same property as the v1 mount, and it has to be asserted separately:

@@ -375,7 +375,7 @@ const SCREENS = {
     jobs:             [screenJobs, screenJob],
     schedules:        [screenSchedules, screenSchedule],
     automations:      [screenAutomations, screenAutomation],
-    connections:      [(v) => portPending(v, 'Connections', 8)],
+    connections:      [screenConnections, screenConnection],
     services:         [(v) => portPending(v, 'Services', 9)],
     admin:            [(v) => portPending(v, 'Admin', 10)],
     // stub sections — visible in the nav, no backend
@@ -2331,6 +2331,462 @@ async function editAutomation(view, id) {
                 el('div', { class: 'es-icon' }, icon('automations', 48)),
                 el('h3', {}, 'Not fired yet'),
                 el('p', {}, 'Runs appear here once a job matches the trigger.')),
+    ]);
+}
+
+// ---------------------------------------------------------------------------
+// connections
+// ---------------------------------------------------------------------------
+
+const CONNECTION_TYPES = ['database', 'http', 'email_smtp', 'email_imap', 'file',
+                          'oauth_client'];
+
+/* Shown as a hint, never enforced here. The server validates, and a second copy
+ * of the rule in the browser is a second copy that can disagree with it -- the
+ * failure mode being a form that refuses something the API would accept, which
+ * nobody can debug from the screen. */
+const CONFIG_HINTS = {
+    database: 'host, port, database, username',
+    http: 'base_url',
+    email_smtp: 'host, port, username',
+    email_imap: 'host, port, username',
+    file: 'root',
+    oauth_client: 'token_url, client_id',
+};
+
+/* Flow's page-level tabs on Connections & Parameters.
+ *
+ * `mock-connections.html` draws four: Database Connections, Web Connections,
+ * Parameters, and Tokens. This is three, and the missing one is Tokens --
+ * deliberately, because unlike the other two it would not be honestly empty.
+ * Tokens exist in Datum-Sync; they hang off an account, and the routes that
+ * read and revoke them are under /rest/v1/accounts, which is chunk 10's
+ * screen. A fourth tab here would either duplicate that screen or link to a
+ * section that is still `portPending`, and chunk 2 settled that one: a tab
+ * that leads to a placeholder is worse than a tab that is not drawn.
+ *
+ * Web and Parameters stay, with nothing behind them, because they are honestly
+ * absent -- there is no web-connection type and no deployment-parameter store
+ * in this build at all.
+ */
+const CONN_TABS = [
+    { id: 'database', label: 'Database Connections', href: '#/connections' },
+    { id: 'web', label: 'Web Connections', href: '#/connections?tab=web' },
+    { id: 'params', label: 'Deployment Parameters', href: '#/connections?tab=params' },
+];
+
+function scopeSummary(c) {
+    return c.scope === 'global'
+        ? el('span', {}, 'global')
+        : el('span', {}, c.scope, ': ',
+             el('span', { class: 'mono' }, c.scope_targets.join(', ')));
+}
+
+function lastTest(c) {
+    if (!c.last_test_at) return el('span', { class: 'hint' }, 'never tested');
+    return el('span', {},
+        badge(c.last_test_ok ? 'complete' : 'failed'), ' ', when(c.last_test_at));
+}
+
+/* Said before the fields are filled in, not as a 500 on save. Without a key
+ * nothing can be sealed and nothing already sealed can be opened, so every
+ * write on this screen fails and every stored secret is unreadable -- a fact
+ * about the deployment, not about the form somebody is part-way through.
+ *
+ * Returns null when the key is set, so it goes through append(), never
+ * node.append(). */
+function keyBanner(configured) {
+    return configured ? null : el('div', { class: 'banner' },
+        el('b', {}, 'No encryption key. '),
+        'DATUM_SYNC_SECRET_KEY is not set, so a connection carrying a '
+        + 'credential will be refused and stored secrets cannot be opened.');
+}
+
+function readJson(box, label) {
+    const text = box.value.trim();
+    if (!text) return null;
+    try {
+        return JSON.parse(text);
+    } catch (err) {
+        throw new ApiError(0, 'INVALID_JSON', `${label} is not valid JSON: ${err.message}`);
+    }
+}
+
+/* One form for create and edit. They differ in three places -- the name field,
+ * the method, and where you land afterwards -- and a second near-identical form
+ * is how the two drift apart.
+ *
+ * v2 changes the markup, not the behaviour: v1 wrote the whole thing as one
+ * `.panel`, and the v2 idiom is a bare <form> holding `.card` sections with an
+ * `.action-bar > .actions` footer, the same shape chunks 4, 6 and 7 use.
+ */
+function connectionForm(c) {
+    const fresh = c === null;
+
+    /* Every label carries `for`. v1's connection form wrote nine bare
+     * `<label>` elements -- nine controls that a click on their own label does
+     * not focus, and that a screen reader announces unnamed. It looks right in
+     * a screenshot, which is why it survived, and this is the largest form in
+     * the app. */
+    const fieldOf = (id, label, input, hint) => el('div', { class: 'field' },
+        el('label', { for: id }, label), input,
+        hint instanceof Node ? hint : el('div', { class: 'hint' }, hint));
+
+    const name = el('input', {
+        type: 'text', id: 'conn-name', required: true, placeholder: 'scimac-postgres' });
+    const type = el('select', { id: 'conn-type' }, CONNECTION_TYPES.map((t) =>
+        el('option', { value: t, selected: !fresh && c.type === t }, t)));
+    const tier = el('select', { id: 'conn-tier' }, [1, 2, 3, 4].map((t) =>
+        el('option', { value: t, selected: !fresh && c.tier === t }, 'Tier ' + t)));
+    const scope = el('select', { id: 'conn-scope' }, ['global', 'repository', 'workspace']
+        .map((s) => el('option', { value: s, selected: !fresh && c.scope === s }, s)));
+    const targets = el('input', {
+        type: 'text',
+        id: 'conn-targets',
+        value: fresh ? '' : c.scope_targets.join(', '),
+        placeholder: 'SCIMAC, Testing',
+        disabled: fresh || c.scope === 'global',
+    });
+    const access = el('select', { id: 'conn-access' }, ['read', 'write'].map((a) =>
+        el('option', { value: a, selected: !fresh && c.access === a }, a)));
+    const description = el('input', {
+        type: 'text', id: 'conn-desc', value: (!fresh && c.description) || '',
+    });
+    const config = el('textarea', {
+        class: 'yaml', id: 'conn-config', spellcheck: 'false', rows: 8 },
+        fresh ? '{}' : JSON.stringify(c.config, null, 2));
+    const secret = el('textarea', {
+        class: 'yaml', id: 'conn-secret', spellcheck: 'false', rows: 5,
+        placeholder: '{"password": "\u2026"}',
+    });
+    const configHint = el('div', { class: 'hint' });
+    const status = el('div', {});
+    const save = el('button', { type: 'submit' }, fresh ? 'Create connection' : 'Save');
+
+    function syncHints() {
+        clear(configHint).append(document.createTextNode(
+            'Non-secret fields, returned by the API and shown on the right. '
+            + 'Usually: ' + (CONFIG_HINTS[type.value] || '\u2014')));
+        // A global connection carries no targets -- the database refuses the
+        // combination -- so the field is disabled rather than ignored.
+        targets.disabled = scope.value === 'global';
+        if (targets.disabled) targets.value = '';
+    }
+    type.addEventListener('change', syncHints);
+    scope.addEventListener('change', syncHints);
+    syncHints();
+
+    const form = el('form', {},
+        el('div', { class: 'card' },
+            // 'Definition' on both screens. `fresh ? 'New connection'` printed
+            // the h1 again one line below it, which no assertion minds.
+            el('h2', {}, 'Definition'),
+            fresh
+                ? fieldOf('conn-name', 'Name', name,
+                    'Unique, and how a workspace names it in its manifest. It is '
+                    + 'also what the secret is sealed against, so it cannot be '
+                    + 'changed later.')
+                : null,
+            fieldOf('conn-type', 'Type', type,
+                'What the server knows how to open. Only database, http and '
+                + 'file can be tested.'),
+            fieldOf('conn-tier', 'Tier', tier,
+                'Sensitivity, 1 to 4. Recorded and displayed; not yet enforced '
+                + 'against what a service account may reach.'),
+            fieldOf('conn-scope', 'Scope', scope,
+                'Global, or restricted to named repositories or workspaces.'),
+            fieldOf('conn-targets', 'Scope targets', targets,
+                'Comma separated. Repository names, or Repository/Workspace '
+                + 'pairs. Disabled while the scope is global, which is a '
+                + 'combination the database refuses.'),
+            fieldOf('conn-access', 'Access', access,
+                'Whether a workspace holding this may write through it.'),
+            fieldOf('conn-desc', 'Description', description,
+                'Shown under the name in the list.')),
+        el('div', { class: 'card' },
+            el('h2', {}, 'Configuration'),
+            fieldOf('conn-config', 'Config', config, configHint),
+            fieldOf('conn-secret', 'Secret', secret,
+                'Sealed on save and never returned by any route, so this box '
+                + 'starts empty even when a secret is stored. Leave it empty to '
+                + 'keep the current one.')),
+        status,
+        // Chunk 4's form footer. `.form-actions` is not a class this design
+        // system has, and an unstyled div would have looked deliberate.
+        el('div', { class: 'action-bar' },
+            el('div', { class: 'actions' },
+                save,
+                action('Cancel', () => go('#/connections')))));
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        clear(status);
+        try {
+            const body = {
+                type: type.value,
+                tier: Number(tier.value),
+                scope: scope.value,
+                scope_targets: targets.value.split(',')
+                    .map((s) => s.trim()).filter(Boolean),
+                access: access.value,
+                description: description.value.trim() || null,
+                config: readJson(config, 'Config') || {},
+            };
+            // Absent means keep. An empty box is therefore not "clear it" --
+            // clearing is a separate, deliberate action, because the common
+            // case is editing a description on a connection whose password
+            // nobody has to hand.
+            const sealed = readJson(secret, 'Secret');
+            if (sealed !== null) body.secret = sealed;
+
+            if (fresh) {
+                body.name = name.value.trim();
+                await api('/connections', { method: 'POST', json: body });
+                go('#/connections');
+            } else {
+                await api('/connections/' + encodeURIComponent(c.name),
+                    { method: 'PATCH', json: body });
+                route();
+            }
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            save.disabled = false;
+        }
+    });
+
+    return form;
+}
+
+async function screenConnections(view) {
+    const { items, key_configured } = await api('/connections');
+    const query = hashQuery();
+
+    /* The create form lives on this screen behind `?new=1` rather than at
+     * #/connections/new. A connection is addressed by name, not by an id as a
+     * schedule is, so a `new` path segment would make a connection actually
+     * named "new" unreachable from the UI. The dashboard's create tile has
+     * pointed here since chunk 2. */
+    if (query.has('new')) return newConnection(view, key_configured);
+
+    // An unknown ?tab= falls back to the real list rather than to an empty
+    // state for a tab the strip is not highlighting. A stale or hand-edited
+    // URL should land somewhere that works, not on a blank page that names a
+    // tab nobody is on.
+    const asked = query.get('tab') || 'database';
+    const tab = CONN_TABS.some((t) => t.id === asked) ? asked : 'database';
+
+    view.append(el('h1', {}, 'Connections \u0026 Parameters'));
+    view.append(pageTabs(CONN_TABS, tab));
+
+    if (tab !== 'database') {
+        const label = CONN_TABS.find((t) => t.id === tab).label;
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('connections', 48)),
+            el('h3', {}, 'Not in this build'),
+            el('p', {}, label + ' are part of FME Flow and have no Datum-Sync '
+                + 'equivalent yet. Nothing stores them, so there is nothing '
+                + 'here to be empty of.')));
+        return;
+    }
+
+    view.append(el('h2', {}, 'Database Connections'));
+
+    /* Create is a link dressed as a button, for the reason set out on the
+     * schedules list: it navigates, so as an <a href> it gets middle-click and
+     * the status-bar preview for free.
+     *
+     * Duplicate and Manage Database Types are `off`, matching the mockup's
+     * toolbar without pretending either works. Duplicate cannot: no route
+     * returns a secret, by design, so a copy would arrive looking complete and
+     * fail at run time on a credential that was never carried across -- the
+     * worst of the three possible outcomes. Manage Database Types cannot
+     * either: the type list is a fixed tuple in connections.py with no route
+     * over it.
+     *
+     * Writes are admin-only at the API, so a non-admin gets the list with no
+     * toolbar rather than buttons that 403.
+     */
+    actionBar(view, null, {
+        desc: 'A connection stores the credentials a workspace needs to reach a '
+            + 'data source. A workspace refers to one by name, so the secret '
+            + 'never appears in the workspace itself.',
+        search: 'Search connections by name',
+        actions: me.is_admin ? [
+            el('a', { class: 'button', href: '#/connections?new=1' }, 'Create'),
+            action('Duplicate', null, {
+                off: true,
+                title: 'No route returns a stored secret, so a duplicate would '
+                    + 'look complete and fail when it was used.',
+            }),
+            action('Remove', () => removeSelected(), { needs: 'many' }),
+            action('Manage Database Types', null, {
+                off: true,
+                title: 'The type list is fixed in this build.',
+            }),
+        ] : [],
+    });
+
+    append(view, [keyBanner(key_configured)]);
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('connections', 48)),
+            el('h3', {}, 'No connections yet'),
+            el('p', {}, 'A connection is a credential the server holds on behalf '
+                + 'of workspaces, which name it in their manifest and never see '
+                + 'where it came from.')));
+        return;
+    }
+
+    view.append(table([
+        { label: 'Name', sortable: true, sorted: true },
+        { label: 'Type', sortable: true },
+        { label: 'Tier', sortable: true },
+        { label: 'Scope', sortable: true },
+        { label: 'Access', sortable: true },
+        { label: 'Secret', sortable: true },
+        { label: 'Last test', sortable: true },
+    ], items.map((c) => el('tr', {},
+        rowCheck(c.name),
+        // The name is the only link in the row. v1 carried a second "open"
+        // link in a trailing column; chunk 3 dropped that pattern once a
+        // screenshot showed the two side by side going to the same place.
+        el('td', {}, cellName('connections',
+            el('a', { href: '#/connections/' + encodeURIComponent(c.name) }, c.name),
+            c.description)),
+        el('td', {}, c.type),
+        el('td', {}, 'Tier ' + c.tier),
+        el('td', {}, scopeSummary(c)),
+        el('td', {}, c.access),
+        el('td', {}, c.has_secret ? 'stored' : el('span', { class: 'hint' }, 'none')),
+        el('td', {}, lastTest(c)))), { select: true }));
+
+    view.append(pagerBar(items.length));
+    const handle = mountTable(view);
+
+    const chosen = () => (handle
+        ? handle.selection().map((key) => items[Number(key)]).filter(Boolean)
+        : []);
+
+    async function removeSelected() {
+        const picked = chosen();
+        if (!picked.length) return;
+        const names = picked.map((c) => c.name).join(', ');
+        // The third confirm() in the UI, and it belongs to the same class as
+        // the other two: the sealed secret is stored nowhere else and no route
+        // can read it back, so a deleted connection cannot be reconstructed
+        // even by somebody who still has the row in front of them.
+        if (!window.confirm(`Delete ${picked.length} connection(s)?\n\n${names}`)) return;
+        await Promise.all(picked.map((c) =>
+            api('/connections/' + encodeURIComponent(c.name), { method: 'DELETE' })));
+        route();
+    }
+}
+
+function newConnection(view, keyConfigured) {
+    append(view, [
+        crumbs(['Connections', '#/connections'], ['New']),
+        el('h1', {}, 'New connection'),
+        el('p', { class: 'page-desc' },
+            'The name is what a workspace writes in its manifest, and what the '
+            + 'secret is sealed against. Neither can be changed afterwards.'),
+        keyBanner(keyConfigured),
+        // Writes are admin-only at the API. A form nobody may submit is not
+        // shown -- the list does not offer Create to a non-admin either, so
+        // this is only reachable by typing the URL.
+        me.is_admin
+            ? connectionForm(null)
+            : el('div', { class: 'banner' },
+                el('b', {}, 'Read only. '),
+                'Creating a connection is an administrator action. This '
+                + 'account can read connections but not write them.'),
+    ]);
+}
+
+async function screenConnection(view, name) {
+    const c = await api('/connections/' + encodeURIComponent(name));
+    const path = '/connections/' + encodeURIComponent(name);
+    const failure = el('div', {});
+
+    const test = el('button', {
+        type: 'button', class: 'secondary',
+        onclick: async () => {
+            test.disabled = true;
+            clear(failure);
+            try {
+                await api(path + '/test', { method: 'POST' });
+                // The outcome is recorded on the row, so re-reading the screen
+                // shows it. Rendering it here as well would give the page two
+                // answers that can disagree.
+                route();
+            } catch (err) {
+                failure.append(banner(err));
+                test.disabled = false;
+            }
+        },
+    }, icon('refresh', 15), ' ', 'Test');
+
+    const clearSecret = el('button', {
+        type: 'button', class: 'secondary',
+        onclick: async () => {
+            // Irreversible in the strongest sense available here: no route
+            // returns a secret, so nobody -- including whoever is pressing
+            // this -- can read the current one first to put it back.
+            if (!window.confirm(`Clear the stored secret on ${c.name}?\n\n`
+                + 'It cannot be read back, so it would have to be re-entered '
+                + 'from wherever it originally came from.')) return;
+            clearSecret.disabled = true;
+            await api(path, { method: 'PATCH', json: { secret: null } });
+            route();
+        },
+    }, 'Clear secret');
+
+    const remove = el('button', {
+        type: 'button', class: 'danger',
+        onclick: async () => {
+            if (!window.confirm(`Delete the connection ${c.name}?`)) return;
+            remove.disabled = true;
+            await api(path, { method: 'DELETE' });
+            go('#/connections');
+        },
+    }, 'Delete');
+
+    const details = el('div', { class: 'panel' },
+        el('h2', {}, 'Details'),
+        el('dl', { class: 'kv' },
+            el('dt', {}, 'Type'), el('dd', {}, c.type),
+            el('dt', {}, 'Tier'), el('dd', {}, 'Tier ' + c.tier),
+            el('dt', {}, 'Scope'), el('dd', {}, scopeSummary(c)),
+            el('dt', {}, 'Access'), el('dd', {}, c.access),
+            el('dt', {}, 'Secret'), el('dd', {}, c.has_secret ? 'stored' : 'none'),
+            el('dt', {}, 'Last test'), el('dd', {}, lastTest(c)),
+            el('dt', {}, 'Last error'),
+            el('dd', { class: 'error' }, c.last_test_error || '\u2014'),
+            el('dt', {}, 'Created by'), el('dd', {}, c.created_by || '\u2014'),
+            el('dt', {}, 'Created'), el('dd', {}, when(c.created_at)),
+            el('dt', {}, 'Updated'), el('dd', {}, when(c.updated_at))),
+        el('p', { class: 'hint' },
+            'The name cannot be changed: it is the additional data the secret '
+            + 'is sealed against, so renaming would make the stored credential '
+            + 'unopenable.'));
+
+    append(view, [
+        crumbs(['Connections', '#/connections'], [c.name]),
+        el('div', { class: 'page-header' },
+            el('h1', {}, c.name),
+            me.is_admin
+                ? el('div', { class: 'actions' },
+                    test, c.has_secret ? clearSecret : null, remove)
+                : null),
+        failure,
+        // Reads are open to any signed-in caller because `config` is what a
+        // workspace author needs in order to declare the connection. Writes
+        // are admin-only at the API, so a form nobody may submit is not shown.
+        me.is_admin
+            ? el('div', { class: 'split' }, connectionForm(c), details)
+            : details,
     ]);
 }
 

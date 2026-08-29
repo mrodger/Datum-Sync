@@ -635,6 +635,64 @@ have caught wrongly.
 
 106 cases, all proven.
 
+### Chunk 8 — connections
+
+The largest screen in the app, and the only one whose subject the API refuses to
+show you. Every decision below follows from that: **no route returns a stored
+secret**, not to an admin, not on the detail screen, not by accident — `_COLUMNS`
+in `connections.py` has no `secret` in it, so a leak cannot happen by someone
+forgetting to strip one.
+
+**Three tabs, where `mock-connections.html` draws four.** Web Connections and
+Deployment Parameters stay, saying "Not in this build", because they are honestly
+absent. Tokens is dropped: tokens *do* exist here, hanging off an account under
+`/rest/v1/accounts`, which is chunk 10's screen. A fourth tab would either
+duplicate that screen or link to a `portPending` section, and chunk 2 settled
+that question. An unknown `?tab=` falls back to the database list rather than a
+blank page under an unhighlighted strip.
+
+**Create is `#/connections?new=1`, not a `/new` segment.** A connection is
+addressed by name, so `#/connections/new` would make a connection named "new"
+unreachable. v1 made this call; the dashboard tile has pointed at the query
+string since chunk 2.
+
+Two toolbar buttons are `off:` rather than absent, both for reasons a screenshot
+cannot show. **Duplicate** would produce a copy that looks complete and fails the
+first time it is used, because the secret cannot be read to copy. **Manage
+Database Types** has nothing to manage: `TYPES` is a fixed tuple in
+`connections.py`, not a table.
+
+**Empty Secret means keep, not clear.** The box starts empty on the edit screen
+even when a secret is stored, because there is nothing to prefill it with, so
+"empty" cannot also mean "delete". Clearing is its own button, `PATCH
+{secret: null}`, behind a confirm. Delete is behind a confirm too — v1 had
+neither, and chunks 6 and 7 set the precedent: confirm anything stored nowhere
+else.
+
+The name is not on the edit form at all. It is the AAD the secret is sealed
+against, so the API refuses to patch it, and a disabled input saying so is worse
+than a line in the Details panel saying why.
+
+**Test re-routes rather than reporting into the page.** The server records the
+outcome on the row; rendering a second, in-page answer would let the screen
+disagree with itself. Only the request failing gets a banner.
+
+**New guard: `test_every_v2_form_label_names_its_control`.** A `<label>` with no
+`for` renders identically to one with it — same text, same position, same
+screenshot — and is inert. v1's connection form is nine bare labels, so porting
+it as written would have tripled the app's unlabelled controls in one commit.
+The guard reads ids only off `input`/`select`/`textarea` tags: `id:` also appears
+in `SECTIONS` and in the two tab tables, where it names a route, and counting
+those would let a label point at a route and pass. Both halves were falsified —
+dropping the `for`, and renaming a control without its call site.
+
+108 cases, all proven.
+
+Two things only the PNGs said. The card heading was `fresh ? 'New connection' :
+'Definition'`, which printed the h1 again one line below it; and the `.hint`
+under Scope targets had to explain the disabled state, because a field that
+greys out when scope is global looks broken rather than exclusive.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers

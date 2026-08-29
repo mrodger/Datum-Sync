@@ -1171,6 +1171,35 @@ CASES = [
         "",
         "tests/test_ui.py::test_v2_labels_every_automation_action",
     ),
+    (
+        # Exactly what v1's connection form is: nine labels with no `for`. The
+        # page renders identically -- same text, same position, same styling --
+        # and the only difference is that clicking the word does nothing and a
+        # screen reader reads the control out unnamed.
+        #
+        # Anchored on `hint instanceof Node`, which is chunk 8's line and
+        # nobody else's. The label line alone is not unique: chunk 6 has two
+        # fieldOf helpers of its own, and an anchor matching three call sites
+        # would weaken all three and prove none.
+        "the `for` on a v2 form label",
+        "datum_sync/static-v2/app.js",
+        "        el('label', { for: id }, label), input,\n"
+        "        hint instanceof Node",
+        "        el('label', {}, label), input,\n"
+        "        hint instanceof Node",
+        "tests/test_ui.py::test_every_v2_form_label_names_its_control",
+    ),
+    (
+        # The other half, and the more likely one: the control is renamed and
+        # the call site is not. The `for` is still there, still looks right in
+        # the source, and points at nothing -- so the field behaves exactly as
+        # if the attribute had been deleted.
+        "the agreement between a control's id and the label pointing at it",
+        "datum_sync/static-v2/app.js",
+        "class: 'yaml', id: 'conn-secret', spellcheck: 'false', rows: 5,",
+        "class: 'yaml', id: 'conn-password', spellcheck: 'false', rows: 5,",
+        "tests/test_ui.py::test_every_v2_form_label_names_its_control",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
