@@ -684,6 +684,77 @@ def test_every_v2_new_window_link_disowns_its_opener():
             "opened page can navigate this one: el('a', {" + attrs + "}")
 
 
+def test_the_v2_admin_group_is_refused_by_the_router_not_just_hidden():
+    """`buildNav` skipping the admin sections is decluttering, not a control.
+
+    A hash is typed, pasted, bookmarked and shared, and it reaches `route()`
+    without going near the nav. Before chunk 10 the comment above that skip
+    said "Every route behind Admin checks is_admin for itself" and no route
+    did: `admin` was a placeholder, and the four sections under it were stubs
+    that rendered for anybody who knew the URL. Nothing looked wrong, because
+    the wrong thing was a sentence.
+
+    Two properties, and the second is the one that keeps working:
+
+      - `route()` reads `adminOnly`, so the refusal is at the router.
+      - it reads it off `SECTIONS`, so a sixth admin section is protected by
+        being declared. The plausible wrong version is `section === 'admin'`,
+        which passes the first check and covers one of five.
+
+    This does not stand in for the API's own `require_admin`. That is the
+    check that matters and it is tested in test_auth; this one is so the
+    refusal reads as a closed door rather than a screen that broke.
+    """
+    src = (STATIC_V2_DIR / "app.js").read_text()
+
+    sections = re.search(r"const SECTIONS = \[(.*?)\n\];", src, re.S)
+    assert sections, "SECTIONS is gone or no longer parseable"
+    admin_only = re.findall(r"adminOnly:\s*true", sections.group(1))
+    assert len(admin_only) >= 5, (
+        f"only found {len(admin_only)} adminOnly sections; the parser drifted, "
+        "or the admin group shrank and this rule now guards less than it says")
+
+    # Sliced rather than searched whole: `adminOnly` appears in buildNav too,
+    # and finding it there is exactly the mistake this test exists to catch.
+    start = src.index("async function route()")
+    body = src[start:src.index("\n}\n", start)]
+
+    assert "adminOnly" in body, (
+        "route() never reads adminOnly, so every admin section renders for "
+        "anybody who types its hash; the nav only stops people who click")
+    assert "SECTIONS" in body, (
+        "route() refuses admin sections by some list of its own rather than "
+        "off SECTIONS, so declaring a new adminOnly section will not protect it")
+
+
+def test_the_v2_disabled_button_rule_outranks_every_button_variant():
+    """A disabled button must not be able to render as a live one.
+
+    `button:disabled` and `button.danger` have equal specificity, so whichever
+    is written second wins. .danger was, and a disabled Revoke came out in full
+    red -- pixel-identical to the live one in the row above it. Nothing could
+    catch that: the attribute was set, so `is_disabled()` was true throughout,
+    and it only showed in chunk 10's screenshot because Admin is the first
+    screen where disabled is a resting state rather than the half-second a
+    request is in flight.
+
+    Ordering, not specificity, because the fix is ordering: raising the
+    disabled rule with `!important` or an extra class would beat this test and
+    reintroduce the class of bug elsewhere.
+    """
+    css = (STATIC_V2_DIR / "style.css").read_text()
+
+    # rindex on both sides: the hazard is a variant rule written ANYWHERE below
+    # the disabled one, and a new `.danger` appended at the foot of the file
+    # would beat a check that only looked at the first occurrence.
+    disabled = css.rindex("button:disabled, .button:disabled {")
+    for variant in ("button.secondary {", "button.danger    {"):
+        assert css.rindex(variant) < disabled, (
+            f"`{variant.strip(' {')}` is written after the disabled rule at "
+            "equal specificity, so it wins and its disabled state renders in "
+            "the live colour")
+
+
 @pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
     """Same property as the v1 mount, and it has to be asserted separately:

@@ -751,6 +751,80 @@ some workspace built. v1 said which was which by keeping the "open" column, and
 folding it away took the only thing that marked the difference. The url now goes
 in the `cellName` desc slot, so the row says where the link goes.
 
+### Chunk 10 — admin
+
+The last chunk, and the one that found a hole rather than porting one. `buildNav`
+skips the five `adminOnly` sections for a non-admin, and above that skip stood the
+sentence *"Every route behind Admin checks is_admin for itself; this just
+declutters."* No route did. `admin` was a `portPending` placeholder and the four
+sections beside it were stubs, and all five rendered for anybody who typed the
+hash — which is how a hash usually arrives, being typed, pasted, bookmarked and
+shared. Nothing looked wrong for nine chunks because the wrong thing was a
+sentence, and a sentence is not a control.
+
+The refusal now lives in `route()`, once, for all five, and is derived from
+`SECTIONS` rather than naming a section — so a sixth admin section is protected by
+being declared. It is a screen *substitution* rather than an early return, so the
+denial flows through the normal path and sets `data-ready` like any other screen
+and can be waited on. This does not stand in for the API's own `require_admin`;
+that is the check that matters and test_auth covers it. This one is so the
+refusal reads as a closed door rather than as a screen that broke.
+
+**The guard** asserts two properties, and the second is the one that keeps
+working: that `route()` reads `adminOnly`, and that it reads it off `SECTIONS`.
+The break cases are the two states this could plausibly be in — the one it was in
+for nine chunks (`denied = false`), and the one that would survive a review
+(`section === 'admin'`, which passes the first check and covers one of five). The
+route body is sliced out of the source rather than searched whole, because
+`adminOnly` also appears in `buildNav` and finding it there is exactly the mistake
+the test exists to catch.
+
+`portPending` is gone with this chunk. It existed to say "v1 runs this and the
+port has not reached it", which is a different thing from `stubScreen`'s "there is
+no backend behind this at all", and keeping them apart mattered while both were
+true. Chunk 10 was the last, so it has no sections left to name.
+
+No row checkboxes and no toolbar, for a different reason than Services had. There
+the API offered no write at all. Here it does — but Revoke is not a delete of the
+row, and the checkbox column means "these rows" on five other screens where the
+button under it removes them. The counters go to zero and the account stays.
+Revoke also has a per-row availability that a toolbar button cannot express: an
+account with no sessions and no grants has nothing to revoke, and the button says
+so by being disabled rather than by being a no-op somebody has to press to find
+out.
+
+Revoking your own grants ends your own session, by design and not by oversight:
+an admin who thinks their session is compromised needs to be able to end it, and
+an exemption would be a hole exactly there. The screen says why before the next
+`api()` call would 401 into a bare sign-in form. It is also why the acceptance
+script aims its revoke at a throwaway account and not at the browser it is driving.
+
+112 cases, all proven.
+
+**Two things only the PNG said**, and the second was never chunk 10's.
+
+Every other list passes its section glyph to `cellName`, and on every one of them
+that glyph is a picture of what is in the row — a folder for a repository, a
+calendar for a schedule. Admin's is a shield with a tick in it. Rendered, all
+three accounts wore it, two of them directly over the word "administrator" and the
+third over nothing, so the one account in the list with no admin rights was
+decorated with the mark of the most. The rule that is right seven times is wrong
+the eighth; the row takes `avatar` now.
+
+And the two disabled Revoke buttons rendered in full red, pixel-identical to the
+live one between them. `button:disabled` and `button.danger` have equal
+specificity, so whichever is written second wins, and `.danger` was — since chunk
+0. Every other danger button in v2 only disables for the half-second its request
+is in flight, so there was nothing to see; Admin is the first screen where
+disabled is a resting state. No functional assertion could have caught it, then or
+now: the attribute was set, `is_disabled()` was true throughout, and the acceptance
+script printed `disabled=True` on both rows while the screen showed three live
+buttons. The disabled rule is now written last of the variants, and the guard
+asserts the ordering with `rindex` on both sides — because the way back into this
+is not reversing the block, it is adding one more `.danger` rule at the foot of a
+900-line file, which is where a variant goes when the block it belongs in is 400
+lines up.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers

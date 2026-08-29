@@ -1211,6 +1211,40 @@ CASES = [
         "href: s.url, target: '_blank',",
         "tests/test_ui.py::test_every_v2_new_window_link_disowns_its_opener",
     ),
+    (
+        # The state this was in for nine chunks, with a comment in buildNav
+        # asserting the opposite.
+        "the router's refusal of the admin sections",
+        "datum_sync/static-v2/app.js",
+        "const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);",
+        "const denied = false;",
+        "tests/test_ui.py::"
+        "test_the_v2_admin_group_is_refused_by_the_router_not_just_hidden",
+    ),
+    (
+        # Refusing the right section for the wrong reason: this stops the one
+        # screen anybody thinks of and leaves the four stubs beside it open,
+        # which is the version that would survive a review.
+        "reading the admin sections off SECTIONS rather than naming one",
+        "datum_sync/static-v2/app.js",
+        "const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);",
+        "const denied = !me.is_admin && section === 'admin';",
+        "tests/test_ui.py::"
+        "test_the_v2_admin_group_is_refused_by_the_router_not_just_hidden",
+    ),
+    (
+        # Not the original bug -- that was the block order, and this is the way
+        # back into it: one more .danger rule at the foot of the file, which is
+        # where a variant gets added when the block it belongs in is 400 lines
+        # up. Same cascade, same invisible result.
+        "the disabled rule outranking the button variants",
+        "datum_sync/static-v2/style.css",
+        "    filter: none;\n}\n",
+        "    filter: none;\n}\n"
+        "button.danger    { color: var(--failed); }\n",
+        "tests/test_ui.py::"
+        "test_the_v2_disabled_button_rule_outranks_every_button_variant",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

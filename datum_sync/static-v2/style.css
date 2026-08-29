@@ -479,19 +479,27 @@ button:disabled { cursor: not-allowed; }
 button.secondary { background: transparent; color: var(--amber); border-color: var(--amber); }
 button.secondary:hover:not(:disabled) { background: rgba(200, 150, 50, .08); }
 
+/* Square icon button — the column chooser that ends every Flow action bar. */
+button.icon { width: var(--control); padding: 0; flex: none; }
+button.danger    { background: transparent; color: var(--failed); border-color: var(--failed); }
+button.danger:hover:not(:disabled) { background: rgba(194,86,75,.06); }
+
 /* Grey is stated explicitly rather than left to opacity, so the disabled state
- * carries its own meaning instead of being a faded copy of whatever it was. */
+ * carries its own meaning instead of being a faded copy of whatever it was.
+ *
+ * LAST of the variants on purpose. `button:disabled` and `button.danger` have
+ * equal specificity, so whichever is written second wins, and .danger used to
+ * be: a disabled Revoke rendered in full red, identical to the live one beside
+ * it. Every other danger button only disables for the moment its request is in
+ * flight, so nobody could see it -- chunk 10's Admin screen is the first place
+ * disabled is a resting state, and the fault was a decade of pixels away from
+ * anything a test asserts. `is_disabled()` was true throughout. */
 button:disabled, .button:disabled {
     background: transparent;
     color: var(--muted);
     border-color: var(--border);
     filter: none;
 }
-
-/* Square icon button — the column chooser that ends every Flow action bar. */
-button.icon { width: var(--control); padding: 0; flex: none; }
-button.danger    { background: transparent; color: var(--failed); border-color: var(--failed); }
-button.danger:hover:not(:disabled) { background: rgba(194,86,75,.06); }
 
 /* ── Inputs ──────────────────────────────────────────────────────────── */
 

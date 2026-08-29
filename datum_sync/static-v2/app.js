@@ -6,8 +6,9 @@
  * session cookie is HttpOnly, so this code cannot read it and neither can
  * anything injected alongside it.
  *
- * This is chunk 1 of static-v2/PORT.md: the shell. Screens arrive in chunks
- * 2-10; until then their sections route to portPending() and say so.
+ * Built as the chunks of static-v2/PORT.md: the shell first, then a screen at
+ * a time through chunk 10. Every screen v1 has is here; the sections that
+ * still render a placeholder are the ones with no backend behind them at all.
  *
  * An ES module, unlike v1, for one reason: the icons. v1 drew its own glyphs
  * from primitives and said in a comment that they were stand-ins. v2 has the
@@ -326,8 +327,10 @@ const SECTIONS = [
 function buildNav() {
     const nav = clear($('nav'));
     for (const section of SECTIONS) {
-        // Hidden, not disabled -- and hiding is presentation only. Every route
-        // behind Admin checks is_admin for itself; this just declutters.
+        // Hidden, not disabled -- and hiding is presentation only. route()
+        // refuses `adminOnly` by hash as well; this just declutters. Until
+        // chunk 10 the sentence above said the same thing and nothing did it:
+        // the four stubs in this group rendered for anybody who typed the URL.
         if (section.adminOnly && !me.is_admin) continue;
         // The label belongs to the group below it, so hiding Admin hides the
         // label too rather than leaving a divider with nothing under it.
@@ -360,14 +363,14 @@ function parseHash() {
 }
 
 /* Every section in SECTIONS has an entry, so a nav link can never route to
- * nothing. Two kinds of placeholder, and the difference is the point:
+ * nothing.
  *
- *   stubScreen  -- there is no backend and none is planned in this build.
- *   portPending -- v1 has this screen working; the v2 port has not reached it.
- *
- * Collapsing them into one message would mean a working feature and an absent
- * one reading identically, and the chunk number is the only thing that says
- * which of the two you are looking at.
+ * There used to be two kinds of placeholder here: `stubScreen` for a section
+ * with no backend, and `portPending` for one v1 already ran that the port had
+ * not reached. Keeping them apart mattered while both existed, because a
+ * working feature and an absent one would otherwise have read identically.
+ * Chunk 10 was the last, so `portPending` has no sections left to name and is
+ * gone -- every remaining placeholder is the first kind, and says so.
  */
 const SCREENS = {
     dashboard:        [screenDashboard],
@@ -377,7 +380,7 @@ const SCREENS = {
     automations:      [screenAutomations, screenAutomation],
     connections:      [screenConnections, screenConnection],
     services:         [screenServices],
-    admin:            [(v) => portPending(v, 'Admin', 10)],
+    admin:            [screenAdmin],
     // stub sections — visible in the nav, no backend
     notifications:    [(v) => stubScreen(v, 'Notifications')],
     streams:          [(v) => stubScreen(v, 'Streams')],
@@ -431,7 +434,21 @@ async function route() {
     clear($('view')).append(view);
     if (!screens) return void view.append(notBuiltNode('Not found', 'No such screen.'));
 
-    const screen = screens[Math.min(rest.length, screens.length - 1)];
+    // The nav hides the admin group from a non-admin, and hiding is not a
+    // control: the hash is typed, pasted, bookmarked and shared. Refused here
+    // rather than inside each of the five admin screens because four of them
+    // are one-line stubs, and a rule that has to be remembered at every call
+    // site is one that gets forgotten at the next.
+    //
+    // The API refuses too, and that is the check that matters -- this one is
+    // so the refusal reads as a closed door rather than as a screen that
+    // broke. It goes through the normal path rather than returning early, so
+    // the denial sets `data-ready` and can be waited on like any other screen.
+    const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);
+    const screen = denied
+        ? (v) => v.append(notBuiltNode('Not available',
+            'This section is for administrator accounts.'))
+        : screens[Math.min(rest.length, screens.length - 1)];
     try {
         const leave = (await screen(view, ...rest)) || null;
         // A stale screen's cleanup belongs to nobody, so run it rather than
@@ -481,20 +498,7 @@ function stubScreen(view, label) {
             el('h2', {}, 'Not yet available'),
             el('p', {}, 'This section is not part of the current Datum-Sync build. '
                 + 'Working sections: Repositories, Jobs, Schedules, Automations, '
-                + 'Connections, and Services.')));
-}
-
-/* Sections that work in v1 and are waiting on their port chunk. Names the
- * chunk, and points at the v1 UI, because "not yet available" would be false
- * here -- the feature exists, this copy of the UI has not caught up. */
-function portPending(view, label, chunk) {
-    view.append(
-        el('h1', {}, label),
-        el('div', { class: 'stub-empty' },
-            el('h2', {}, 'Not ported yet'),
-            el('p', {}, `This screen is chunk ${chunk} of the v2 port. It works `
-                + 'today in the current UI.'),
-            el('p', {}, el('a', { href: '/ui' }, 'Open it in the current UI'))));
+                + 'Connections, Services, and Admin.')));
 }
 
 // ---------------------------------------------------------------------------
@@ -2360,10 +2364,11 @@ const CONFIG_HINTS = {
  * Parameters, and Tokens. This is three, and the missing one is Tokens --
  * deliberately, because unlike the other two it would not be honestly empty.
  * Tokens exist in Datum-Sync; they hang off an account, and the routes that
- * read and revoke them are under /rest/v1/accounts, which is chunk 10's
- * screen. A fourth tab here would either duplicate that screen or link to a
- * section that is still `portPending`, and chunk 2 settled that one: a tab
- * that leads to a placeholder is worse than a tab that is not drawn.
+ * read and revoke them are under /rest/v1/accounts, which is the Admin screen.
+ * A fourth tab here would either duplicate that screen or -- when this was
+ * written, before chunk 10 -- link to a placeholder, and chunk 2 settled that
+ * one: a tab that leads to a placeholder is worse than a tab not drawn. Admin
+ * is real now, and the first half of the reason still stands.
  *
  * Web and Parameters stay, with nothing behind them, because they are honestly
  * absent -- there is no web-connection type and no deployment-parameter store
@@ -2866,6 +2871,110 @@ async function screenServices(view) {
                 el('span', { class: 'mono' }, s.source_job.slice(0, 8)))
             : el('span', { class: 'hint' }, '\u2014')),
         el('td', {}, when(s.updated_at))))));
+
+    view.append(pagerBar(items.length));
+    mountTable(view);
+}
+
+// ---------------------------------------------------------------------------
+// admin
+// ---------------------------------------------------------------------------
+
+/* Read-only plus one destructive button, and the asymmetry is the API's, not
+ * this screen's: creating an account and minting a token stay in the `accounts`
+ * CLI, because an account that can create accounts through the API is one XSS
+ * away from being every account. Revocation only ever removes access, so the
+ * worst it can be turned into is signing people out.
+ *
+ * No row checkboxes and no toolbar, for a different reason than Services had.
+ * There the API offered no write at all. Here it does -- but Revoke is not a
+ * delete of the row, and the checkbox column means "these rows" on five other
+ * screens where the button under it removes them. The counters go to zero and
+ * the account stays. Revoke also has a per-row availability that a toolbar
+ * button cannot express: an account with no sessions and no grants has nothing
+ * to revoke, and the button says so by being disabled rather than by being a
+ * no-op somebody has to press to discover.
+ */
+async function screenAdmin(view) {
+    const { items } = await api('/accounts');
+
+    actionBar(view, 'Admin', {
+        desc: 'Accounts are created and tokens minted with the accounts CLI. '
+            + 'This screen can only revoke \u2014 it signs an account out '
+            + 'everywhere, and leaves its credentials intact.',
+        search: 'Search accounts by name',
+    });
+
+    view.append(table([
+        { label: 'Account', sortable: true, sorted: true },
+        { label: 'Tier', sortable: true },
+        { label: 'Scope', sortable: true },
+        { label: 'Credentials', sortable: true },
+        { label: 'Sessions', sortable: true },
+        { label: 'Grants', sortable: true },
+        { label: 'Last used', sortable: true },
+        // The button's column. Unlabelled and unsortable: there is no value in
+        // it to order by, and a header over a column of buttons would be
+        // naming the action twice.
+        '',
+    ], items.map((a) => {
+        const revoke = el('button', {
+            type: 'button', class: 'danger',
+            disabled: !a.sessions && !a.grants,
+            onclick: async () => {
+                // Named, and counted. "Revoke grants?" over a list this size is
+                // a question about a row the reader has to remember choosing.
+                if (!window.confirm(
+                    `Sign ${a.name} out everywhere?\n\n`
+                    + `${a.sessions} session(s) and ${a.grants} grant(s) end `
+                    + 'immediately. The account keeps its password and token.')) return;
+                revoke.disabled = true;
+                await api('/accounts/' + encodeURIComponent(a.name) + '/grants',
+                    { method: 'DELETE' });
+                // Revoking your own ends this session too, by design: an admin
+                // who thinks their session is compromised needs to be able to
+                // end it, and an exemption would be a hole exactly there. The
+                // next api() call would 401 into a bare sign-in screen, so say
+                // why first.
+                if (a.name === me.name) return showSignin('Signed out: grants revoked.');
+                route();
+            },
+        }, 'Revoke');
+        return el('tr', {},
+            // `avatar`, not the section glyph every other list passes. On those
+            // the section glyph is a picture of what is in the row -- a folder
+            // for a repository, a calendar for a schedule -- and admin's is a
+            // shield with a tick in it, which on a row of accounts reads as a
+            // permission rather than as a picture. Rendered, all three rows wore
+            // it, two of them over the word "administrator" and the third over
+            // nothing, and the account with the fewest rights was decorated with
+            // the mark of the most. Only the screenshot showed it.
+            el('td', {}, cellName('avatar', el('span', {}, a.name),
+                // Not a link: there is no account detail screen, and no route
+                // that could fill one -- /accounts is a list and nothing else.
+                [a.is_admin ? 'administrator' : null,
+                 a.disabled ? 'disabled' : null].filter(Boolean).join(' \u00b7 ')
+                || null)),
+            el('td', {}, 'Tier ' + a.max_tier),
+            // null repo_scope is "every repository", which is the widest value
+            // this column takes -- so it is spelled out rather than left blank,
+            // where an empty cell would read as the narrowest.
+            el('td', {}, a.repo_scope ? a.repo_scope.join(', ') : 'all'),
+            // What kind, never how much: the API returns booleans because it
+            // stores sha256(token) precisely so it cannot give the token back,
+            // and a prefix would undo that.
+            el('td', {}, [a.has_token ? 'token' : null,
+                          a.has_password ? 'password' : null]
+                         .filter(Boolean).join(' + ')
+                || el('span', { class: 'hint' }, '\u2014')),
+            // Numbers, not strings, and 0 is the common value here: append()
+            // drops null/undefined/false and nothing else, so a zero count
+            // renders rather than emptying the cell.
+            el('td', {}, a.sessions),
+            el('td', {}, a.grants),
+            el('td', {}, when(a.last_used_at)),
+            el('td', {}, revoke));
+    })));
 
     view.append(pagerBar(items.length));
     mountTable(view);
