@@ -783,6 +783,38 @@ async def list_accounts(caller: Principal = Caller) -> dict[str, Any]:
     }
 
 
+@app.get("/rest/v1/accounts/{name}")
+async def get_account(name: str, caller: Principal = Caller) -> dict[str, Any]:
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        r = await conn.fetchrow(
+            """
+            SELECT id, name, max_tier, repo_scope, is_admin, disabled,
+                   vault_scope, created_at, last_used_at,
+                   token_hash IS NOT NULL AS has_token,
+                   password_hash IS NOT NULL AS has_password
+              FROM service_accounts
+             WHERE name = $1
+            """,
+            name,
+        )
+    if r is None:
+        raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+    vs = r["vault_scope"]
+    return {
+        "name": r["name"],
+        "max_tier": r["max_tier"],
+        "repo_scope": r["repo_scope"],
+        "is_admin": r["is_admin"],
+        "disabled": r["disabled"],
+        "vault_scope": json.loads(vs) if vs else None,
+        "has_token": r["has_token"],
+        "has_password": r["has_password"],
+        "created_at": r["created_at"].isoformat(),
+        "last_used_at": (r["last_used_at"].isoformat() if r["last_used_at"] else None),
+    }
+
+
 @app.delete("/rest/v1/accounts/{name}/grants")
 async def revoke_grants(name: str, caller: Principal = Caller) -> dict[str, Any]:
     """Revoke every OAuth token and session for an account. Sign out everywhere.

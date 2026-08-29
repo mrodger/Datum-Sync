@@ -381,7 +381,7 @@ const SCREENS = {
     connections:      [screenConnections, screenConnection],
     services:         [screenServices],
     workspaces:       [screenWorkspaces],
-    admin:            [screenAdmin],
+    admin:            [screenAdmin, screenAccount],
     // stub sections — visible in the nav, no backend
     notifications:    [(v) => stubScreen(v, 'Notifications')],
     streams:          [(v) => stubScreen(v, 'Streams')],
@@ -2946,6 +2946,162 @@ async function screenServices(view) {
 // admin
 // ---------------------------------------------------------------------------
 
+async function screenAccount(view, accountName) {
+    const [acct, { items: agentList }] = await Promise.all([
+        api('/accounts/' + encodeURIComponent(accountName)),
+        api('/accounts/' + encodeURIComponent(accountName) + '/agents'),
+    ]);
+
+    const accountPath = '/accounts/' + encodeURIComponent(accountName);
+    const failure = el('div', {});
+    const tokenDisplay = el('div', {});
+
+    function vaultScopeRows(vs) {
+        if (!vs) {
+            return [el('dt', {}, 'Vault scope'), el('dd', {}, 'unrestricted')];
+        }
+        const fmt = (arr) => arr && arr.length
+            ? arr.join(', ')
+            : el('span', { class: 'hint' }, '\u2014');
+        return [
+            el('dt', {}, 'Vault read'),  el('dd', {}, fmt(vs.read)),
+            el('dt', {}, 'Vault write'), el('dd', {}, fmt(vs.write)),
+            el('dt', {}, 'Vault deny'),  el('dd', {}, fmt(vs.deny)),
+        ];
+    }
+
+    const details = el('div', { class: 'panel' },
+        el('h2', {}, 'Details'),
+        el('dl', { class: 'kv' },
+            el('dt', {}, 'Tier'),        el('dd', {}, 'Tier ' + acct.max_tier),
+            el('dt', {}, 'Admin'),       el('dd', {}, acct.is_admin ? 'yes' : 'no'),
+            el('dt', {}, 'Disabled'),    el('dd', {}, acct.disabled ? 'yes' : 'no'),
+            el('dt', {}, 'Credentials'), el('dd', {},
+                [acct.has_token ? 'token' : null,
+                 acct.has_password ? 'password' : null].filter(Boolean).join(' + ')
+                || el('span', { class: 'hint' }, '\u2014')),
+            el('dt', {}, 'Last used'), el('dd', {}, when(acct.last_used_at)),
+            el('dt', {}, 'Created'),   el('dd', {}, when(acct.created_at)),
+            ...vaultScopeRows(acct.vault_scope)));
+
+    // Agents table — static render, no mountTable (small list, no search needed).
+    function agentRow(a) {
+        const agentPath = accountPath + '/agents/' + encodeURIComponent(a.name);
+
+        const mintBtn = el('button', { type: 'button', class: 'secondary',
+            onclick: async () => {
+                mintBtn.disabled = true;
+                clear(failure);
+                try {
+                    const { token } = await api(agentPath + '/token', { method: 'POST' });
+                    clear(tokenDisplay);
+                    tokenDisplay.append(el('div', { class: 'panel' },
+                        el('h2', {}, 'Token \u2014 ' + a.name),
+                        el('p', { class: 'hint' }, 'Shown once. Copy it now.'),
+                        el('pre', {}, token),
+                        el('button', { type: 'button', class: 'secondary',
+                            onclick: () => { clear(tokenDisplay); mintBtn.disabled = false; },
+                        }, 'Dismiss')));
+                } catch (err) {
+                    failure.append(banner(err));
+                    mintBtn.disabled = false;
+                }
+            },
+        }, 'Mint token');
+
+        const delBtn = el('button', { type: 'button', class: 'danger',
+            onclick: async () => {
+                if (!window.confirm(`Delete agent ${a.name}?`)) return;
+                delBtn.disabled = true;
+                try {
+                    await api(agentPath, { method: 'DELETE' });
+                    route();
+                } catch (err) {
+                    failure.append(banner(err));
+                    delBtn.disabled = false;
+                }
+            },
+        }, 'Delete');
+
+        return el('tr', {},
+            el('td', {}, cellName('avatar', el('span', {}, a.name),
+                a.disabled ? 'disabled' : null)),
+            el('td', {}, a.proxy_grants && a.proxy_grants.length
+                ? a.proxy_grants.join(', ')
+                : el('span', { class: 'hint' }, '\u2014')),
+            el('td', {}, when(a.last_used_at)),
+            el('td', {}, mintBtn),
+            el('td', {}, delBtn));
+    }
+
+    const agentsPanel = el('div', { class: 'panel' },
+        el('h2', {}, 'Agents'));
+    if (agentList.length) {
+        agentsPanel.append(table(
+            ['Agent', 'Proxy grants', 'Last used', '', ''],
+            agentList.map(agentRow)));
+    } else {
+        agentsPanel.append(el('p', { class: 'hint' }, 'No agents yet.'));
+    }
+
+    // Create-agent form. Agents are created through the API (not just the CLI)
+    // because each synthetic or integrated agent needs a scoped token, and
+    // minting one from the CLI on every deploy is the thing the UI replaces.
+    const nameInput  = el('input', {
+        type: 'text', id: 'agent-name', placeholder: 'agent-name', required: true });
+    const grantsInput = el('input', {
+        type: 'text', id: 'agent-grants',
+        placeholder: 'connection1, connection2  (blank = no proxy grants)' });
+    const createErr = el('div', {});
+
+    const createForm = el('div', { class: 'panel' },
+        el('h2', {}, 'Create agent'),
+        createErr,
+        el('form', { onsubmit: async (e) => {
+            e.preventDefault();
+            const name = nameInput.value.trim();
+            if (!name) return;
+            const raw = grantsInput.value.trim();
+            const grants = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+            clear(createErr);
+            try {
+                const agent = await api(accountPath + '/agents', {
+                    method: 'POST',
+                    json: { name, proxy_grants: grants },
+                });
+                // Token is returned only at creation time. Show it before the
+                // route re-render clears the page, so the admin can copy it.
+                clear(tokenDisplay);
+                tokenDisplay.append(el('div', { class: 'panel' },
+                    el('h2', {}, 'Token \u2014 ' + agent.name),
+                    el('p', { class: 'hint' }, 'Shown once. Copy it now.'),
+                    el('pre', {}, agent.token),
+                    el('button', { type: 'button', class: 'secondary',
+                        onclick: () => route(),
+                    }, 'Done')));
+                nameInput.value = '';
+                grantsInput.value = '';
+            } catch (err) {
+                createErr.append(banner(err));
+            }
+        } },
+            el('div', { class: 'field' },
+                el('label', { for: 'agent-name' }, 'Name'), nameInput),
+            el('div', { class: 'field' },
+                el('label', { for: 'agent-grants' }, 'Proxy grants'), grantsInput),
+            el('div', { class: 'action-bar' },
+                el('div', { class: 'actions' },
+                    el('button', { type: 'submit' }, 'Create')))));
+
+    append(view, [
+        crumbs(['Admin', '#/admin'], [accountName]),
+        el('div', { class: 'page-header' }, el('h1', {}, accountName)),
+        failure,
+        tokenDisplay,
+        el('div', { class: 'split' }, details, el('div', {}, agentsPanel, createForm)),
+    ]);
+}
+
 /* Read-only plus one destructive button, and the asymmetry is the API's, not
  * this screen's: creating an account and minting a token stay in the `accounts`
  * CLI, because an account that can create accounts through the API is one XSS
@@ -3015,9 +3171,8 @@ async function screenAdmin(view) {
             // it, two of them over the word "administrator" and the third over
             // nothing, and the account with the fewest rights was decorated with
             // the mark of the most. Only the screenshot showed it.
-            el('td', {}, cellName('avatar', el('span', {}, a.name),
-                // Not a link: there is no account detail screen, and no route
-                // that could fill one -- /accounts is a list and nothing else.
+            el('td', {}, cellName('avatar',
+                el('a', { href: '#/admin/' + encodeURIComponent(a.name) }, a.name),
                 [a.is_admin ? 'administrator' : null,
                  a.disabled ? 'disabled' : null].filter(Boolean).join(' \u00b7 ')
                 || null)),
