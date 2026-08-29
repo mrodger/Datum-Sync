@@ -371,8 +371,7 @@ function parseHash() {
  */
 const SCREENS = {
     dashboard:        [screenDashboard],
-    repositories:     [screenRepositories, screenRepository,
-                       (v) => portPending(v, 'Run Workspace', 4)],
+    repositories:     [screenRepositories, screenRepository, screenWorkspace],
     jobs:             [(v) => portPending(v, 'Jobs', 5)],
     schedules:        [(v) => portPending(v, 'Schedules', 6)],
     automations:      [(v) => portPending(v, 'Automations', 7)],
@@ -988,6 +987,222 @@ async function screenRepository(view, repo) {
             el('h3', {}, ws.name),
             el('p', {}, ws.description || 'No description.'),
             el('div', { class: 'meta' }, 'v', ws.version, ' \u00b7 ', when(ws.published_at))))));
+}
+
+// ---------------------------------------------------------------------------
+// run a workspace
+// ---------------------------------------------------------------------------
+
+/* One control for one published parameter, and its read().
+ *
+ * read() returns null for "the user left this alone", which readParams() turns
+ * into an absent key so the manifest default applies -- not into an empty
+ * string, which would override the default with nothing.
+ */
+function control(param) {
+    const id = 'param-' + param.name;
+    if (param.type === 'BOOLEAN') {
+        const input = el('input', { type: 'checkbox', id, checked: param.default === true });
+        return { input, read: () => input.checked };
+    }
+    if (param.type === 'LOOKUP_CHOICE') {
+        const select = el('select', { id },
+            (param.choices || []).map((c) =>
+                el('option', { value: c, selected: c === param.default }, c)));
+        return { input: select, read: () => select.value };
+    }
+    if (param.type === 'FILE') {
+        const input = el('input', { type: 'file', id });
+        return { input, file: true, read: () => input.files[0] || null };
+    }
+    if (param.type === 'INTEGER' || param.type === 'FLOAT') {
+        const input = el('input', {
+            type: 'number', id,
+            step: param.type === 'INTEGER' ? '1' : 'any',
+            value: param.default === null || param.default === undefined ? '' : param.default,
+        });
+        return {
+            input,
+            read: () => {
+                if (input.value === '') return null;
+                return param.type === 'INTEGER' ? parseInt(input.value, 10) : parseFloat(input.value);
+            },
+        };
+    }
+    const input = el('input', {
+        type: 'text', id,
+        value: param.default === null || param.default === undefined ? '' : param.default,
+    });
+    return { input, read: () => (input.value === '' ? null : input.value) };
+}
+
+/* The mockup writes the required marker as `<span class="req">*</span>` inside
+ * the label, and style.css only reaches it there (`.field .req`). A checkbox
+ * puts the input before the label; everything else after it.
+ */
+function field(param, ctl) {
+    const label = el('label', { for: 'param-' + param.name },
+        param.name, param.required ? el('span', { class: 'req' }, ' *') : null);
+    const hint = el('div', { class: 'hint' },
+        param.description || param.type.toLowerCase().replace('_', ' '));
+    return param.type === 'BOOLEAN'
+        ? el('div', { class: 'field' }, el('div', { class: 'check' }, ctl.input, label), hint)
+        : el('div', { class: 'field' }, label, ctl.input, hint);
+}
+
+/* Read a set of controls into the params object submit takes.
+ *
+ * The FILE branch keys off `instanceof File` rather than off `ctl.file`, so
+ * that the schedule forms in chunk 6 can hand back an upload id they already
+ * hold and have it pass through untouched.
+ */
+async function readParams(controls) {
+    const params = {};
+    for (const { param, ctl } of controls) {
+        const value = ctl.read();
+        if (value === null || value === undefined) {
+            if (param.required) throw new ApiError(0, 'INVALID_PARAMETER',
+                `${param.name} is required`);
+            continue;   // absent, so the manifest default applies
+        }
+        // A FILE parameter carries an upload id, never a path or the bytes:
+        // the file goes up first and the job gets the id back.
+        params[param.name] = value instanceof File ? await upload(value) : value;
+    }
+    return params;
+}
+
+async function upload(file) {
+    const body = new FormData();
+    body.append('file', file);
+    const stored = await api('/uploads', { method: 'POST', body });
+    return stored.id;
+}
+
+/* Group the parameter fields into cards, but only if the manifest grouped all
+ * of them.
+ *
+ * `group` is a display-only field -- nothing in the backend reads it, it exists
+ * so a UI can lay the form out the way the workspace author meant. v1 ignored
+ * it and rendered one flat list. The mockup's card idiom is the shape for it,
+ * so v2 uses it.
+ *
+ * Partial grouping falls back to one card. A manifest where some parameters
+ * name a group and some do not has not decided, and honouring it would file
+ * some parameters under a heading its author wrote and the rest under one
+ * invented here.
+ */
+function parameterCards(controls) {
+    const grouped = controls.length && controls.every(({ param }) => param.group);
+    if (!grouped) {
+        return [el('div', { class: 'card' },
+            el('h2', {}, 'Published Parameters'),
+            controls.map(({ param, ctl }) => field(param, ctl)))];
+    }
+    const order = [];
+    const byGroup = new Map();
+    for (const { param, ctl } of controls) {
+        if (!byGroup.has(param.group)) { order.push(param.group); byGroup.set(param.group, []); }
+        byGroup.get(param.group).push(field(param, ctl));
+    }
+    return order.map((label) => el('div', { class: 'card' },
+        el('h2', {}, label), byGroup.get(label)));
+}
+
+/* The run form.
+ *
+ * The mockup is drawn as a standalone launcher: a Workspace card holding three
+ * selects -- Repository, Workspace, Service -- above the parameters. None of
+ * the three survives, and none of them for the same reason as chunk 3's
+ * columns.
+ *
+ * Repository and Workspace are in the URL. This screen is only reachable at
+ * #/repositories/{repo}/{workspace}, so by the time it renders they are chosen.
+ * A select offering to change them is either inert or a navigation control
+ * wearing a form control's clothes, and the crumbs above already do that job.
+ *
+ * Service has nothing behind it. POST /transformations/submit/{repo}/{ws} takes
+ * `params` and an idempotency key; there is no service argument. `services` on
+ * the manifest is the list of interfaces the workspace enables, not a choice
+ * made per run -- offering it as a select would let somebody pick one and
+ * watch it be dropped.
+ *
+ * So the card keeps the heading and states the same three facts read-only,
+ * alongside the rest of the manifest. Also dropped: the header's "Workspace
+ * Actions" caret button. chunk 3's `off` is for a button that is visibly
+ * present and dead, which is right for a toolbar of four where one day some
+ * will work; a lone caret that opens no menu is just a broken menu.
+ */
+async function screenWorkspace(view, repo, name) {
+    const ws = await api(
+        `/repositories/${encodeURIComponent(repo)}/workspaces/${encodeURIComponent(name)}`);
+
+    // Filtered by the server, not here: asking for the newest 10 jobs and
+    // keeping this workspace's would show nothing whenever ten other jobs ran
+    // more recently.
+    const { items: recent } = await api('/transformations/jobs?limit=10'
+        + `&repository=${encodeURIComponent(repo)}&workspace=${encodeURIComponent(name)}`);
+
+    const controls = ws.parameters.map((p) => ({ param: p, ctl: control(p) }));
+    const status = el('div', {});
+    const run = el('button', { type: 'submit' }, icon('run', 15), ' Run');
+
+    const form = el('form', {},
+        el('div', { class: 'card' },
+            el('h2', {}, 'Workspace'),
+            el('dl', { class: 'kv' },
+                el('dt', {}, 'Repository'), el('dd', {}, repo),
+                el('dt', {}, 'Version'), el('dd', {}, ws.version),
+                el('dt', {}, 'Timeout'), el('dd', {}, ws.timeout_seconds, 's'),
+                el('dt', {}, 'Services'), el('dd', {}, ws.services.join(', ') || '\u2014'),
+                el('dt', {}, 'Outputs'),
+                el('dd', {}, ws.outputs.map((o) => o.name).join(', ') || '\u2014'),
+                el('dt', {}, 'Connections'),
+                el('dd', {}, ws.connections.map((c) => c.name).join(', ') || '\u2014'))),
+        controls.length
+            ? parameterCards(controls)
+            : el('div', { class: 'card' },
+                el('h2', {}, 'Published Parameters'),
+                el('p', { class: 'subtitle' }, 'This workspace publishes no parameters.')),
+        status,
+        el('div', { class: 'action-bar' },
+            el('div', { class: 'actions' },
+                run,
+                action('Cancel', () => go('#/repositories/' + encodeURIComponent(repo))))));
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        run.disabled = true;
+        clear(status);
+        try {
+            const params = await readParams(controls);
+            const job = await api(
+                `/transformations/submit/${encodeURIComponent(repo)}/${encodeURIComponent(name)}`,
+                { method: 'POST', json: { params } });
+            go('#/jobs/' + job.id);
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            run.disabled = false;
+        }
+    });
+
+    view.append(
+        crumbs(['Repositories', '#/repositories'],
+               [repo, '#/repositories/' + encodeURIComponent(repo)],
+               [name]),
+        el('h1', {}, name),
+        el('p', { class: 'subtitle' }, ws.description || 'No description.'),
+        form,
+        el('h2', {}, 'Recent runs'),
+        recent.length
+            ? table(['Status', 'Submitted', 'By', ''],
+                recent.map((job) => el('tr', {},
+                    el('td', {}, badge(job.status)),
+                    el('td', {}, when(job.submitted_at)),
+                    el('td', {}, job.submitted_by),
+                    el('td', {}, el('a', { href: '#/jobs/' + job.id }, 'open')))))
+            : el('div', { class: 'empty' }, 'This workspace has not been run recently.'));
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ afterwards, so a crash mid-run cannot leave a disarmed check in the tree.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import pathlib
 import subprocess
 import sys
@@ -1092,6 +1093,23 @@ CASES = [
         "action('Upload', doUpload, { off: true,",
         "tests/test_ui.py::test_no_v2_toolbar_button_is_woken_up_with_nothing_behind_it",
     ),
+    (
+        # Without it the browser's own submit runs as well: a GET on the
+        # current URL, which in an SPA is a full reload that tears down the
+        # fetch the handler just started. Whether the POST lands is a race, so
+        # the Run button either runs the workspace or does nothing, and both
+        # outcomes look like a page that merely refreshed.
+        #
+        # Only chunk 4's handler is removed -- the sign-in one at the top of
+        # the file is indented differently and stays -- so the test's `>= 2`
+        # sanity check still holds and it fails on the missing call rather than
+        # on a parser that found nothing to check.
+        "a v2 submit handler that lets the browser navigate",
+        "datum_sync/static-v2/app.js",
+        "        event.preventDefault();\n",
+        "",
+        "tests/test_ui.py::test_every_v2_submit_handler_stops_the_browser_submitting",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
@@ -1144,6 +1162,35 @@ def sweep() -> None:
     asyncio.run(_sweep())
 
 
+def drop_bytecode(path: pathlib.Path) -> None:
+    """Delete the cached .pyc for `path`, both before and after a break.
+
+    Reverting the source is not reverting the *bytecode*. CPython decides a
+    .pyc is current by comparing the source's mtime-in-whole-seconds and its
+    byte length against the header it wrote. This harness defeats both at once:
+    the break and the restore land in the same second, and a replacement is
+    routinely the same length as what it replaced.
+
+    That is not a hypothetical pairing. `    return name.encode()` and
+    `    return b"datum-sync"` are both 24 characters, so after proving the AAD
+    case the .pyc compiled from the *broken* source stayed valid indefinitely.
+    Every later run in that tree imported a `_aad()` returning a constant --
+    the connection-name binding simply absent from the running program -- while
+    `git diff` was clean, the file on disk read correctly, and even
+    `inspect.getsource` printed the good version, because it reads the .py and
+    the interpreter runs the .pyc. It surfaced as one unrelated-looking failure
+    in `test_connections.py` some minutes later.
+
+    So the harness owns this the same way it owns `sweep()`: it is the thing
+    that deliberately runs known-broken code, and clearing up after that
+    includes the artefacts CPython leaves behind.
+    """
+    if path.suffix != ".py":
+        return
+    cached = importlib.util.cache_from_source(str(path))
+    pathlib.Path(cached).unlink(missing_ok=True)
+
+
 def main() -> int:
     unproven: list[str] = []
     skipped: list[str] = []
@@ -1159,11 +1206,13 @@ def main() -> int:
             continue
 
         path.write_text(original.replace(old, new))
+        drop_bytecode(path)
         try:
             passed = run(test)
         finally:
             path.write_text(original)
             assert path.read_text() == original, f"failed to restore {relpath}"
+            drop_bytecode(path)
             sweep()
 
         if passed:

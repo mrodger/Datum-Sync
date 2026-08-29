@@ -59,9 +59,11 @@ Sized off the section banners in v1's `app.js`. Each is a commit.
 | 10 | Admin | 1943–1987 | 45 | 1 |
 
 Chunk 1 is the only one that blocks anything. After it, 2–10 are independent
-and can be done in any order, or dropped. Do them in mockup order — 2, 3, 5, 6,
-7 all have a mockup to check against; 4, 8, 9, 10 do not, and 8 is the largest
-screen in the app.
+and can be done in any order, or dropped. Do them in mockup order — 2, 3, 4, 5,
+6, 7, 8 all have a mockup to check against (`mock-run-workspace.html` and
+`mock-connections.html` are the ones easy to miss: this line used to claim 4 and
+8 had none, and was wrong on both); 9 and 10 do not, and 8 is the largest screen
+in the app.
 
 ### Chunk 0 — make v2 loadable
 
@@ -310,6 +312,87 @@ reading — chunk 5 is their test.
 run of the chunk-3 check printed the `h1` of the old screen next to the `h2` of
 the new one. Same family as the same-hash `goto()` trap above: both are checks
 that quietly assert against the previous render.
+
+### Chunk 4 — the run form
+
+Done. **It has a mockup** — `mock-run-workspace.html`. The chunk table above said
+it did not, and said the same of chunk 8, and was wrong about both; that line is
+now corrected. Working from "no mockup" would have meant inventing a layout with
+the designer's answer sitting in the directory.
+
+**All three of the mockup's selects are gone,** and, like chunk 3's columns, each
+for its own reason rather than one blanket judgement.
+
+- *Repository* and *Workspace* are in the URL. The screen only exists at
+  `#/repositories/{repo}/{workspace}`, so by the time it renders both are
+  chosen. A select offering to change them is either inert or a navigation
+  control dressed as a form control, and the crumbs directly above already do
+  that job honestly.
+- *Service* has nothing behind it. `POST /transformations/submit/{repo}/{ws}`
+  takes `params` and an idempotency key — **there is no service argument.**
+  `services` on the manifest is the list of interfaces the workspace enables,
+  not a per-run choice. Rendering it as a select would let somebody pick one and
+  watch it be silently dropped.
+
+So the card keeps its heading and states those facts read-only in a `.kv`,
+alongside the rest of the manifest.
+
+**The header's "Workspace Actions ⌄" button was dropped outright, not made
+`off`.** That is a deliberate split from chunk 3, where four dead toolbar buttons
+are rendered visibly disabled. A toolbar of four where some will work one day
+reads as a toolbar with work outstanding. A lone caret that opens no menu does
+not read as unfinished — it reads as a broken menu.
+
+**`group` is a display-only field, and v2 uses it.** `grep` finds it exactly once
+in the backend, at `manifest.py:55`; nothing reads it. It exists so a UI can lay
+the form out the way the workspace author meant, and the mockup's card idiom is
+the shape for it, so there is one card per group. **Partial grouping falls back
+to a single card.** A manifest where some parameters name a group and some do not
+has not decided, and honouring it would file half the parameters under a heading
+its author wrote and the rest under one invented here.
+
+**The stacked cards share borders — and so do the mockup's.** `.card` has no
+bottom margin and `.view` has no child-spacing rule, so consecutive cards butt
+together. That looks like a porting mistake and is not: rendering
+`mock-run-workspace.html` shows its own two cards doing exactly the same. Checked
+by opening it over `file://`, because **the mockups 401 over HTTP** — chunk 0's
+mount serves the shell's own assets and nothing else.
+
+**The HTML `required` attribute was considered and declined.** It would give
+native field-anchored validation for free, but it moves the gate into the browser
+and leaves `readParams()`' own required check unexercised from this screen — and
+chunk 6's schedule forms do not go through a form submit at all. One gate, in the
+place every caller shares. v1's banner behaviour is kept; it names the parameter.
+
+**A browser check that submits a real job leaves the pytest suite skipping 20
+tests.** No worker runs on the dev instance, so the job sits `queued`, and
+`conftest.py` refuses every db test while a live job it does not own is in
+flight — correctly, since `claim()` acts on the whole queue. The suite went from
+30 passed to `11 passed, 20 skipped`, and each skip names the queue rather than
+anything the checker did. Same family as chunk 7's "reverted the source but not
+the rows": the acceptance script now cancels its own job before it exits.
+
+**The harness disarmed a guard by leaving stale bytecode behind, and it took a
+security test with it.** `break_the_guard.py` reverts the source it breaks, but
+CPython decides a `.pyc` is current from the source's mtime *in whole seconds*
+and its byte length. The break and the restore land in the same second, and
+`    return name.encode()` and `    return b"datum-sync"` are both 24 characters
+— so after proving the AAD case, the `.pyc` compiled from the *broken* crypto
+stayed valid indefinitely. Every later run imported an `_aad()` returning a
+constant: the connection-name binding simply absent from the running program,
+sealed secrets portable between rows again, while `git diff` was clean, the file
+on disk read correctly, and **`inspect.getsource` printed the good version**,
+because it reads the `.py` while the interpreter runs the `.pyc`. It surfaced as
+one unrelated-looking failure in `test_connections.py` during this chunk's full
+run. `drop_bytecode()` now clears the cache on both writes.
+
+New guard: `test_every_v2_submit_handler_stops_the_browser_submitting`. Without
+`preventDefault()` the browser's own submit runs too — a GET on the current URL,
+which in an SPA is a full reload that tears down the fetch the handler just
+started. Whether the POST lands is a race, so Run either runs the workspace or
+does nothing, and both outcomes look like a page that merely refreshed. Checked
+once over every submit listener in the file, because chunks 6 and 8 add more
+forms and there is one form-level rule. 102 cases now, all proven.
 
 ## Verifying a chunk
 

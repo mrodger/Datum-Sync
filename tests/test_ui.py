@@ -339,6 +339,33 @@ async def test_no_v2_toolbar_button_is_woken_up_with_nothing_behind_it():
 
 
 @pytest.mark.asyncio
+async def test_every_v2_submit_handler_stops_the_browser_submitting():
+    """A submit handler that does not preventDefault loses the whole request.
+
+    The browser's own submit runs: it serialises the form into a GET on the
+    current URL and navigates. In an SPA that is a full reload -- the page
+    comes back looking almost right, freshly signed in, on the same screen --
+    while the fetch the handler started is torn down mid-flight. Whether the
+    POST reached the server at all is a race, so the same button either runs
+    the workspace or does nothing, depending on timing, and either way it looks
+    like a page that merely refreshed.
+
+    Chunk 4 is the first v2 screen with a form; the schedule and connection
+    forms in chunks 6 and 8 are the same shape. There is one form-level rule,
+    so it is checked once, over every submit listener in the file.
+    """
+    code = (STATIC_V2_DIR / "app.js").read_text()
+    # Each handler body, from the listener up to the closing `});` at column 0
+    # of its own statement -- enough to see whether preventDefault is in it.
+    handlers = re.findall(
+        r"addEventListener\('submit',[^\n]*\n(.*?)\n\s*\}\);", code, re.S)
+    assert len(handlers) >= 2, f"only found {len(handlers)} submit handlers; parser drifted"
+    for body in handlers:
+        assert "preventDefault()" in body, \
+            "a submit handler lets the browser navigate: " + body.strip()[:80]
+
+
+@pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
     """Same property as the v1 mount, and it has to be asserted separately:
     the two are separate StaticFiles instances under separate prefixes, and
