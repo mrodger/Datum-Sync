@@ -372,7 +372,7 @@ function parseHash() {
 const SCREENS = {
     dashboard:        [screenDashboard],
     repositories:     [screenRepositories, screenRepository, screenWorkspace],
-    jobs:             [(v) => portPending(v, 'Jobs', 5)],
+    jobs:             [screenJobs, screenJob],
     schedules:        [(v) => portPending(v, 'Schedules', 6)],
     automations:      [(v) => portPending(v, 'Automations', 7)],
     connections:      [(v) => portPending(v, 'Connections', 8)],
@@ -697,10 +697,15 @@ function pagerBar(total, perPage) {
  * `generation` -- a screen that has been navigated away from is detached, and
  * table.js's own fallback would then find the live screen's toolbar instead
  * and quietly wire a dead table to it.
+ *
+ * Returns table.js's handle, whose `selection()` gives the ticked rows' keys --
+ * a key being the row's index in the array the table was built from. Only the
+ * jobs list needs it so far; every other caller ignores it.
  */
 function mountTable(scope) {
     const el_ = scope.querySelector('table');
-    if (el_ && window.initTable) window.initTable(el_, scope);
+    if (!el_ || !window.initTable) return null;
+    return window.initTable(el_, scope) || null;
 }
 
 /* Horizontal tab strip matching Flow's page-level tab chrome.
@@ -1203,6 +1208,366 @@ async function screenWorkspace(view, repo, name) {
                     el('td', {}, job.submitted_by),
                     el('td', {}, el('a', { href: '#/jobs/' + job.id }, 'open')))))
             : el('div', { class: 'empty' }, 'This workspace has not been run recently.'));
+}
+
+// ---------------------------------------------------------------------------
+// jobs
+// ---------------------------------------------------------------------------
+
+/* A job that will never move again. Used twice: to decide whether the list
+ * repolls, and to decide whether the detail screen offers Resubmit or Cancel.
+ * v1 has the same constant for the same two reasons. */
+const TERMINAL = ['complete', 'failed', 'cancelled'];
+
+/* Flow's Jobs tabs. The mockup's fourth is "Dashboards", which is a Flow
+ * feature and not a job status -- as a filter it would either 400 (it is not
+ * in JOB_STATUSES) or silently show everything. v1's "All" is kept instead:
+ * same position, same shape, and it means something here.
+ */
+const JOB_TABS = [
+    { id: 'complete', label: 'Completed', href: '#/jobs?status=complete' },
+    { id: 'queued',   label: 'Queued',    href: '#/jobs?status=queued'   },
+    { id: 'running',  label: 'Running',   href: '#/jobs?status=running'  },
+    { id: '',         label: 'All',       href: '#/jobs'                 },
+];
+
+async function screenJobs(view) {
+    const filter = hashQuery().get('status') || '';
+    const query = filter ? '?status=' + encodeURIComponent(filter) : '';
+    const { items } = await api('/transformations/jobs' + query);
+
+    view.append(el('h1', {}, 'Jobs'));
+    view.append(pageTabs(JOB_TABS, filter));
+
+    /* Cancel is wired; Remove is not, and the difference is that one of them
+     * has a route. DELETE on a job cancels it -- there is nothing anywhere
+     * under /transformations/jobs that deletes the row -- so a working Remove
+     * would either be a second Cancel under a name that promises more, or a
+     * button that reports success and leaves the row there. `off`, per the
+     * note on action(): a `needs` button lights up the moment a row is ticked,
+     * whoever built it disabled.
+     *
+     * "Run Workspace" is the mockup's primary and goes where the run form
+     * chunk 4 built lives. It cannot go straight to the form -- that URL names
+     * a repository and a workspace, and this screen knows neither -- so it
+     * goes to the list you pick them from.
+     */
+    const bar = actionBar(view, null, {
+        search: 'Search jobs by workspace or user',
+        actions: [
+            action('Run Workspace', () => go('#/repositories'), { primary: true }),
+            action('Cancel', () => cancelSelected(), { needs: 'many' }),
+            action('Remove', null, { off: true, title: 'Jobs are cancelled, not deleted' }),
+        ],
+    });
+
+    if (!items.length) {
+        // The bar stays: its search and its Run Workspace button are still the
+        // right things to offer, and a page with only a heading on it reads as
+        // a screen that failed rather than a queue that is empty.
+        view.append(el('div', { class: 'empty' },
+            'No jobs', filter ? ' with this status.' : ' yet.'));
+        return;
+    }
+
+    const rows = items.map((job) => el('tr', {},
+        rowCheck('job ' + job.id.slice(0, 8)),
+        // Short id, because a job id here is a UUID and the mockup's column is
+        // sized for Flow's four-digit integers. Eight hex characters is what
+        // the crumb on the detail screen already shows, so the two agree.
+        el('td', {}, el('a', { href: '#/jobs/' + job.id }, job.id.slice(0, 8))),
+        el('td', {}, badge(job.status)),
+        // The workspace cell links to the WORKSPACE, not to the job -- that is
+        // the mockup's href and it is the useful one, since the job is one
+        // click away in the first column and its run form is not reachable
+        // from anywhere else on this page.
+        el('td', {}, cellName('workspaces',
+            el('a', {
+                href: '#/repositories/' + encodeURIComponent(job.repository)
+                    + '/' + encodeURIComponent(job.workspace),
+            }, job.workspace),
+            job.repository)),
+        el('td', {}, job.submitted_by),
+        el('td', {}, duration(job.started_at, job.completed_at))));
+
+    /* No column starts sorted, where the mockup starts on Job descending.
+     * Flow's job ids are integers and sorting them backwards is "newest
+     * first"; ours are UUIDs, so the same sort is alphabetical over random
+     * hex -- an arbitrary order presented as a meaningful one. Left unsorted,
+     * table.js preserves the order the response arrived in, and the endpoint
+     * already returns `ORDER BY submitted_at DESC`. The rows are newest-first
+     * either way; only this way is it true.
+     *
+     * Duration is not sortable for the same reason in miniature: the cell is
+     * text from duration(), so "2m 5s" sorts before "30s".
+     */
+    view.append(table([
+        'Job',
+        { label: 'Status', sortable: true },
+        { label: 'Workspace', sortable: true },
+        { label: 'Requested by', sortable: true },
+        'Duration',
+    ], rows, { select: true }));
+    view.append(pagerBar(items.length));
+    const handle = mountTable(view);
+
+    /* Cancel every ticked job, then re-route to show what happened.
+     *
+     * Terminal jobs are not filtered out. jobs.cancel() reads the row and
+     * returns its status untouched when there is nothing to stop, so sending
+     * them is safe; filtering here would mean writing a second copy of the
+     * "can this still be cancelled?" rule in the client, where it would be one
+     * status name away from disagreeing with the server's.
+     */
+    async function cancelSelected() {
+        if (!handle) return;
+        const chosen = handle.selection().map((key) => items[Number(key)]).filter(Boolean);
+        await Promise.all(chosen.map((job) =>
+            api('/transformations/jobs/id/' + encodeURIComponent(job.id), { method: 'DELETE' })));
+        route();
+    }
+
+    // Only while something is moving. A finished queue is not repolled, and
+    // the timer is handed back so it does not outlive the screen and call
+    // route() from whatever page the reader navigated to.
+    if (items.some((j) => j.status === 'queued' || j.status === 'running')) {
+        /* Skipped while rows are ticked. v1 could repoll unconditionally
+         * because its jobs list had nothing to lose; this one does. route()
+         * rebuilds the screen, which builds a new table, which starts with an
+         * empty selection -- so a reader who ticks four rows and reaches for
+         * Cancel has under four seconds to get there, and beats it or does not
+         * depending on when they arrived. Worse, the failure is invisible:
+         * the tick marks vanish at the same moment the rows are redrawn, so it
+         * reads as the page refreshing rather than as their selection being
+         * thrown away.
+         *
+         * And it lands precisely where it does the most damage. A list only
+         * repolls when something on it is queued or running, which is to say
+         * on the Queued and Running tabs -- the two where Cancel is the reason
+         * you are on the page at all.
+         *
+         * Waiting is the right resolution rather than merely the easy one: a
+         * reader with a selection has stopped watching the queue and started
+         * acting on it, and the rows they ticked are by definition rows they
+         * have already seen. Nothing is missed, only deferred, and it resumes
+         * by itself the moment the selection is cleared or spent.
+         */
+        let timer = null;
+        const poll = () => {
+            if (handle && handle.selection().length) {
+                timer = setTimeout(poll, 4000);
+                return;
+            }
+            route();
+        };
+        timer = setTimeout(poll, 4000);
+        return () => clearTimeout(timer);
+    }
+}
+
+async function screenJob(view, id) {
+    const job = await api('/transformations/jobs/id/' + encodeURIComponent(id));
+
+    const statusCell = el('dd', {}, badge(job.status));
+    // Held, not inlined: a status arriving over SSE moves these too. Rendering
+    // them once from the first fetch left a job reading COMPLETE with no finish
+    // time, forever, which is how this was found in v1.
+    const startedCell = el('dd', {}, when(job.started_at));
+    const finishedCell = el('dd', {}, when(job.completed_at));
+    const artifacts = el('dd', {});
+    const log = el('div', { class: 'log' });
+
+    /* Progress is announced but never stored -- datum_sync/jobs.py says why --
+     * so there is nothing to draw this from on load. It appears when the first
+     * report arrives and is absent again after a reload mid-run. Hidden until
+     * then rather than shown at 0%, which would claim knowledge of a job that
+     * may report nothing at all.
+     *
+     * It sits inside the Log panel, which is the mockup's placement and not
+     * v1's. Progress is a summary of the same stream the log below it is
+     * printing, and in the Details panel it read as another property of the
+     * job, next to Submitted and Artifacts, rather than as the thing moving.
+     */
+    const progressFill = el('div', { class: 'fill', style: 'width:0%' });
+    const progressText = el('span', {});
+    const progressPct = el('span', {});
+    const progress = el('div', { class: 'progress', hidden: true },
+        el('div', { class: 'track' }, progressFill),
+        el('div', { class: 'caption' }, progressText, progressPct));
+
+    // v2 puts the actions in the page header beside the h1, where the mockup
+    // has them, rather than under the details list.
+    const actions = el('div', { class: 'actions' });
+
+    function showArtifacts(list) {
+        clear(artifacts);
+        if (!list || !list.length) return void artifacts.append('\u2014');
+        for (const a of list) {
+            artifacts.append(el('div', {}, el('a', {
+                href: `/rest/v1/transformations/jobs/id/${encodeURIComponent(job.id)}`
+                    + `/artifacts/${encodeURIComponent(a.name)}`,
+                download: '',
+            }, a.name), ' ', el('span', { class: 'hint' }, a.type)));
+        }
+    }
+
+    /* One button, not the mockup's two -- and that is not a divergence:
+     * tools/gen_mockups.py's own comment on screen_job() says both are drawn
+     * only to pin their geometry, and that "showActions() swaps them on the
+     * terminal states". A job is either still going or it is not, and offering
+     * Cancel on a finished one is an offer that cannot be honoured.
+     */
+    function showActions(status) {
+        clear(actions);
+        if (TERMINAL.includes(status)) {
+            actions.append(el('button', {
+                type: 'button',
+                class: 'secondary',
+                onclick: async () => {
+                    const next = await api(
+                        `/transformations/jobs/id/${encodeURIComponent(job.id)}/resubmit`,
+                        { method: 'POST' });
+                    go('#/jobs/' + next.id);
+                },
+            }, icon('refresh', 15), ' Resubmit'));
+        } else {
+            actions.append(el('button', {
+                type: 'button',
+                class: 'danger',
+                onclick: async (event) => {
+                    event.target.disabled = true;
+                    await api('/transformations/jobs/id/' + encodeURIComponent(job.id),
+                        { method: 'DELETE' });
+                },
+            }, 'Cancel'));
+        }
+    }
+
+    showArtifacts(job.artifacts);
+    showActions(job.status);
+
+    const error = el('div', {});
+    function showError(message) {
+        clear(error);
+        if (message) error.append(el('div', { class: 'banner' }, message));
+    }
+    showError(job.error);
+
+    /* Where the mockup has "Engine". There is no engine column on the jobs
+     * table and no engine field in the response -- the mockup's "engine-2" is
+     * an invented value, and porting it would mean printing a made-up worker
+     * name on a page people read to find out what actually ran.
+     *
+     * `triggered_by` and `parent_job` are real, are returned, and were shown
+     * nowhere in v1. api.py calls triggered_by the thing "the UI's 'why did
+     * this run?'" reads, so this is that place: a job that a schedule or an
+     * automation started says so, and a resubmission links back to the run it
+     * came from. Both are absent on a job somebody submitted by hand, and the
+     * rows are omitted rather than dashed -- an em-dash next to "Triggered by"
+     * invites the question of what the missing trigger was.
+     */
+    const kv = el('dl', { class: 'kv' },
+        el('dt', {}, 'Status'), statusCell,
+        el('dt', {}, 'Workspace'),
+        el('dd', {}, el('a', {
+            href: '#/repositories/' + encodeURIComponent(job.repository)
+                + '/' + encodeURIComponent(job.workspace),
+        }, job.repository + '/' + job.workspace)),
+        el('dt', {}, 'Requested by'), el('dd', {}, job.submitted_by),
+        job.triggered_by ? el('dt', {}, 'Triggered by') : null,
+        job.triggered_by ? el('dd', {}, job.triggered_by) : null,
+        job.parent_job ? el('dt', {}, 'Resubmitted from') : null,
+        job.parent_job
+            ? el('dd', {}, el('a', { href: '#/jobs/' + job.parent_job },
+                String(job.parent_job).slice(0, 8)))
+            : null,
+        el('dt', {}, 'Submitted'), el('dd', {}, when(job.submitted_at)),
+        el('dt', {}, 'Started'), startedCell,
+        el('dt', {}, 'Finished'), finishedCell,
+        /* min-width:0 is not decoration, and it is not a style.css edit by the
+         * back door. `.kv dd` already declares `overflow-wrap: break-word` --
+         * the designer's answer to a long value is "wrap it" -- but the rule
+         * cannot fire here: `.kv` is a grid, a grid item's default min-width is
+         * `auto` (= min-content), and overflow-wrap does not shrink min-content.
+         * So the track widens to fit whichever value is longest and the panel
+         * overflows instead of the text wrapping. Measured on the live page:
+         * this dd was 497px inside a 369px panel, and 234px with min-width:0.
+         *
+         * Only this row carries it because only this row holds something the
+         * user did not write: every other value is a name, a timestamp or a
+         * short id, while params is a machine-serialised blob whose length is
+         * unbounded. Setting it on the grid would change every kv on every
+         * screen to fix one of them.
+         */
+        el('dt', {}, 'Parameters'),
+        el('dd', { style: 'min-width:0' }, JSON.stringify(job.params)),
+        el('dt', {}, 'Artifacts'), artifacts);
+
+    view.append(
+        crumbs(['Jobs', '#/jobs'], [job.id.slice(0, 8)]),
+        el('div', { class: 'page-header' },
+            el('h1', {}, 'Job ', job.id.slice(0, 8)),
+            actions),
+        error,
+        el('div', { class: 'split' },
+            el('div', { class: 'panel' }, el('h2', {}, 'Log'), progress, log),
+            el('div', { class: 'panel' }, el('h2', {}, 'Details'), kv)));
+
+    /* The log arrives over SSE, not by polling. EventSource cannot set an
+     * Authorization header, which is the other reason the session cookie
+     * exists -- /rest/v1/ accepts it, so this stream authenticates the same
+     * way every other request on the page does. */
+    const stream = new EventSource(
+        `/rest/v1/transformations/jobs/id/${encodeURIComponent(job.id)}/events`,
+        { withCredentials: true });
+
+    stream.addEventListener('log', (event) => {
+        const entry = JSON.parse(event.data);
+        const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+        // Appended with nothing between the elements: .log is white-space:
+        // pre-wrap, so a text node carrying a newline would paint as a blank
+        // line between every pair of entries. mock-job.html says the same.
+        log.append(el('div', { class: entry.level },
+            el('span', { class: 'lvl' }, entry.level), entry.message));
+        // Follow the tail only if the reader is already at it; scrolling back
+        // to read something should not be undone by the next line.
+        if (atBottom) log.scrollTop = log.scrollHeight;
+    });
+
+    stream.addEventListener('progress', (event) => {
+        const update = JSON.parse(event.data);
+        // `pct` is a fraction, 0.0 to 1.0, whatever its name says -- that is
+        // what spec/workspace-contract.md publishes and what every workspace
+        // emits, so it is the name that is wrong and the name is the contract.
+        // Clamped because the number comes from workspace code we do not own.
+        const fraction = Number(update.pct);
+        if (!Number.isFinite(fraction)) return;
+        const percent = Math.max(0, Math.min(100, fraction * 100));
+        progress.hidden = false;
+        progressFill.style.width = percent + '%';
+        clear(progressText).append(update.message || '');
+        clear(progressPct).append(Math.round(percent) + '%');
+    });
+
+    stream.addEventListener('status', (event) => {
+        const update = JSON.parse(event.data);
+        // A finished job has no progress to show, and leaving the bar at
+        // whatever the last report happened to be says 87% next to COMPLETE.
+        if (TERMINAL.includes(update.status)) progress.hidden = true;
+        clear(statusCell).append(badge(update.status));
+        clear(startedCell).append(when(update.started_at));
+        clear(finishedCell).append(when(update.completed_at));
+        showActions(update.status);
+        showError(update.error);
+        if (update.artifacts) showArtifacts(update.artifacts);
+        refreshEngines();
+    });
+
+    // The server closes the stream when the job reaches a terminal status;
+    // the browser would then reconnect on a loop. Nothing further is coming.
+    stream.addEventListener('error', () => stream.close());
+
+    return () => stream.close();
 }
 
 // ---------------------------------------------------------------------------

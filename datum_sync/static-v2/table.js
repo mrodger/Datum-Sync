@@ -268,6 +268,21 @@
         }
 
         render();
+
+        /* The mockups ignore this; app.js needs it, and reading the DOM is not
+           a substitute. Only the CURRENT PAGE's rows are in the tbody -- render()
+           replaces its contents on every change -- while `selected` deliberately
+           survives paging (decision 2). Counting checked boxes would therefore
+           give a toolbar that says "3 selected" and a Cancel that cancels none
+           of them the moment the reader turns the page, which is the same class
+           of bug as acting on rows nobody can see.
+
+           Keys, not rows: a key is the row's original index, so the caller maps
+           straight back into the array it built the table from. Returning the
+           <tr>s would hand out nodes that are about to be re-parented. */
+        return {
+            selection: function () { return Array.from(selected); },
+        };
     }
 
     /* The mockups are static: every table they have is in the DOM at load, so

@@ -365,6 +365,79 @@ async def test_every_v2_submit_handler_stops_the_browser_submitting():
             "a submit handler lets the browser navigate: " + body.strip()[:80]
 
 
+def _brace_body(src: str, at: int) -> str:
+    """The `{ ... }` block starting at or after `at`, brace-matched."""
+    start = src.index("{", at)
+    depth, i = 0, start
+    while i < len(src):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:i + 1]
+        i += 1
+    raise AssertionError("unbalanced braces from offset %d" % at)
+
+
+@pytest.mark.asyncio
+async def test_no_v2_list_repolls_itself_out_from_under_a_selection():
+    """A repoll on a screen with a table throws the reader's selection away.
+
+    The two features are innocent apart and hostile together. A live list
+    repolls by calling route(), which is a full rebuild -- new container, new
+    rows, a new table.js instance whose `selected` Set starts empty. A table
+    with tick boxes puts a selection in front of the reader and a toolbar that
+    acts on it. Put both on one screen and the reader has one timer period to
+    tick their rows and press the button, and beats it or does not depending on
+    when in the cycle they arrived.
+
+    What makes it worth a test rather than a comment is that it does not look
+    like a bug. The ticks disappear at the same instant the rows redraw, so it
+    reads as the page refreshing, and the toolbar greys out again as if nothing
+    had been chosen. Nobody reports it; they tick the rows again.
+
+    It also lands where it hurts most. A list only repolls when something on it
+    is unfinished, which on the jobs screen means the Queued and Running tabs
+    -- the two where Cancel is the reason you opened the page.
+
+    So: in a screen that hands its table to table.js, a timer that re-routes
+    must consult the selection first. Screens whose table has no tick boxes are
+    not subject to it and are not listed here -- the dashboard's five-row table
+    is deliberately never passed to mountTable(), so it has no selection to
+    lose and repolls freely.
+    """
+    code = (STATIC_V2_DIR / "app.js").read_text()
+
+    screens = [(m.group(1), m.start()) for m in
+               re.finditer(r"^async function (screen\w+)\(", code, re.M)]
+    assert len(screens) >= 6, f"only found {len(screens)} screens; parser drifted"
+    bounds = [(name, at, screens[i + 1][1] if i + 1 < len(screens) else len(code))
+              for i, (name, at) in enumerate(screens)]
+
+    checked = 0
+    for name, at, end in bounds:
+        body = code[at:end]
+        # A real call, not a mention. screenDashboard's own comment says its
+        # table is "Not handed to mountTable()", and a substring test reads
+        # that as the opposite of what it says.
+        if not re.search(r"^\s*(?:const \w+ = )?mountTable\(", body, re.M):
+            continue
+        for call in re.finditer(r"setTimeout\(\s*([A-Za-z_$][\w$]*)\s*,", body):
+            cb = call.group(1)
+            checked += 1
+            assert cb != "route", (
+                f"{name} repolls straight into route() on a timer, over a table "
+                "whose selection that rebuild discards")
+            defn = re.search(r"\b(?:const|let|var)\s+" + re.escape(cb) + r"\s*=", body)
+            assert defn, f"{name}: cannot find the definition of timer callback {cb!r}"
+            assert "selection()" in _brace_body(body, defn.end()), (
+                f"{name}: timer callback {cb!r} re-routes without consulting the "
+                "selection, so a reader's ticked rows are thrown away mid-click")
+
+    assert checked, "no timer on a selectable list was found; the rule matched nothing"
+
+
 @pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
     """Same property as the v1 mount, and it has to be asserted separately:

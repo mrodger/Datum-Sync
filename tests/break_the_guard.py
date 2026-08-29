@@ -1110,6 +1110,24 @@ CASES = [
         "",
         "tests/test_ui.py::test_every_v2_submit_handler_stops_the_browser_submitting",
     ),
+    (
+        # v1's jobs list repolled straight into route() and lost nothing by it,
+        # because v1's list had no selection. Chunk 5 gave it tick boxes and a
+        # bulk Cancel, and the same timer now rebuilds the table -- and with it
+        # a fresh, empty `selected` -- every four seconds. The break restores
+        # exactly v1's line, which is why it is worth testing: it is not a typo
+        # anyone would write, it is the code that was correct until the screen
+        # around it changed.
+        "a live list that repolls over a selection",
+        "datum_sync/static-v2/app.js",
+        "            if (handle && handle.selection().length) {\n"
+        "                timer = setTimeout(poll, 4000);\n"
+        "                return;\n"
+        "            }\n"
+        "            route();\n",
+        "            route();\n",
+        "tests/test_ui.py::test_no_v2_list_repolls_itself_out_from_under_a_selection",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

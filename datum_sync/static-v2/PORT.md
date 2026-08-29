@@ -394,6 +394,97 @@ does nothing, and both outcomes look like a page that merely refreshed. Checked
 once over every submit listener in the file, because chunks 6 and 8 add more
 forms and there is one form-level rule. 102 cases now, all proven.
 
+### Chunk 5 — jobs, and the log stream
+
+Done. Two screens and a live connection: `mock-jobs.html`, `mock-job.html`, and
+the SSE stream behind `#/jobs/{id}`.
+
+**`table.js` gained one line of public surface, and this is the chunk that
+needed it.** The mockups never ask a table what is selected — they have no
+handlers — so `initTable` kept `selected` private and exported nothing.
+A bulk Cancel has to know. **Reading the DOM back is not the substitute it
+looks like:** `render()` replaces the tbody on every change, so only the
+*current page's* rows are in it, while `selected` deliberately survives paging.
+Counting checked boxes would give a toolbar reading "3 selected" over a Cancel
+that cancels none of them the moment the reader turns the page — the same class
+of bug as acting on rows nobody can see, which is the hazard the module's own
+decision (2) was written to avoid. `initTable` now returns
+`{ selection() }`, keys not rows: a key is the row's original index, so the
+caller maps straight back into the array it built the table from. The mockups
+ignore the return value, so they still adopt the file unchanged.
+
+**Remove is `off`; Cancel is live.** Not one judgement applied twice — `grep`
+over `api.py` finds no route that deletes a job row at all, while
+`DELETE /transformations/jobs/id/{id}` is cancel and exists. A job's history is
+the point of the screen.
+
+**A mixed selection is sent to the server as-is.** `jobs.cancel()` reads the row
+and returns its status untouched when there is nothing to stop, so a terminal
+job in the selection is a no-op. Filtering them out in the client would be a
+second copy of the "can this still be cancelled?" rule, one status name away
+from disagreeing with the one that decides.
+
+**The mockup's fourth tab is "Dashboards", and v1's "All" is kept instead.**
+Dashboards is a Flow feature, not a job status: as a filter it would either 400
+— it is not in `JOB_STATUSES` — or silently show everything. Same position,
+same shape, and it means something here.
+
+**No column starts sorted, and Duration does not sort at all.** The mockup ships
+Job descending, which in Flow is newest-first because Flow's job ids are
+integers. Ours are UUIDs, so the same sort is alphabetical over random hex —
+a deterministic scramble presented as an order. The list arrives
+`ORDER BY submitted_at DESC` and is left that way. Duration is text from
+`duration()`, so sorting it would put "2m 5s" before "30s".
+
+**The mockup's Engine row is fiction.** There is no engine column on the `jobs`
+table and no engine field in `_job_json`. It is replaced with `Triggered by` and
+`Resubmitted from`, which are real, are returned, and were shown nowhere in v1 —
+each omitted entirely when absent rather than rendered as an em-dash.
+
+**`min-width: 0` on the Parameters value is not a style.css edit by the back
+door.** `.kv dd` already declares `overflow-wrap: break-word` — the designer's
+answer to a long value is "wrap it" — but the rule cannot fire: `.kv` is a grid,
+a grid item's default min-width is `auto` (= min-content), and `overflow-wrap`
+does not shrink min-content. So the track widens to the longest value and the
+panel overflows instead of the text wrapping. Measured on the live page: that dd
+was **497px inside a 369px panel, and 234px with `min-width:0`**. It is set on
+that row alone because it is the only value the user did not write; every other
+one is a name, a timestamp or a short id, while `params` is a serialised blob of
+unbounded length. v1 rendered the same blob and never saw this — v1's kv is
+full-width.
+
+**The SSE stream was proven without a worker.** Nothing runs on the dev
+instance, so no log line ever arrives and the obvious check is untestable. But
+`jobs.cancel()` notifies `status` on the same channel, so cancelling from the
+detail page is a real round trip through the `EventSource`: the badge went
+QUEUED → CANCELLED, the button swapped Cancel → Resubmit, Finished filled in,
+and the acceptance script asserts **zero frame navigations**, which is what
+separates the stream doing the work from a page that reloaded.
+
+**The defect this chunk introduced was found by writing the test, not by reading
+the code — and my own acceptance script had it too.** v1's jobs list repolled
+straight into `route()` every four seconds and lost nothing by it, because v1's
+list had no selection. Chunk 5 gave it tick boxes and a bulk Cancel, and the
+same timer now rebuilds the screen, the table, and with it a fresh empty
+`selected`. A reader has under four seconds to tick their rows and press the
+button. **It does not look like a bug:** the ticks vanish at the same instant the
+rows redraw, so it reads as the page refreshing, and the toolbar greys out again
+as if nothing had been chosen — nobody reports it, they tick the rows again. And
+it lands where it hurts most: a list only repolls when something on it is
+unfinished, which means the Queued and Running tabs, the two where Cancel is the
+reason you opened the page. The poll now defers while a selection is held.
+Waiting is the right resolution and not merely the easy one — a reader with a
+selection has stopped watching the queue and started acting on it, and the rows
+they ticked are by definition rows they have already seen. Nothing is missed,
+only deferred, and it resumes by itself.
+
+New guard: `test_no_v2_list_repolls_itself_out_from_under_a_selection`. In a
+screen that hands its table to `table.js`, a timer that re-routes must consult
+the selection first. **Its first version failed on `screenDashboard`, whose own
+comment says its table is "Not handed to `mountTable()`"** — a substring test
+read that sentence as the opposite of what it says, so the rule now matches a
+call, not a mention. 103 cases now, all proven.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers
