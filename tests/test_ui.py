@@ -498,7 +498,12 @@ def _call_args(src: str, open_paren: int) -> list[str]:
     depth, args, cur, i, n = 0, [], [], open_paren, len(src)
     while i < n:
         c = src[i]
-        if src.startswith("//", i):
+        # A regex literal ending in an escaped slash closes on `\//`, and
+        # reading that as a comment swallows the rest of the line including the
+        # closing parens -- which surfaces as "unbalanced call" pointing at the
+        # start of the call, naming neither the regex nor the line it is on.
+        # Chunk 9's `.replace(/^service\//, '')` is the first one to reach here.
+        if src.startswith("//", i) and src[i - 1] != "\\":
             i = src.index("\n", i)
         elif src.startswith("/*", i):
             i = src.index("*/", i) + 2
@@ -640,6 +645,43 @@ def test_every_v2_form_label_names_its_control():
     assert not missing, (
         "a form label points at an id no input, select or textarea carries, so "
         "the label is inert and the control is unnamed: " + ", ".join(missing))
+
+
+def test_every_v2_new_window_link_disowns_its_opener():
+    """A `target="_blank"` without `rel="noopener"` hands the new page a live
+    handle on this one.
+
+    `window.opener` lets the opened document navigate its opener --
+    `opener.location = ...` -- so a link out is enough to replace the
+    application behind the reader's back with something that looks like the
+    sign-in screen. Current browsers imply noopener for `target=_blank`, which
+    is exactly what makes this worth pinning: it works, and it goes on working
+    right up until the page is opened in something that does not.
+
+    Chunk 9 is where it stops being hypothetical. The docs link on the
+    dashboard goes to a page this repository ships; a hosted service is a
+    directory some workspace built, served same-origin from `/serve/{name}/`,
+    and it is the one thing in the UI whose contents nobody here wrote.
+
+    The rule is cheap and absolute -- there is no link for which handing over
+    the opener is the point -- so it is asserted on the attribute rather than
+    on a list of trusted destinations.
+    """
+    src = (STATIC_V2_DIR / "app.js").read_text()
+
+    # Anchored on the whole attribute object, so a `rel` on some other element
+    # three lines away cannot satisfy the link that needs it.
+    objects = re.findall(r"el\('a',\s*\{([^}]*)\}", src)
+    assert len(objects) >= 12, f"only found {len(objects)} anchors; the parser drifted"
+
+    blank = [o for o in objects if "'_blank'" in o]
+    assert len(blank) >= 2, (
+        f"only found {len(blank)} new-window links; the rule matched nothing "
+        "it could fail on")
+    for attrs in blank:
+        assert "noopener" in attrs, (
+            "a link opens a new window still holding window.opener, so the "
+            "opened page can navigate this one: el('a', {" + attrs + "}")
 
 
 @pytest.mark.asyncio

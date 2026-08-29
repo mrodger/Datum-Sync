@@ -376,7 +376,7 @@ const SCREENS = {
     schedules:        [screenSchedules, screenSchedule],
     automations:      [screenAutomations, screenAutomation],
     connections:      [screenConnections, screenConnection],
-    services:         [(v) => portPending(v, 'Services', 9)],
+    services:         [screenServices],
     admin:            [(v) => portPending(v, 'Admin', 10)],
     // stub sections — visible in the nav, no backend
     notifications:    [(v) => stubScreen(v, 'Notifications')],
@@ -2788,6 +2788,87 @@ async function screenConnection(view, name) {
             ? el('div', { class: 'split' }, connectionForm(c), details)
             : details,
     ]);
+}
+
+// ---------------------------------------------------------------------------
+// services
+// ---------------------------------------------------------------------------
+
+/* The one read-only list in the port, and it is read-only at the API too:
+ * `/rest/v1/services` is a GET and nothing else. A service is registered by
+ * `services.register()` when a job completes with a `service/*` artifact the
+ * publish gate approved, so there is no route that creates one and none that
+ * deletes one. That is why this screen has no toolbar actions and no row
+ * checkboxes -- every other v2 list has both, and adding them here would put
+ * a Remove button on top of a resource with no DELETE behind it.
+ *
+ * `status` is in the response and is not a column. Every row that can exist
+ * here was written 'running' by `register()`, which for a static service is a
+ * statement about the URL rather than a process; the column earns its other
+ * values from the supervised family, which the publish gate refuses. A badge
+ * reading RUNNING on every row for the life of the build would claim to be
+ * reporting something.
+ */
+async function screenServices(view) {
+    const { items } = await api('/services');
+
+    actionBar(view, 'Services', {
+        desc: 'A hosted service is the one artifact that outlives its job. It is '
+            + 'published by a workspace and refreshed by re-running it \u2014 '
+            + 'there is nothing to create here.',
+        search: items.length ? 'Search services by name or workspace' : null,
+    });
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('services', 48)),
+            el('h3', {}, 'No hosted services'),
+            el('p', {}, 'A workspace publishes one by declaring an output of '
+                + 'type service/static, service/pwa or service/dashboard and '
+                + 'returning a built directory.')));
+        return;
+    }
+
+    view.append(table([
+        { label: 'Name', sortable: true, sorted: true },
+        { label: 'Type', sortable: true },
+        { label: 'Published by', sortable: true },
+        // Source job is not sortable. It is an opaque uuid, so ordering by it
+        // orders nothing anybody can read; Updated is the column that answers
+        // the question sorting by job id looks like it would.
+        'Source job',
+        { label: 'Updated', sortable: true },
+    ], items.map((s) => el('tr', {},
+        // The name IS the link out, so v1's trailing "open" column is gone --
+        // the same fold chunk 3 made on repositories. It differs from every
+        // other list here in leaving the application: there is no service
+        // detail screen to route to, and the target is a built site this
+        // server hosts rather than a screen of this one.
+        //
+        // The url goes in the desc slot because nothing else on the row says
+        // the link leaves. Rendered, the name sat beside `Testing/site` in the
+        // next column looking exactly like it -- same colour, same weight --
+        // and that one opens a screen of this application. v1 said which was
+        // which by keeping the "open" column; folding it away took the only
+        // mark of the difference, and only the screenshot showed the loss.
+        el('td', {}, cellName('services', el('a', {
+            href: s.url, target: '_blank', rel: 'noopener',
+        }, s.name), s.url)),
+        el('td', {}, s.type.replace(/^service\//, '')),
+        el('td', {}, el('a', {
+            href: '#/repositories/' + encodeURIComponent(s.repository)
+                  + '/' + encodeURIComponent(s.workspace),
+        }, s.repository + '/' + s.workspace)),
+        // ON DELETE SET NULL: a job's records can be cleaned up without taking
+        // the URL down with them, so the absence is expected, not an error.
+        el('td', {}, s.source_job
+            ? el('a', { href: '#/jobs/' + s.source_job },
+                el('span', { class: 'mono' }, s.source_job.slice(0, 8)))
+            : el('span', { class: 'hint' }, '\u2014')),
+        el('td', {}, when(s.updated_at))))));
+
+    view.append(pagerBar(items.length));
+    mountTable(view);
 }
 
 // ---------------------------------------------------------------------------

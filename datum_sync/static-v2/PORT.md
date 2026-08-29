@@ -693,6 +693,64 @@ Two things only the PNGs said. The card heading was `fresh ? 'New connection' :
 under Scope targets had to explain the disabled state, because a field that
 greys out when scope is global looks broken rather than exclusive.
 
+### Chunk 9 — services
+
+The only read-only screen in the port, and read-only at the API too:
+`/rest/v1/services` is a GET and nothing else. A service is registered by
+`services.register()` when a job finishes with a `service/*` artifact the publish
+gate approved, so there is no route that creates one and none that deletes one.
+That is the whole shape of the screen — no toolbar actions, no row checkboxes.
+Every other v2 list has both, and giving this one a Remove button would put it on
+top of a resource with no DELETE behind it.
+
+`actionBar` and `table.js` already allow for that: the bar is appended only `if
+(bar.firstChild)`, and the select-all checkbox, the action bar and the pager are
+each null-checked in `mountTable`. Nothing needed adding.
+
+`status` is in the response and is not a column. Every row that can exist here
+was written `'running'` by `register()`, which for a static service is a
+statement about the URL and not about a process — the column would earn its other
+values from the supervised family, which the publish gate refuses. A badge
+reading RUNNING on every row for the life of the build claims to report
+something. Source job is a column but not a sortable one: it is an opaque uuid,
+so ordering by it orders nothing anybody can read, and Updated already answers the
+question sorting by job id looks like it would.
+
+v1's trailing "open" column is folded into the name, the same fold chunk 3 made
+on repositories. The name is therefore the one link in v2 that leaves the
+application, which is what the new guard is about.
+
+**The guard.** `target="_blank"` without `rel="noopener"` hands the opened page a
+live `window.opener`, so it can navigate the application behind the reader's
+back. Current browsers imply noopener for `target=_blank` — which is exactly what
+makes it worth pinning, because it works, and goes on working right up until the
+page is opened in something that does not. v1 writes this link with no `rel` at
+all, so the break case is the port done faithfully rather than a mistake somebody
+would have to make. The assertion is on the whole attribute object, not the file,
+so a `rel` three lines away on some other element cannot satisfy the link that
+needs it; and it counts the `_blank` links first, so a rule that matched nothing
+fails loudly instead of passing.
+
+**A guard that crashed instead of failing.** `.replace(/^service\//, '')` ends in
+the two characters `\` `/` `/`, and the comment-skipper in `_call_args` read that
+as the start of a line comment, swallowing the rest of the line including the
+closing parens. `test_v2_never_appends_a_child_that_can_be_nothing` then reported
+`unbalanced call at offset 128447` — an offset pointing at the start of the call,
+naming neither the regex nor the line it was on. The fix is a one-character
+lookback. The tempting alternative was to write the expression as
+`.split('/')[1]` and move on, which would have let the test dictate the code and
+left the trap for whichever chunk hit it next.
+
+109 cases, all proven, including the pre-existing append case — which is what
+shows the scanner fix did not weaken the guard it was in.
+
+One thing only the PNG said. Rendered, the name sat beside `Testing/site` in the
+next column looking exactly like it: same colour, same weight, no mark of any
+kind. That one opens a screen of this application; this one opens a directory
+some workspace built. v1 said which was which by keeping the "open" column, and
+folding it away took the only thing that marked the difference. The url now goes
+in the `cellName` desc slot, so the row says where the link goes.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers

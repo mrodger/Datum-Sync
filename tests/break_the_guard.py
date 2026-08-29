@@ -1200,6 +1200,17 @@ CASES = [
         "class: 'yaml', id: 'conn-password', spellcheck: 'false', rows: 5,",
         "tests/test_ui.py::test_every_v2_form_label_names_its_control",
     ),
+    (
+        # v1 writes this exact link with no rel at all, so the break is the
+        # port done faithfully rather than a mistake somebody would have to
+        # make. It opens correctly either way, in every browser in use today --
+        # which is the whole reason it needs a test and not a review.
+        "the noopener on the link out to a hosted service",
+        "datum_sync/static-v2/app.js",
+        "href: s.url, target: '_blank', rel: 'noopener',",
+        "href: s.url, target: '_blank',",
+        "tests/test_ui.py::test_every_v2_new_window_link_disowns_its_opener",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
