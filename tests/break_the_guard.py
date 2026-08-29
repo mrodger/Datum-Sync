@@ -1341,6 +1341,55 @@ CASES = [
         "        if False:",
         "tests/test_vault.py::test_partial_wildcard_rejected",
     ),
+
+    # -- vault filesystem guards -----------------------------------------------
+
+    (
+        "vault_read enforces scope via vault.check",
+        "datum_sync/vault.py",
+        "    if not permits(scope, action, normalised):\n"
+        "        raise ApiError(\n"
+        "            403,\n"
+        "            \"FORBIDDEN\",\n"
+        "            f\"this account may not {action} {normalised}\",\n"
+        "            {\"path\": normalised, \"action\": action},\n"
+        "        )",
+        "    pass  # guard removed",
+        "tests/test_vault_fs.py::test_read_outside_scope_is_403",
+    ),
+    (
+        "vault_write enforces scope via vault.check",
+        "datum_sync/vault.py",
+        "    if not permits(scope, action, normalised):\n"
+        "        raise ApiError(\n"
+        "            403,\n"
+        "            \"FORBIDDEN\",\n"
+        "            f\"this account may not {action} {normalised}\",\n"
+        "            {\"path\": normalised, \"action\": action},\n"
+        "        )",
+        "    pass  # guard removed",
+        "tests/test_vault_fs.py::test_write_outside_scope_is_403",
+    ),
+    (
+        "vault_list checks scope covers directory",
+        "datum_sync/vault_fs.py",
+        "    if not _scope_covers_dir(principal.vault_scope, normalised):\n"
+        "        raise ApiError(\n"
+        "            403, \"FORBIDDEN\",\n"
+        "            f\"this account may not list {normalised}\",\n"
+        "            {\"path\": normalised, \"action\": \"read\"},\n"
+        "        )",
+        "    pass  # guard removed",
+        "tests/test_vault_fs.py::test_list_outside_scope_is_403",
+    ),
+    (
+        "vault tools hidden from accounts without vault_scope",
+        "datum_sync/mcp.py",
+        "    if principal.vault_scope:\n"
+        "        tools.extend(VAULT_TOOLS)",
+        "    tools.extend(VAULT_TOOLS)",
+        "tests/test_vault_fs.py::test_mcp_vault_tools_hidden_without_scope",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

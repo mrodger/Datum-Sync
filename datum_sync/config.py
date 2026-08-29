@@ -178,6 +178,7 @@ REQUIRE_HTTPS = os.getenv("REQUIRE_HTTPS", "false").lower() in ("1", "true", "ye
 REPOSITORIES_PATH = _path("REPOSITORIES_PATH", "./repositories")
 RESOURCES_PATH = _path("RESOURCES_PATH", "./resources")
 DATA_PATH = _path("DATA_PATH", "./data")
+VAULT_PATH = _path("VAULT_PATH", "./vault")
 
 MIGRATIONS_PATH = REPO_ROOT / "migrations"
 

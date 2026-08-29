@@ -31,7 +31,7 @@ import asyncpg
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
-from datum_sync import auth, config, db, execute, proxy
+from datum_sync import auth, config, db, execute, proxy, vault_fs
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 from datum_sync.manifest import Manifest, ParameterType
@@ -255,6 +255,70 @@ PROXY_TOOL = {
 }
 
 
+VAULT_READ_TOOL = {
+    "name": "vault_read",
+    "title": "Vault Read",
+    "description": (
+        "Read a file from the vault. The path is relative to the vault root "
+        "and must be within the caller's read scope."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Vault-relative path, e.g. dev/config/foo.md",
+            },
+        },
+        "required": ["path"],
+    },
+}
+
+VAULT_WRITE_TOOL = {
+    "name": "vault_write",
+    "title": "Vault Write",
+    "description": (
+        "Write a file to the vault. Creates parent directories as needed. "
+        "The path must be within the caller's write scope."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Vault-relative path, e.g. dev/notes/idea.md",
+            },
+            "content": {
+                "type": "string",
+                "description": "File content (UTF-8 text)",
+            },
+        },
+        "required": ["path", "content"],
+    },
+}
+
+VAULT_LIST_TOOL = {
+    "name": "vault_list",
+    "title": "Vault List",
+    "description": (
+        "List a directory in the vault. Only entries within the caller's "
+        "read scope are shown."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Vault-relative directory path, e.g. dev/config",
+            },
+        },
+        "required": ["path"],
+    },
+}
+
+VAULT_TOOLS = [VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_LIST_TOOL]
+
+
 async def _tools_list(principal: Principal, _: dict[str, Any]) -> dict[str, Any]:
     async with db.pool().acquire() as conn:
         found = await catalogue(conn, principal)
@@ -263,6 +327,11 @@ async def _tools_list(principal: Principal, _: dict[str, Any]) -> dict[str, Any]
         for name, (repo, ws, manifest) in found.items()
     ]
     tools.append(PROXY_TOOL)
+    # Vault tools are visible only to callers with a vault scope. An account
+    # with no scope would see tools that always return 403 — fewer tools is
+    # better than broken ones.
+    if principal.vault_scope:
+        tools.extend(VAULT_TOOLS)
     return {"tools": tools}
 
 
@@ -292,6 +361,32 @@ async def _proxy_call(principal: Principal, args: dict[str, Any]) -> dict[str, A
         }
 
 
+async def _vault_call(principal: Principal, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch a vault_* tool call."""
+    path = args.get("path")
+    if not isinstance(path, str):
+        raise RpcError(INVALID_PARAMS, "path is required")
+    try:
+        if name == "vault_read":
+            return await vault_fs.read(principal, path)
+        elif name == "vault_write":
+            content = args.get("content")
+            if not isinstance(content, str):
+                raise RpcError(INVALID_PARAMS, "content is required")
+            return await vault_fs.write(principal, path, content)
+        elif name == "vault_list":
+            return await vault_fs.list_dir(principal, path)
+    except ApiError as exc:
+        return {
+            "content": [{"type": "text", "text": f"{exc.code}: {exc.message}"}],
+            "isError": True,
+        }
+    raise RpcError(INVALID_PARAMS, f"unknown vault tool {name!r}")
+
+
+_VAULT_TOOL_NAMES = frozenset({"vault_read", "vault_write", "vault_list"})
+
+
 async def _tools_call(principal: Principal, params: dict[str, Any]) -> dict[str, Any]:
     name = params.get("name")
     if not isinstance(name, str):
@@ -303,6 +398,8 @@ async def _tools_call(principal: Principal, params: dict[str, Any]) -> dict[str,
     # Static tools — not workspace-derived.
     if name == "proxy_request":
         return await _proxy_call(principal, arguments)
+    if name in _VAULT_TOOL_NAMES:
+        return await _vault_call(principal, name, arguments)
 
     async with db.pool().acquire() as conn:
         found = await catalogue(conn, principal)
