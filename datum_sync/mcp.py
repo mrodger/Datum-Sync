@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 import asyncpg
@@ -58,6 +59,82 @@ INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
+
+
+# -- governance path classification ----------------------------------------
+#
+# Writes to these paths are flagged is_governance=true in mcp_call_log.
+# The classification is server-side (post-normalisation) so a client cannot
+# dodge it by encoding tricks. This constant should itself eventually be
+# vault-resident so changes to it are observable, but a hardcoded set is the
+# right starting point.
+
+_GOVERNANCE_PATHS = frozenset({"SOUL.md"})
+_GOVERNANCE_PREFIXES = ("skills/", "hooks/")
+
+
+def _is_governance(target: str | None) -> bool:
+    """Return True if target is a governance-class vault path."""
+    if not target:
+        return False
+    return target in _GOVERNANCE_PATHS or any(
+        target.startswith(p) for p in _GOVERNANCE_PREFIXES
+    )
+
+
+def _call_target(method: str, tool_name: str | None, params: dict[str, Any]) -> str | None:
+    """Extract a safe, loggable target string from a tools/call invocation.
+
+    Never returns content — only identifiers (paths, connection names).
+    Returns None for methods with no meaningful target.
+    """
+    if method != "tools/call" or tool_name is None:
+        return None
+    args = params.get("arguments") or {}
+    if tool_name in _VAULT_TOOL_NAMES:
+        return args.get("path")
+    if tool_name == "proxy_request":
+        conn = args.get("connection", "")
+        meth = args.get("method", "")
+        path = args.get("path", "")
+        return f"{conn}:{meth}:{path}" if conn else None
+    # Workspace tools — log the tool name as target (the workspace identity).
+    return tool_name
+
+
+async def _log_call(
+    principal: Principal,
+    method: str,
+    tool_name_val: str | None,
+    target: str | None,
+    outcome: str,
+    error_code: int | None,
+    duration_ms: int,
+    client_trace_id: str | None,
+) -> None:
+    """Write one row to mcp_call_log. Never raises — logging must not break calls."""
+    try:
+        async with db.pool().acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO mcp_call_log
+                    (account_id, account_name, method, tool_name, target,
+                     is_governance, outcome, error_code, duration_ms, client_trace_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                """,
+                principal.account_id,
+                principal.name,
+                method,
+                tool_name_val,
+                target,
+                _is_governance(target),
+                outcome,
+                error_code,
+                duration_ms,
+                client_trace_id,
+            )
+    except Exception:
+        pass  # logging failure must never surface to the caller
 
 
 class RpcError(Exception):
@@ -466,6 +543,7 @@ def _rpc_error(request_id: Any, code: int, message: str, data: Any = None) -> JS
 @router.post("/mcp")
 async def endpoint(request: Request) -> Response:
     principal = await auth.require_auth(request)
+    client_trace_id = request.headers.get("X-Trace-Id") or None
 
     try:
         body = json.loads(await request.body())
@@ -498,11 +576,25 @@ async def endpoint(request: Request) -> Response:
     if handler is None:
         return _rpc_error(request_id, METHOD_NOT_FOUND, f"unknown method {method!r}")
 
+    tool_name_val = params.get("name") if method == "tools/call" else None
+    target = _call_target(method, tool_name_val, params)
+    t0 = time.monotonic()
+
     try:
         result = await handler(principal, params)
     except RpcError as exc:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        await _log_call(
+            principal, method, tool_name_val, target,
+            "error", exc.code, duration_ms, client_trace_id,
+        )
         return _rpc_error(request_id, exc.code, exc.message, exc.data)
 
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    await _log_call(
+        principal, method, tool_name_val, target,
+        "ok", None, duration_ms, client_trace_id,
+    )
     return JSONResponse(
         content={"jsonrpc": "2.0", "id": request_id, "result": result},
         headers={"MCP-Protocol-Version": PROTOCOL_VERSION},

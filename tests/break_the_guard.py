@@ -1390,6 +1390,44 @@ CASES = [
         "    tools.extend(VAULT_TOOLS)",
         "tests/test_vault_fs.py::test_mcp_vault_tools_hidden_without_scope",
     ),
+
+    # -- mcp_call_log guards ---------------------------------------------------
+
+    (
+        "governance flag set for skills/** writes",
+        "datum_sync/mcp.py",
+        '    return target in _GOVERNANCE_PATHS or any(\n'
+        '        target.startswith(p) for p in _GOVERNANCE_PREFIXES\n'
+        '    )',
+        '    return False',
+        "tests/test_mcp_call_log.py::test_log_governance_skill_write",
+    ),
+    (
+        "vault_read target logged as vault path not None",
+        "datum_sync/mcp.py",
+        '    if tool_name in _VAULT_TOOL_NAMES:\n'
+        '        return args.get("path")',
+        '    if tool_name in _VAULT_TOOL_NAMES:\n'
+        '        return None',
+        "tests/test_mcp_call_log.py::test_log_vault_read",
+    ),
+    (
+        "X-Trace-Id stored as client_trace_id",
+        "datum_sync/mcp.py",
+        '    client_trace_id = request.headers.get("X-Trace-Id") or None',
+        '    client_trace_id = None',
+        "tests/test_mcp_call_log.py::test_log_trace_id",
+    ),
+    (
+        "error outcome logged on RpcError",
+        "datum_sync/mcp.py",
+        '        await _log_call(\n'
+        '            principal, method, tool_name_val, target,\n'
+        '            "error", exc.code, duration_ms, client_trace_id,\n'
+        '        )',
+        '        pass  # log removed',
+        "tests/test_mcp_call_log.py::test_log_error_outcome",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
