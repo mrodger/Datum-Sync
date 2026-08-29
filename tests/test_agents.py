@@ -143,12 +143,17 @@ async def test_delete_agent(client, db):
 
 
 async def test_agent_token_resolves_to_principal(db):
-    """An agent token resolves to a Principal with agent_id set."""
-    # Create an account
+    """An agent token resolves to a Principal with agent_id set.
+
+    The parent account is deliberately admin so the ``is_admin is False``
+    assertion below proves that agents are NEVER admin regardless of their
+    parent's status.
+    """
+    # Create an admin account — agents must still resolve as non-admin.
     account_id = await db.fetchval(
         """
         INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ('_agent_test_acct', $1, 3, false)
+        VALUES ('_agent_test_acct', $1, 3, true)
         RETURNING id
         """,
         auth.hash_token("account-token-unused"),

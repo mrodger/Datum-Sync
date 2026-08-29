@@ -1245,6 +1245,61 @@ CASES = [
         "tests/test_ui.py::"
         "test_the_v2_disabled_button_rule_outranks_every_button_variant",
     ),
+
+    # -- credential proxy guards ------------------------------------------------
+
+    (
+        "the proxy requires an agent token, not an account token",
+        "datum_sync/proxy.py",
+        "    if principal.agent_id is None:\n"
+        "        raise ApiError(\n"
+        "            403, \"AGENT_REQUIRED\",\n"
+        "            \"proxy_request requires an agent token, not an account token\",\n"
+        "        )",
+        "    if False:\n"
+        "        raise ApiError(\n"
+        "            403, \"AGENT_REQUIRED\",\n"
+        "            \"proxy_request requires an agent token, not an account token\",\n"
+        "        )",
+        "tests/test_proxy.py::test_bare_account_token_denied",
+    ),
+    (
+        "the proxy checks the agent's grant list",
+        "datum_sync/proxy.py",
+        "    if conn_name not in (principal.proxy_grants or []):",
+        "    if False:",
+        "tests/test_proxy.py::test_agent_without_grant_denied",
+    ),
+    (
+        "the proxy enforces the account's tier ceiling",
+        "datum_sync/proxy.py",
+        "    if principal.max_tier < conn_row[\"tier\"]:",
+        "    if False:",
+        "tests/test_proxy.py::test_tier_denied",
+    ),
+    (
+        "the SSRF guard blocks private and loopback addresses",
+        "datum_sync/proxy.py",
+        "        addr.is_private\n"
+        "        or addr.is_loopback",
+        "        False\n"
+        "        or False",
+        "tests/test_proxy.py::test_ssrf_rejects_loopback",
+    ),
+    (
+        "agents are never admin regardless of account",
+        "datum_sync/auth.py",
+        "            is_admin=False,  # agents are never admin",
+        "            is_admin=agent_row[\"is_admin\"],  # agents are never admin",
+        "tests/test_agents.py::test_agent_token_resolves_to_principal",
+    ),
+    (
+        "the proxy refuses non-http connection types",
+        "datum_sync/proxy.py",
+        "        if row[\"type\"] != \"http\":",
+        "        if False:",
+        "tests/test_proxy.py::test_proxy_rejects_non_http_connection",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
