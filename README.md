@@ -8,7 +8,7 @@ Deterministic agent gateway and workspace runner. Every agent (Datum, OpenClaw, 
 
 **Built — 10 implementation steps complete, 406 tests passing, 112 guards.** Deployed to VM112 at `:8200` but not yet running in production.
 
-Phase 3 planning (Agent Hub) is in [`PROPOSAL.md`](PROPOSAL.md). Holonic architecture analysis in [`spec/holonic-shacl-analysis.md`](spec/holonic-shacl-analysis.md).
+Phase 3 planning (multi-agent vault scoping) is in [`PROPOSAL.md`](PROPOSAL.md). Holonic architecture analysis in [`spec/holonic-shacl-analysis.md`](spec/holonic-shacl-analysis.md).
 
 ## What it does
 
@@ -43,8 +43,10 @@ See [`PROPOSAL.md §4`](PROPOSAL.md) and [`spec/holonic-shacl-analysis.md`](spec
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m datum_sync.runner
-# Serves on http://0.0.0.0:8200
+uvicorn datum_sync.api:app --host 0.0.0.0 --port 8200
 ```
+
+`datum_sync.runner` is the job runner, not the server — it is imported by the
+worker and has no `__main__`.
 
 Database: PostgreSQL + PostGIS on `:5435`. Apply migrations in order: `migrations/001_*.sql` → `migrations/006_*.sql`.

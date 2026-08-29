@@ -1,0 +1,43 @@
+-- Vault scope: which vault paths an account may reach, and the narrower slice
+-- a single job was dispatched with.
+--
+-- This is the boundary graph of the holonic model -- the only place that says
+-- what an agent is permitted to see. It lives on the account rather than on the
+-- token because an OAuth grant and a session both resolve to the same account
+-- (auth.py), so a second home for it would be a second permission model to keep
+-- in sync.
+
+-- Shape of the JSONB, all keys optional, all values arrays of glob patterns:
+--
+--   {
+--     "read":       ["dev/**", "shared/long_term/**"],
+--     "write":      ["dev/**"],
+--     "quarantine": ["quarantine/research/**"],
+--     "promote":    ["quarantine/**", "shared/long_term/**"],
+--     "deny":       ["secrets/**", "private/**"]
+--   }
+--
+-- NULL means no vault access at all, which is the default every existing
+-- account gets: adding the column must not silently hand the vault to accounts
+-- that were created before there was a vault to hand out. An empty object {}
+-- also means no access, but says it deliberately rather than by omission.
+--
+-- `deny` always wins over any allow. That is enforced in datum_sync/vault.py at
+-- call time and checked for coherence by spec/shapes/vault_scope.ttl at write
+-- time -- an overlap between deny and read is a configuration error, not a
+-- silent narrowing, because the author clearly believed the allow would apply.
+ALTER TABLE service_accounts ADD COLUMN vault_scope JSONB;
+
+-- The scope a job was actually dispatched with, when it is narrower than the
+-- account's. Set when one agent dispatches another (a research drone is a
+-- transient holon whose authority is a slice of its dispatcher's, never an
+-- independent grant).
+--
+-- Used *in place of* the account scope, not in addition to it. Intersecting the
+-- two at call time would mean a drone's effective authority changes whenever
+-- its parent account is re-scoped -- including upward, after the delegation was
+-- decided. Substitution makes the grant a fixed thing the job carries.
+--
+-- NULL means "no delegation, use the account scope", which is the ordinary case
+-- for every job submitted directly by a human or by the scheduler.
+ALTER TABLE jobs ADD COLUMN delegated_vault_scope JSONB;

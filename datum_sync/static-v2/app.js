@@ -311,7 +311,7 @@ const SECTIONS = [
     { id: 'apps',           label: 'Apps',                stub: true },
     { id: 'schedules',      label: 'Schedules' },
     { id: 'jobs',           label: 'Jobs' },
-    { id: 'workspaces',     label: 'Workspaces',          stub: true },
+    { id: 'workspaces',     label: 'Workspaces' },
     { id: 'projects',       label: 'Projects',            stub: true },
     { id: 'connections',    label: 'Connections' },
     { id: 'resources',      label: 'Resources',           stub: true },
@@ -380,6 +380,7 @@ const SCREENS = {
     automations:      [screenAutomations, screenAutomation],
     connections:      [screenConnections, screenConnection],
     services:         [screenServices],
+    workspaces:       [screenWorkspaces],
     admin:            [screenAdmin],
     // stub sections — visible in the nav, no backend
     notifications:    [(v) => stubScreen(v, 'Notifications')],
@@ -387,7 +388,6 @@ const SCREENS = {
     'data-virt':      [(v) => stubScreen(v, 'API endpoints')],
     mcp:              [(v) => stubScreen(v, 'MCP Servers')],
     apps:             [(v) => stubScreen(v, 'Apps')],
-    workspaces:       [(v) => stubScreen(v, 'Workspaces')],
     projects:         [(v) => stubScreen(v, 'Projects')],
     resources:        [(v) => stubScreen(v, 'Resources')],
     analytics:        [(v) => stubScreen(v, 'Analytics')],
@@ -1001,6 +1001,72 @@ async function screenRepository(view, repo) {
             el('h3', {}, ws.name),
             el('p', {}, ws.description || 'No description.'),
             el('div', { class: 'meta' }, 'v', ws.version, ' \u00b7 ', when(ws.published_at))))));
+}
+
+/* The flat catalogue: every workspace, across every repository.
+ *
+ * It is not a duplicate of the screen above. That one answers "what is in this
+ * repository" and is reached by picking one first; this answers "what can I
+ * run", which is the question an agent's tools/list is derived from and the
+ * only question you cannot ask from the repository tree without opening each
+ * one in turn.
+ *
+ * Table, not the card grid screenRepository uses. Cards read well at five
+ * workspaces inside one repository; the flat list is every repository's five,
+ * and the two columns that make it worth flattening -- Jobs and Last run --
+ * are comparisons across rows, which a grid does not support.
+ *
+ * No toolbar. Publishing is the `repos` CLI here exactly as it is on
+ * Repositories, and there is nothing else to do to a workspace from a list.
+ */
+async function screenWorkspaces(view) {
+    const { items } = await api('/workspaces');
+
+    actionBar(view, 'Workspaces', {
+        desc: 'Every published workspace, across every repository. Publishing '
+            + 'is a server-side operation \u2014 use the repos CLI.',
+        search: items.length ? 'Search workspaces by name or repository' : null,
+    });
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('workspaces', 48)),
+            el('h3', {}, 'Nothing published'),
+            el('p', {}, 'Use the ', el('code', {}, 'repos'),
+                ' CLI on the server to publish a repository. Its workspaces '
+                + 'appear here once they do.')));
+        return;
+    }
+
+    view.append(table([
+        { label: 'Workspace', sortable: true, sorted: true },
+        { label: 'Repository', sortable: true },
+        { label: 'Version', sortable: true },
+        { label: 'Jobs', sortable: true },
+        { label: 'Last run', sortable: true },
+    ], items.map((ws) => el('tr', {},
+        el('td', {}, cellName('workspaces', el('a', {
+            href: '#/repositories/' + encodeURIComponent(ws.repository)
+                  + '/' + encodeURIComponent(ws.name),
+        }, ws.name), ws.description || null)),
+        el('td', {}, el('a', {
+            href: '#/repositories/' + encodeURIComponent(ws.repository),
+        }, ws.repository)),
+        el('td', {}, ws.version),
+        // A number, not a link. The obvious link is
+        // `#/jobs?repository=..&workspace=..`, and screenJobs reads exactly
+        // one query key -- `status` -- so that href lands on the unfiltered
+        // list of every job on the server. It would look like a filter, sit
+        // where a filter goes, and be the count's own contradiction.
+        el('td', {}, ws.jobs
+            ? String(ws.jobs)
+            : el('span', { class: 'hint' }, '0')),
+        el('td', {}, ws.last_run
+            ? when(ws.last_run)
+            : el('span', { class: 'hint' }, 'Never'))))));
+
+    view.append(pagerBar(items.length));
+    mountTable(view);
 }
 
 // ---------------------------------------------------------------------------

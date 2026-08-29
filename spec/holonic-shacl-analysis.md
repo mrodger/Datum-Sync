@@ -10,7 +10,7 @@
 
 ## 1. Purpose
 
-This document maps the Datum Sync Agent Hub proposal (PROPOSAL.md) against two
+This document maps the Datum-Sync Phase 3 proposal (PROPOSAL.md) against two
 architectural paradigms — holonic multi-agent systems and SHACL-enforced boundary graphs
 — and identifies where each adds value, where it is overhead, and what concrete changes
 (if any) are warranted.

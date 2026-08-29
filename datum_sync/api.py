@@ -357,6 +357,48 @@ async def list_workspaces(repo: str, caller: Principal = Caller) -> dict[str, An
     }
 
 
+@app.get("/rest/v1/workspaces")
+async def list_all_workspaces(caller: Principal = Caller) -> dict[str, Any]:
+    """Every published workspace, across every repository the caller can see.
+
+    The per-repository listing above answers "what is in this repository". This
+    answers "what can I run" -- the question the catalogue screen asks, and the
+    one an agent's tools/list is derived from. Same scope rule as the repository
+    listing: filtered, not refused, because a flat catalogue that 403s on a
+    single out-of-scope entry is useless for discovery.
+    """
+    async with db.pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT r.name AS repository, w.name, w.description, w.version,
+                   w.published_at, w.published_by,
+                   count(j.id) AS jobs, max(j.submitted_at) AS last_run
+              FROM workspaces w
+              JOIN repositories r ON r.id = w.repository_id
+              LEFT JOIN jobs j
+                ON j.repository = r.name AND j.workspace = w.name
+             GROUP BY r.name, w.id
+             ORDER BY r.name, w.name
+            """
+        )
+    return {
+        "items": [
+            {
+                "repository": r["repository"],
+                "name": r["name"],
+                "description": r["description"],
+                "version": r["version"],
+                "published_at": r["published_at"].isoformat(),
+                "published_by": r["published_by"],
+                "jobs": r["jobs"],
+                "last_run": r["last_run"].isoformat() if r["last_run"] else None,
+            }
+            for r in rows
+            if caller.allows_repo(r["repository"])
+        ]
+    }
+
+
 @app.get("/rest/v1/repositories/{repo}/workspaces/{ws}")
 async def get_workspace(
     repo: str, ws: str, caller: Principal = Caller

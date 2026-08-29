@@ -1,4 +1,4 @@
-# Datum Sync — Phase 3 Proposal: Agent Hub
+# Datum-Sync — Phase 3 Proposal: Multi-Agent Vault Scoping
 
 > **Status:** Draft for peer review  
 > **Date:** 2026-08-28  
@@ -321,7 +321,7 @@ A path validation module `datum_sync/vault.py`:
 
 ```
 [Unit]
-Description=Datum Sync agent hub
+Description=Datum-Sync gateway
 After=network-online.target docker.service
 
 [Service]

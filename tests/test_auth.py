@@ -175,7 +175,8 @@ def test_scope_patterns_are_two_literal_forms():
     """
     p = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["SCIMAC/*"],
-        connection_grants=None, is_admin=False, source="token",
+        connection_grants=None, is_admin=False, vault_scope=None,
+        source="token",
     )
     assert p.allows_repo("SCIMAC")
     assert not p.allows_repo("SCIMAC_OTHER")
@@ -183,19 +184,22 @@ def test_scope_patterns_are_two_literal_forms():
 
     glob = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["S*"],
-        connection_grants=None, is_admin=False, source="token",
+        connection_grants=None, is_admin=False, vault_scope=None,
+        source="token",
     )
     assert not glob.allows_repo("SCIMAC")
 
     everything = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=None,
-        connection_grants=None, is_admin=False, source="token",
+        connection_grants=None, is_admin=False, vault_scope=None,
+        source="token",
     )
     assert everything.allows_repo("anything")
 
     nothing = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=[],
-        connection_grants=None, is_admin=False, source="token",
+        connection_grants=None, is_admin=False, vault_scope=None,
+        source="token",
     )
     # An empty array is not the same as NULL, and must not mean "all".
     assert not nothing.allows_repo("SCIMAC")
@@ -249,6 +253,28 @@ async def test_a_listing_hides_repositories_outside_scope(client, db, workspace)
     r = await client.get("/rest/v1/repositories")
     assert r.status_code == 200
     assert repo not in [x["name"] for x in r.json()["items"]]
+
+
+@pytest.mark.asyncio
+async def test_the_flat_catalogue_hides_workspaces_outside_scope(client, db, workspace):
+    """The same rule as the repository listing, on the screen that flattens it.
+
+    Flattening is where the rule is easiest to lose: the per-repository route
+    is only reachable through a repository the caller already passed a scope
+    check to see, so an unfiltered query there is invisible. This route is
+    reachable directly and reads every repository on the server, which makes
+    the filter the only thing between an out-of-scope caller and the full
+    catalogue.
+    """
+    repo, ws = workspace
+    await set_scope(db, None)
+    body = (await client.get("/rest/v1/workspaces")).json()
+    assert ws in [w["name"] for w in body["items"] if w["repository"] == repo]
+
+    await set_scope(db, ["SOMETHING_ELSE"])
+    r = await client.get("/rest/v1/workspaces")
+    assert r.status_code == 200
+    assert repo not in [w["repository"] for w in r.json()["items"]]
 
 
 @pytest.mark.asyncio
@@ -1580,3 +1606,105 @@ async def test_a_remote_caller_is_refused_even_with_auth_off(monkeypatch, client
     remote = await client.get("/rest/v1/whoami", headers=bare)
     assert remote.status_code == 403
     assert remote.json()["code"] == "FORBIDDEN"
+
+
+# --- vault_scope reaches the principal by every route ----------------------
+# Four functions build a Principal from four different queries, and a fifth is
+# the sign-in path in ui.py. Missing the column in any one of them yields
+# vault_scope=None, which fails *closed*: no exception, no 500, and every
+# pre-existing test still green. One shared test would not find that, so each
+# route is asserted on its own.
+
+VAULT_SCOPE_FIXTURE = {"read": ["dev/**"], "deny": ["dev/secrets/**"]}
+
+
+@pytest_asyncio.fixture
+async def vault_account(db):
+    """An account carrying a vault_scope, plus its raw service token."""
+    raw = auth.new_token()
+    await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_vault'")
+    account_id = await db.fetchval(
+        """
+        INSERT INTO service_accounts (name, token_hash, max_tier, vault_scope)
+        VALUES ('_pytest_vault', $1, 4, $2)
+        RETURNING id
+        """,
+        auth.hash_token(raw),
+        json.dumps(VAULT_SCOPE_FIXTURE),
+    )
+    try:
+        yield account_id, raw
+    finally:
+        await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_vault'")
+
+
+async def test_a_service_token_carries_vault_scope(db, vault_account):
+    _, raw = vault_account
+    p = await auth.resolve(db, raw)
+    assert p.vault_scope == VAULT_SCOPE_FIXTURE
+
+
+async def test_an_oauth_token_carries_vault_scope(db, vault_account):
+    account_id, _ = vault_account
+    access = auth.new_token()
+    await db.execute(
+        """
+        INSERT INTO oauth_tokens (token_hash, kind, account_id, expires_at)
+        VALUES ($1, 'access', $2, now() + interval '1 hour')
+        """,
+        auth.hash_token(access),
+        account_id,
+    )
+    p = await auth.resolve(db, access)
+    assert p.source == "oauth"
+    assert p.vault_scope == VAULT_SCOPE_FIXTURE
+
+
+async def test_a_session_carries_vault_scope(db, vault_account):
+    account_id, _ = vault_account
+    raw = await auth.create_session(db, account_id)
+    p = await auth.resolve_session(db, raw)
+    assert p.source == "session"
+    assert p.vault_scope == VAULT_SCOPE_FIXTURE
+
+
+async def test_principal_by_name_carries_vault_scope(db, vault_account):
+    p = await auth.principal_by_name(db, "_pytest_vault")
+    assert p.source == "local"
+    assert p.vault_scope == VAULT_SCOPE_FIXTURE
+
+
+async def test_vault_scope_arrives_decoded_not_as_json_text(db, vault_account):
+    """The trap this column walks into.
+
+    No JSON codec is registered on the pool (db.py), so a JSONB column comes
+    back as the *string* `{"read": [...]}`. A str is truthy and has no .get, so
+    the failure would be an AttributeError inside a permission check rather than
+    anything the query site could be blamed for.
+    """
+    _, raw = vault_account
+    p = await auth.resolve(db, raw)
+    assert isinstance(p.vault_scope, dict)
+    assert p.allows_vault_path("read", "dev/notes.md")
+    assert not p.allows_vault_path("read", "dev/secrets/key.md")
+
+
+async def test_an_account_without_a_scope_gets_no_vault_access(db, token):
+    """The conftest account is unscoped and admin -- and still has no vault.
+
+    Admin is repository authority, not vault authority. If those were the same
+    thing the column would not need to exist.
+    """
+    p = await auth.resolve(db, token)
+    assert p.is_admin
+    assert p.vault_scope is None
+    assert not p.allows_vault_path("read", "dev/notes.md")
+
+
+async def test_whoami_reports_vault_scope(client, vault_account):
+    _, raw = vault_account
+    r = await client.get(
+        "/rest/v1/whoami", headers={"Authorization": f"Bearer {raw}"}
+    )
+    assert r.status_code == 200
+    assert r.json()["vault_scope"] == VAULT_SCOPE_FIXTURE

@@ -49,6 +49,12 @@ LOCAL_PUBLISHER = Principal(
     repo_scope=None,
     connection_grants=None,
     is_admin=True,
+    # None, not the wide-open scope DEV_PRINCIPAL carries. This principal exists
+    # to publish workspaces from a shell; it never reaches the MCP vault tools.
+    # Granting it the vault would not add capability -- whoever runs this can
+    # already read the mount -- it would only mean a publish path that carries
+    # vault authority it has no use for.
+    vault_scope=None,
     source="local",
 )
 

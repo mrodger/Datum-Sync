@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import secrets
 import time
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import Request
 
-from datum_sync import config, db
+from datum_sync import config, db, vault
 from datum_sync.errors import ApiError
 
 _hasher = PasswordHasher()
@@ -116,6 +117,20 @@ class Principal:
     is_admin: bool
     # 'token' for a service account token, 'oauth' for an OAuth access token.
     source: str
+    # Vault paths this caller may reach, by action. See migration 007 for the
+    # shape and datum_sync/vault.py for how it is applied.
+    #
+    # NOTE the asymmetry with repo_scope directly above: None there means EVERY
+    # repository, None here means NO vault access. They are opposite on purpose.
+    # repo_scope's default predates any scoping and every account already relied
+    # on it; vault_scope arrives on rows that were written before the vault was
+    # reachable at all, and those accounts must not acquire it by sitting still.
+    #
+    # No default value, deliberately. A default would let a new construction
+    # site forget this field and get a principal with no vault access -- which
+    # fails closed, raises nothing, and passes every existing test. Requiring it
+    # turns that omission into a TypeError at the call site.
+    vault_scope: dict | None
     client_id: str | None = None
     scope: str | None = None
 
@@ -124,6 +139,16 @@ class Principal:
         if self.repo_scope is None:
             return True
         return any(_scope_matches(p, repo) for p in self.repo_scope)
+
+    def allows_vault_path(self, action: str, path: str) -> bool:
+        """Whether this caller may take `action` on an already-normalised path.
+
+        Thin on purpose: the decision lives in vault.py so it can be tested
+        without constructing a principal, and so there is one implementation
+        rather than one here and another wherever a job's delegated scope is
+        applied.
+        """
+        return vault.permits(self.vault_scope, action, path)
 
 
 def principal_json(p: Principal) -> dict:
@@ -139,6 +164,9 @@ def principal_json(p: Principal) -> dict:
         # None means every repository (001_core.sql). Reported as null rather
         # than as an empty list, which would read as "none".
         "repo_scope": p.repo_scope,
+        # None here means NO vault access -- the opposite sense to repo_scope
+        # directly above. See the note on Principal.vault_scope.
+        "vault_scope": p.vault_scope,
         "source": p.source,
     }
 
@@ -161,8 +189,27 @@ DEV_PRINCIPAL = Principal(
     repo_scope=None,
     connection_grants=None,
     is_admin=True,
+    # The whole vault, matching the rest of this principal. With the flag on
+    # there is no account to scope against and every other permission here is
+    # already wide open, so a narrow vault_scope would not be a safety measure
+    # -- it would just make the vault tools fail in a way that looks like a bug.
+    vault_scope={"read": ["**"], "write": ["**"], "quarantine": ["**"], "promote": ["**"]},
     source="auth-disabled",
 )
+
+
+def vault_scope_of(row: asyncpg.Record) -> dict | None:
+    """The `vault_scope` column as a dict.
+
+    asyncpg has no JSON codec registered on this pool (db.py), so a JSONB column
+    arrives as the *string* `{"read": [...]}`. Handing that to vault.permits
+    would mean `scope.get` on a str, and the failure would surface far from the
+    query that caused it. Decoded in one place so no query site can forget.
+    """
+    raw = row["vault_scope"]
+    if raw is None:
+        return None
+    return json.loads(raw) if isinstance(raw, str) else raw
 
 
 def _scope_matches(pattern: str, repo: str) -> bool:
@@ -232,7 +279,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         SELECT t.id, t.client_id, t.scope, t.resource, t.expires_at,
                t.revoked_at, t.rotated_to,
                a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.connection_grants, a.is_admin, a.disabled
+               a.connection_grants, a.is_admin, a.disabled, a.vault_scope
           FROM oauth_tokens t
           JOIN service_accounts a ON a.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'access'
@@ -265,6 +312,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
             repo_scope=row["repo_scope"],
             connection_grants=row["connection_grants"],
             is_admin=row["is_admin"],
+            vault_scope=vault_scope_of(row),
             source="oauth",
             client_id=row["client_id"],
             scope=row["scope"],
@@ -273,7 +321,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
     row = await conn.fetchrow(
         """
         SELECT id, name, max_tier, repo_scope, connection_grants, is_admin,
-               disabled, token_expires
+               disabled, token_expires, vault_scope
           FROM service_accounts
          WHERE token_hash = $1
         """,
@@ -296,6 +344,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         repo_scope=row["repo_scope"],
         connection_grants=row["connection_grants"],
         is_admin=row["is_admin"],
+        vault_scope=vault_scope_of(row),
         source="token",
     )
 
@@ -322,7 +371,7 @@ async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
     row = await conn.fetchrow(
         """
         SELECT id, name, max_tier, repo_scope, connection_grants, is_admin,
-               disabled
+               disabled, vault_scope
           FROM service_accounts
          WHERE name = $1
         """,
@@ -340,6 +389,7 @@ async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
         repo_scope=row["repo_scope"],
         connection_grants=row["connection_grants"],
         is_admin=row["is_admin"],
+        vault_scope=vault_scope_of(row),
         source="local",
     )
 
@@ -399,7 +449,7 @@ async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal
         """
         SELECT t.id, t.expires_at, t.revoked_at,
                a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.connection_grants, a.is_admin, a.disabled
+               a.connection_grants, a.is_admin, a.disabled, a.vault_scope
           FROM oauth_tokens t
           JOIN service_accounts a ON a.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'session'
@@ -428,6 +478,7 @@ async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal
         repo_scope=row["repo_scope"],
         connection_grants=row["connection_grants"],
         is_admin=row["is_admin"],
+        vault_scope=vault_scope_of(row),
         source="session",
     )
 

@@ -1,4 +1,5 @@
-"""Drive the Schedules, Automations, Connections and Services screens in a browser.
+"""Drive the Schedules, Automations, Connections, Services and Workspaces
+screens in a browser.
 
 Not a test module -- it needs a running server and a real account, so it will
 not work under pytest and does not try to:
@@ -136,6 +137,7 @@ def main() -> int:
             automations(page)
             connections(page)
             services(page)
+            workspaces(page)
         except Exception as exc:            # noqa: BLE001 - recorded, not raised
             # Recorded rather than propagated, because cleanup has to run and a
             # `finally` that calls cleanup will throw away this exception the
@@ -378,6 +380,52 @@ def services(page) -> None:
     # The stylesheet is not asserted here on purpose: the browser fetches it
     # because the page links it, and a 404 on a subpath is reported by the
     # response watcher. Asserting it as well would only prove httpx works.
+
+
+def workspaces(page) -> None:
+    """The flat catalogue.
+
+    Runs last, after services() has submitted a job against Testing/site, so a
+    non-zero Jobs count and a real Last run are present to assert on rather
+    than two never-run nulls. It is placement, not a guarantee: services()
+    skips itself when no worker is running, and then the count being asserted
+    is whatever history the database already held. That is why the assertion
+    is "some positive integer" and not a number -- a fixed count would pass or
+    fail on whether a worker happened to be up.
+
+    Driven against /ui/v2, not /ui, and that is the one thing here worth
+    stopping on. There are two front ends in this repo -- `static/` served at
+    /ui and `static-v2/` served at /ui/v2 -- and the Workspaces screen exists
+    only in the second. Every other pass above runs against /ui because every
+    other screen exists in both. Which of the two ships is an open question;
+    until it is answered, a check written against /ui would fail on a stub and
+    a check that silently used /ui/v2 for everything would stop testing the UI
+    people actually open.
+    """
+    print("\nworkspaces (v2 only)")
+    page.goto(BASE + "/ui/v2#/workspaces")
+    page.wait_for_selector("#view > [data-ready='workspaces']")
+    check("list renders", page.locator("#view h1").first.inner_text() == "Workspaces")
+
+    # Located by the repository cell's href rather than by text. Every row
+    # carries the word "Testing" in that cell, and several carry it in the
+    # workspace name as well, so a text locator cannot say which column it
+    # matched -- and the column is the point: this screen exists to show the
+    # repository beside a workspace the repository tree only shows underneath.
+    rows = page.locator("#view tr", has=page.locator("a[href='#/repositories/Testing']"))
+    check("Testing workspaces are listed with their repository", rows.count() > 0,
+          str(rows.count()))
+
+    site = page.locator(
+        "#view tr", has=page.locator("a[href='#/repositories/Testing/site']")
+    ).first.inner_text()
+    check("the row shows a job count", re.search(r"\b[1-9]\d*\b", site) is not None,
+          repr(site))
+    # Never is the string the screen prints for a null last_run. Seeing it on
+    # the row for a workspace services() just ran would mean the aggregate is
+    # joining on something that does not match.
+    check("a workspace that has run does not say Never", "Never" not in site,
+          repr(site))
 
 
 def cleanup(page) -> None:

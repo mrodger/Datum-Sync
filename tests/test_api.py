@@ -162,6 +162,56 @@ async def test_idempotency_key_returns_the_same_job(client, workspace):
 
 
 # --------------------------------------------------------------------------
+# the flat workspace catalogue
+# --------------------------------------------------------------------------
+
+async def _catalogue_row(client, repo, ws):
+    """The matching rows, as a list.
+
+    A list rather than a `next()`, because the failure these tests exist to
+    catch is the row being absent -- and inside an async test `next()` raises
+    StopIteration, which asyncio re-raises as `RuntimeError: coroutine raised
+    StopIteration` from base_events.py. The break test still failed, but it
+    named the event loop instead of the missing workspace.
+    """
+    body = (await client.get("/rest/v1/workspaces")).json()
+    return [w for w in body["items"] if w["repository"] == repo and w["name"] == ws]
+
+
+@pytest.mark.asyncio
+async def test_flat_catalogue_lists_a_workspace_that_has_never_run(client, workspace):
+    """A workspace with no jobs must still appear.
+
+    The aggregate is a LEFT JOIN for exactly this reason: an inner join gives
+    the same row count on a database where everything has run at least once,
+    and silently drops every newly published workspace -- the ones a catalogue
+    most needs to show. `jobs == 0` is the assertion that tells the two apart.
+    """
+    repo, ws = workspace
+    rows = await _catalogue_row(client, repo, ws)
+    assert len(rows) == 1, "the workspace is missing from the flat catalogue"
+    assert rows[0]["jobs"] == 0
+    assert rows[0]["last_run"] is None
+    assert rows[0]["version"] == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_flat_catalogue_counts_jobs_per_workspace(client, workspace):
+    repo, ws = workspace
+    for _ in range(2):
+        r = await client.post(
+            f"/rest/v1/transformations/submit/{repo}/{ws}",
+            json={"params": {"WHO": "you"}},
+        )
+        assert r.status_code == 202
+
+    rows = await _catalogue_row(client, repo, ws)
+    assert len(rows) == 1, "the workspace is missing from the flat catalogue"
+    assert rows[0]["jobs"] == 2
+    assert rows[0]["last_run"] is not None
+
+
+# --------------------------------------------------------------------------
 # the service gate
 # --------------------------------------------------------------------------
 
