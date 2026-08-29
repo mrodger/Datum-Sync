@@ -119,6 +119,42 @@ toolbar buttons need `data-needs="one|many"` and the table needs whatever
 and a single-line row for the dashboard — that is the 59-vs-78 pitch split
 `check_style.py` locks.
 
+Done, and four things it turned up.
+
+**v2's `app.js` is an ES module and v1's is not.** The icons are the reason:
+`icons.js` holds the real vendored Phosphor set as `export const ICONS`, and
+importing it is the only way to use it without a second copy that can drift.
+That has one consequence worth writing down, because its failure is silent —
+the script tag needs `type="module"`, and without it the browser throws on the
+import line before executing anything, leaving both panes hidden. That is the
+*same blank page* as chunk 0's, where there was no `app.js` at all.
+
+**`icons.js` exports an `icon()` that does `svg.innerHTML = ICONS[name]`, and
+`app.js` deliberately does not use it.** It lifts the `d` out of each entry and
+builds the node with `createElementNS`. The string is `icons.js`'s own constant
+so calling it would not actually be an injection — which is the point. A ban
+with one sanctioned exception stops being greppable, and the next call site
+borrows the exception rather than the reasoning.
+
+**Three things app.js must NOT do, each invisible rather than broken**, and all
+three are now break-tested rather than left as comments:
+
+- Bind `#nav-toggle` (v1 line 217). `nav-collapse.js` has it. Two handlers on
+  one click flips the state and flips it back: a nav that does not move, which
+  looks exactly like a handler that was never attached.
+- Wire the search box, or port `filterRows`. `table.js` owns search and filters
+  by rebuilding the tbody; v1 hides rows in place. Both running leaves
+  `table.js` re-appending rows v1 hid, so the pager's count disagrees with what
+  is on screen.
+- Sort, select or page. `table.js` owns the tbody from `mountTable()` onwards.
+
+**The list-chrome helpers are written but unexercised.** `actionBar`, `action`,
+`cellName`, `table`, `rowCheck`, `pagerBar`, `mountTable`, `pageTabs`, `crumbs`,
+`when`, `duration` and `badge` have no caller until chunk 2, so nothing in the
+394-test suite and nothing in the browser run touches them. They are shipped on
+the strength of reading, not of evidence. Chunk 2 is the first thing that will
+say whether they are right — treat its first render as their test.
+
 ### Chunks 2–10 — one screen each
 
 Same shape every time: port the screen function, swap the renamed classes,

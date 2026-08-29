@@ -54,8 +54,17 @@
         };
     }
 
-    function initTable(table) {
-        var view = table.closest('.view') || document;
+    /* `scope` is where the toolbar and pager that belong to this table are
+       looked up. The mockups omit it and the fallback is right for them: one
+       table per page, inside the one `.view`.
+
+       app.js must pass it. Its screens render into a container that `route()`
+       detaches when you navigate away, and a detached node's closest('.view')
+       is null -- which would fall through to `document` and wire a dead
+       table's sorting and paging to the LIVE screen's action bar. That is a
+       silent cross-screen leak, not an error. */
+    function initTable(table, scope) {
+        var view = scope || table.closest('.view') || document;
         var body = table.tBodies[0];
         var head = table.tHead.rows[0];
         var bar = view.querySelector('.action-bar');
@@ -261,5 +270,11 @@
         render();
     }
 
-    document.querySelectorAll('.view table').forEach(initTable);
+    /* The mockups are static: every table they have is in the DOM at load, so
+       initialising here is all they need. app.js's tables are not -- the view
+       is empty until a screen's fetch resolves -- so this finds nothing there
+       and the export is the only way in. Both entry points, because both
+       cases are real. */
+    window.initTable = initTable;
+    document.querySelectorAll('.view table').forEach(function (t) { initTable(t); });
 })();

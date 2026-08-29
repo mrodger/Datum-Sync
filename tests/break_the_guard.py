@@ -989,6 +989,58 @@ CASES = [
         "",
         "tests/test_ui.py::test_the_v2_shell_is_served_without_a_credential",
     ),
+    # The five below are not backend guards -- they are properties of static
+    # files. They are here rather than trusted because every one of them fails
+    # SILENTLY in a browser: a blank page, a slightly wrong glyph, or a button
+    # that does nothing. None raises, so none reaches a log, and a test that
+    # has never been seen to fail is the wrong instrument to rely on for a
+    # class of bug whose entire signature is the absence of a symptom.
+    (
+        # Without type="module" the browser parses app.js as a classic script,
+        # throws on the import before executing a line, and leaves both panes
+        # hidden -- the same blank page as having no app.js at all.
+        "the v2 shell loads app.js as a module",
+        "datum_sync/static-v2/index.html",
+        "<script type=\"module\" src=\"/v2/app.js\"></script>",
+        "<script src=\"/v2/app.js\"></script>",
+        "tests/test_ui.py::test_the_v2_shell_loads_app_js_as_a_module",
+    ),
+    (
+        # A 404 on a module import aborts the whole module. The shell's script
+        # tags do not name icons.js, so a scan of the markup cannot see it.
+        "every asset the v2 shell reaches for is served, imports included",
+        "datum_sync/static-v2/app.js",
+        "from '/v2/icons.js'",
+        "from '/v2/icon.js'",
+        "tests/test_ui.py::test_every_asset_the_v2_shell_names_is_served",
+    ),
+    (
+        # app.js lifts the `d` out of each icon. A second element would be
+        # dropped and the icon would still render, slightly wrong, forever.
+        "every v2 icon is a single path",
+        "datum_sync/static-v2/icons.js",
+        "\"columns\": \"<path d=",
+        "\"columns\": \"<circle cx=\\\\\"1\\\\\"/><path d=",
+        "tests/test_ui.py::test_every_v2_icon_is_a_single_path",
+    ),
+    (
+        # icons.js exports an icon() that assigns svg.innerHTML. Reaching for
+        # it is a one-line change that reads as the obvious thing to do.
+        "the v2 UI never assigns markup",
+        "datum_sync/static-v2/app.js",
+        "        svg.append(path);",
+        "        svg.innerHTML = ICONS[name];",
+        "tests/test_ui.py::test_the_v2_ui_never_assigns_markup",
+    ),
+    (
+        # nav-collapse.js already binds #nav-toggle. A second handler makes the
+        # button flip the state and flip it back: a nav that does not move.
+        "the v2 UI leaves the nav toggle to nav-collapse.js",
+        "datum_sync/static-v2/app.js",
+        "// No handler for #nav-toggle here.",
+        "$('nav-toggle').addEventListener('click', () => 0);",
+        "tests/test_ui.py::test_the_v2_ui_leaves_the_nav_toggle_to_nav_collapse_js",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

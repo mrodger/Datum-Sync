@@ -175,21 +175,58 @@ async def test_every_asset_the_v2_shell_names_is_served(anon):
     nothing, and neither says so anywhere but the console. This asserts the
     list rather than a hardcoded copy of it, so adding a tag adds a check.
 
-    `app.js` is excluded BY NAME because chunk 1 of the port writes it and it
-    does not exist yet -- and the exclusion is paired with an assertion that it
-    really is missing, so this test starts failing the moment chunk 1 lands
-    rather than quietly skipping the file the whole UI is made of.
+    The shell's own tags are not the whole list. app.js is an ES module and
+    imports icons.js, which appears in no tag and so is invisible to a scan of
+    the markup -- while being the harsher failure of the two: a 404 on an
+    import aborts the entire module, so the page renders nothing at all rather
+    than rendering without icons. The import specifiers are collected too.
     """
     shell = (STATIC_V2_DIR / "index.html").read_text()
     named = re.findall(r'(?:src|href)="(/v2/[^"]+)"', shell)
     assert "/v2/app.js" in named, "the shell no longer loads app.js"
 
-    for url in named:
-        expected = 404 if url == "/v2/app.js" else 200
+    imported = re.findall(r'''from\s+['"](/v2/[^'"]+)['"]''',
+                          (STATIC_V2_DIR / "app.js").read_text())
+    assert "/v2/icons.js" in imported, "app.js no longer imports the icon set"
+
+    for url in named + imported:
         r = await anon.get(url)
-        assert r.status_code == expected, (url, r.status_code)
-        if expected == 200:
-            assert r.content
+        assert r.status_code == 200, (url, r.status_code)
+        assert r.content
+
+
+@pytest.mark.asyncio
+async def test_the_v2_shell_loads_app_js_as_a_module():
+    """app.js imports icons.js, so the tag must say `type="module"`.
+
+    Without it the browser parses the file as a classic script, hits the
+    import statement, and throws a SyntaxError before executing a line. The
+    page is then blank with both panes hidden -- indistinguishable from the
+    pre-chunk-1 state where there was no app.js at all, which is exactly the
+    symptom this project has already spent a session chasing once.
+    """
+    shell = (STATIC_V2_DIR / "index.html").read_text()
+    tag = re.search(r'<script[^>]*/v2/app\.js"[^>]*>', shell)
+    assert tag, "the shell no longer loads app.js"
+    assert 'type="module"' in tag.group(0), tag.group(0)
+
+
+@pytest.mark.asyncio
+async def test_every_v2_icon_is_a_single_path():
+    """app.js lifts the `d` out of each entry in icons.js rather than assigning
+    the markup, which is what keeps the innerHTML ban whole (see
+    test_the_v2_ui_never_assigns_markup). That extraction is only faithful
+    while every icon really is one <path> carrying one attribute.
+
+    An icon with a second element would have it dropped and still render --
+    slightly wrong, never an error, and nowhere near the code that caused it.
+    So the shape is asserted over the file rather than trusted at the call.
+    """
+    src = (STATIC_V2_DIR / "icons.js").read_text()
+    entries = re.findall(r'^\s*"([\w-]+)":\s*"(.*)",$', src, re.M)
+    assert len(entries) >= 50, f"only found {len(entries)} icons; parser drifted"
+    for name, markup in entries:
+        assert re.fullmatch(r'<path d=\\"[^"]+\\"/>', markup), name
 
 
 @pytest.mark.asyncio
@@ -238,6 +275,46 @@ async def test_the_ui_never_assigns_markup():
     )
     found = [s for s in sinks if s in code]
     assert found == [], f"app.js reaches for {found}; build nodes with el()"
+
+
+@pytest.mark.asyncio
+async def test_the_v2_ui_never_assigns_markup():
+    """The same invariant over the v2 shell, asserted separately because it is
+    a separate file that the test above cannot see.
+
+    It is not a copy of a passing test. v2 has a sink v1 never had: icons.js
+    ships an `icon()` that does `svg.innerHTML = ICONS[name]`, and importing it
+    is a one-line change that would read as the obvious thing to do. app.js
+    lifts the path data out instead. The string is icons.js's own constant, so
+    using it would not actually be an injection -- which is the point. A ban
+    with one sanctioned exception in it stops being greppable, and the next
+    call site borrows the exception rather than the reasoning.
+
+    icons.js itself is not scanned: it is vendored, generated, and never sees
+    API data. This asserts the property over the file that renders it.
+    """
+    sinks = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
+    code = "\n".join(
+        line for line in (STATIC_V2_DIR / "app.js").read_text().splitlines()
+        if not line.lstrip().startswith(("//", "/*", "*"))
+    )
+    found = [s for s in sinks if s in code]
+    assert found == [], f"v2 app.js reaches for {found}; build nodes with el()"
+
+
+@pytest.mark.asyncio
+async def test_the_v2_ui_leaves_the_nav_toggle_to_nav_collapse_js():
+    """Two click handlers on one button is a toggle that flips twice.
+
+    v1's app.js binds #nav-toggle itself (its line 217). v2 has
+    nav-collapse.js, which binds the same button and adds the persistence v1
+    never had, and both scripts load into the same page. Porting v1's line as
+    well gives a button that reads the collapsed state, flips it, and flips it
+    straight back -- so the nav does not move, no error is raised, and the
+    symptom is indistinguishable from a handler that was never attached.
+    """
+    code = (STATIC_V2_DIR / "app.js").read_text()
+    assert "nav-toggle" not in code.replace("// No handler for #nav-toggle", "")
 
 
 @pytest.mark.asyncio
