@@ -20,11 +20,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import json
 import sys
 
 import asyncpg
 
-from datum_sync import auth, config
+from datum_sync import auth, config, vault
 
 
 def _scopes(values: list[str] | None) -> list[str] | None:
@@ -41,17 +42,32 @@ async def _connect() -> asyncpg.Connection:
 
 
 async def create(
-    name: str, scopes: list[str] | None, max_tier: int, admin: bool, description: str | None
+    name: str,
+    scopes: list[str] | None,
+    max_tier: int,
+    admin: bool,
+    description: str | None,
+    vault_scope: dict | None = None,
 ) -> int:
+    # Validate vault_scope before touching the database.
+    if vault_scope is not None:
+        try:
+            vault.validate_scope(vault_scope)
+        except vault.VaultScopeError as exc:
+            print(f"invalid vault_scope: {exc}", file=sys.stderr)
+            return 1
+
     conn = await _connect()
     try:
         raw = auth.new_token()
+        vault_json = json.dumps(vault_scope) if vault_scope is not None else None
         try:
             account_id = await conn.fetchval(
                 """
                 INSERT INTO service_accounts
-                    (name, description, token_hash, max_tier, repo_scope, is_admin)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (name, description, token_hash, max_tier, repo_scope, is_admin,
+                     vault_scope)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING id
                 """,
                 name,
@@ -60,6 +76,7 @@ async def create(
                 max_tier,
                 _scopes(scopes),
                 admin,
+                vault_json,
             )
         except asyncpg.UniqueViolationError:
             print(f"account {name!r} already exists", file=sys.stderr)
@@ -199,6 +216,11 @@ def main() -> int:
     p.add_argument("--max-tier", type=int, default=1, choices=(1, 2, 3, 4))
     p.add_argument("--admin", action="store_true")
     p.add_argument("--description")
+    p.add_argument(
+        "--vault-scope",
+        metavar="JSON",
+        help='vault scope as JSON, e.g. \'{"read":["dev/**"],"write":["dev/**"]}\'',
+    )
 
     p = sub.add_parser("token", help="replace an account's token")
     p.add_argument("name")
@@ -216,8 +238,15 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "create":
+        vs = None
+        if args.vault_scope:
+            try:
+                vs = json.loads(args.vault_scope)
+            except json.JSONDecodeError as exc:
+                print(f"--vault-scope is not valid JSON: {exc}", file=sys.stderr)
+                return 1
         return asyncio.run(
-            create(args.name, args.scope, args.max_tier, args.admin, args.description)
+            create(args.name, args.scope, args.max_tier, args.admin, args.description, vs)
         )
     if args.command == "token":
         return asyncio.run(mint(args.name))

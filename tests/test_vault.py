@@ -3,10 +3,12 @@ import pytest
 from datum_sync.errors import ApiError
 from datum_sync.vault import (
     VaultPathError,
+    VaultScopeError,
     check,
     matches,
     normalise,
     permits,
+    validate_scope,
 )
 
 SCOPE = {
@@ -171,3 +173,108 @@ def test_check_reports_a_malformed_path_as_400():
 def test_check_normalises_before_authorising():
     # The trailing slash must not be the reason a permitted path is refused.
     assert check(SCOPE, "write", "dev/notes/") == "dev/notes"
+
+
+# --- validate_scope --------------------------------------------------------
+
+def test_valid_scope_passes():
+    validate_scope({
+        "read": ["dev/**", "shared/**"],
+        "write": ["dev/**"],
+        "deny": ["dev/secrets/**"],
+    })
+
+
+def test_write_implies_read():
+    with pytest.raises(VaultScopeError, match="write-implies-read"):
+        validate_scope({
+            "read": ["dev/**"],
+            "write": ["dev/**", "shared/**"],  # shared not in read
+        })
+
+
+def test_write_implies_read_passes_when_subset():
+    # write is a subset of read — valid
+    validate_scope({
+        "read": ["dev/**", "shared/**"],
+        "write": ["dev/**"],
+    })
+
+
+def test_deny_contradicts_allow():
+    with pytest.raises(VaultScopeError, match="contradictory"):
+        validate_scope({
+            "read": ["dev/**"],
+            "deny": ["dev/**"],  # same pattern in both
+        })
+
+
+def test_deny_contradicts_write():
+    with pytest.raises(VaultScopeError, match="contradictory"):
+        validate_scope({
+            "read": ["dev/**"],
+            "write": ["dev/**"],
+            "deny": ["dev/**"],
+        })
+
+
+def test_deny_different_pattern_is_fine():
+    validate_scope({
+        "read": ["dev/**"],
+        "write": ["dev/**"],
+        "deny": ["dev/secrets/**"],  # different pattern, no contradiction
+    })
+
+
+def test_traversal_in_pattern_rejected():
+    with pytest.raises(VaultScopeError, match="traversal"):
+        validate_scope({"read": ["dev/../etc/passwd"]})
+
+
+def test_dot_segment_in_pattern_rejected():
+    with pytest.raises(VaultScopeError, match="current-directory"):
+        validate_scope({"read": ["dev/./foo"]})
+
+
+def test_partial_wildcard_rejected():
+    with pytest.raises(VaultScopeError, match="partial wildcard"):
+        validate_scope({"read": ["dev/*.md"]})
+
+
+def test_partial_wildcard_prefix_rejected():
+    with pytest.raises(VaultScopeError, match="partial wildcard"):
+        validate_scope({"read": ["dev/*foo"]})
+
+
+def test_star_and_doublestar_allowed():
+    validate_scope({"read": ["*", "dev/**"]})
+
+
+def test_unknown_key_rejected():
+    with pytest.raises(VaultScopeError, match="unknown keys"):
+        validate_scope({"read": ["dev/**"], "execute": ["dev/**"]})
+
+
+def test_non_list_value_rejected():
+    with pytest.raises(VaultScopeError, match="must be a list"):
+        validate_scope({"read": "dev/**"})
+
+
+def test_non_string_pattern_rejected():
+    with pytest.raises(VaultScopeError, match="non-string or empty"):
+        validate_scope({"read": [123]})
+
+
+def test_empty_pattern_rejected():
+    with pytest.raises(VaultScopeError, match="non-string or empty"):
+        validate_scope({"read": [""]})
+
+
+def test_non_dict_scope_rejected():
+    with pytest.raises(VaultScopeError, match="must be an object"):
+        validate_scope(["dev/**"])
+
+
+def test_empty_scope_is_valid():
+    # An empty dict means no access — same as NULL. Not an error.
+    validate_scope({})

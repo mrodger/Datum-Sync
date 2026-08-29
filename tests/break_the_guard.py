@@ -1300,6 +1300,47 @@ CASES = [
         "        if False:",
         "tests/test_proxy.py::test_proxy_rejects_non_http_connection",
     ),
+
+    # -- vault_scope validation guards ------------------------------------------
+
+    (
+        "write-implies-read on vault_scope",
+        "datum_sync/vault.py",
+        "    missing = write_set - read_set\n"
+        "    if missing:",
+        "    missing = write_set - read_set\n"
+        "    if False:",
+        "tests/test_vault.py::test_write_implies_read",
+    ),
+    (
+        "deny-disjoint-from-allow on vault_scope",
+        "datum_sync/vault.py",
+        "        overlap = deny_set & set(all_patterns.get(action, []))\n"
+        "        if overlap:",
+        "        overlap = deny_set & set(all_patterns.get(action, []))\n"
+        "        if False:",
+        "tests/test_vault.py::test_deny_contradicts_allow",
+    ),
+    (
+        "traversal in vault_scope patterns",
+        "datum_sync/vault.py",
+        "        if seg == \"..\":\n"
+        "            raise VaultScopeError(\n"
+        "                f\"vault_scope.{key}: pattern {pattern!r} contains a traversal segment\"\n"
+        "            )",
+        "        if False:\n"
+        "            raise VaultScopeError(\n"
+        "                f\"vault_scope.{key}: pattern {pattern!r} contains a traversal segment\"\n"
+        "            )",
+        "tests/test_vault.py::test_traversal_in_pattern_rejected",
+    ),
+    (
+        "star-confinement in vault_scope patterns",
+        "datum_sync/vault.py",
+        "        if \"*\" in seg and seg not in (\"*\", \"**\"):",
+        "        if False:",
+        "tests/test_vault.py::test_partial_wildcard_rejected",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

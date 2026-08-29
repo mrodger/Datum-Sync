@@ -10,9 +10,9 @@ Two rules the rest of the system depends on:
   * `deny` wins. It is checked before any allow, and a match ends the question.
   * An allow is literal. `write` on a path does not imply `read` on it here,
     even though a scope granting one without the other is incoherent. That
-    incoherence is caught at *write* time by spec/shapes/vault_scope.ttl, and
-    inferring it here as well would mean the shape could be deleted with every
-    test still passing.
+    incoherence is caught at *write* time by validate_scope(), and inferring
+    it here as well would mean the validation could be deleted with every test
+    still passing.
 
 Glob semantics are the ones an operator writing `dev/**` expects, which are not
 the ones `fnmatch` implements: `fnmatch` translates `*` to `.*`, so the pattern
@@ -126,6 +126,98 @@ def permits(scope: dict | None, action: str, path: str) -> bool:
     if any(matches(p, path) for p in scope.get("deny") or ()):
         return False
     return any(matches(p, path) for p in scope.get(action) or ())
+
+
+# -- scope validation (account write time) ----------------------------------
+
+
+class VaultScopeError(ValueError):
+    """The scope document itself is malformed, independent of any path."""
+
+
+def validate_scope(scope: dict) -> None:
+    """Reject a vault_scope document that violates structural constraints.
+
+    Called at account create/update — before the scope reaches the database.
+    Four rules:
+
+      1. **write-implies-read**: every path in `write` must also appear in
+         `read`. A write-only grant makes no operational sense (you can't
+         verify what you wrote) and would silently fail at the first read
+         check.
+      2. **deny-disjoint-from-allow**: a deny pattern that is identical to an
+         allow pattern is contradictory — deny always wins, so the allow is
+         dead. This is almost certainly a copy-paste error.
+      3. **no traversal**: patterns must not contain `..` segments.
+      4. **star-confinement**: `*` is valid as a whole segment or as `**`.
+         Patterns like `*foo` or `f*o` are refused because the glob engine
+         treats them correctly but operators never expect `[^/]*foo` semantics.
+
+    Raises VaultScopeError on the first violation found.
+    """
+    if not isinstance(scope, dict):
+        raise VaultScopeError("vault_scope must be an object")
+
+    unknown = set(scope) - set(SCOPE_KEYS)
+    if unknown:
+        raise VaultScopeError(f"unknown keys in vault_scope: {', '.join(sorted(unknown))}")
+
+    # Collect all patterns for cross-key checks.
+    all_patterns: dict[str, list[str]] = {}
+    for key in SCOPE_KEYS:
+        patterns = scope.get(key)
+        if patterns is None:
+            continue
+        if not isinstance(patterns, list):
+            raise VaultScopeError(f"vault_scope.{key} must be a list of patterns")
+        for p in patterns:
+            if not isinstance(p, str) or not p:
+                raise VaultScopeError(f"vault_scope.{key} contains a non-string or empty pattern")
+            _validate_pattern(key, p)
+        all_patterns[key] = patterns
+
+    # Rule 1: write-implies-read.
+    write_set = set(all_patterns.get("write", []))
+    read_set = set(all_patterns.get("read", []))
+    missing = write_set - read_set
+    if missing:
+        raise VaultScopeError(
+            f"write patterns not in read (write-implies-read): "
+            f"{', '.join(sorted(missing))}"
+        )
+
+    # Rule 2: deny-disjoint-from-allow.
+    deny_set = set(all_patterns.get("deny", []))
+    for action in ACTIONS:
+        overlap = deny_set & set(all_patterns.get(action, []))
+        if overlap:
+            raise VaultScopeError(
+                f"deny patterns also in {action} (contradictory): "
+                f"{', '.join(sorted(overlap))}"
+            )
+
+
+def _validate_pattern(key: str, pattern: str) -> None:
+    """Per-pattern structural checks (rules 3 and 4)."""
+    segments = pattern.split("/")
+    for seg in segments:
+        # Rule 3: no traversal.
+        if seg == "..":
+            raise VaultScopeError(
+                f"vault_scope.{key}: pattern {pattern!r} contains a traversal segment"
+            )
+        if seg == ".":
+            raise VaultScopeError(
+                f"vault_scope.{key}: pattern {pattern!r} contains a current-directory segment"
+            )
+        # Rule 4: star-confinement.
+        # Allowed: `*` (whole segment), `**` (globstar).
+        # Refused: `*foo`, `foo*`, `f*o`, `***`, etc.
+        if "*" in seg and seg not in ("*", "**"):
+            raise VaultScopeError(
+                f"vault_scope.{key}: pattern {pattern!r} has a partial wildcard "
+                f"in segment {seg!r} — use * (one segment) or ** (any depth)"
+            )
 
 
 def check(scope: dict | None, action: str, path: str) -> str:
