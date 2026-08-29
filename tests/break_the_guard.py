@@ -1151,6 +1151,26 @@ CASES = [
         "        status);\n",
         "tests/test_ui.py::test_v2_invents_no_css_classes",
     ),
+    (
+        # Also not invented: this is what chunk 7 shipped to the browser, and
+        # the screenshot of it printed a blue "null" under the automation's
+        # title. The suite, and the browser script's twelve assertions about
+        # that same screen, all passed.
+        "a conditional child handed to the DOM's append rather than ours",
+        "datum_sync/static-v2/app.js",
+        "    append(view, [\n"
+        "        crumbs(['Automations', '#/automations'], [a.name]),\n",
+        "    view.append(\n"
+        "        crumbs(['Automations', '#/automations'], [a.name]),\n",
+        "tests/test_ui.py::test_v2_never_appends_a_child_that_can_be_nothing",
+    ),
+    (
+        "the label for one of the server's action types",
+        "datum_sync/static-v2/app.js",
+        "    http_request: 'webhook',\n",
+        "",
+        "tests/test_ui.py::test_v2_labels_every_automation_action",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

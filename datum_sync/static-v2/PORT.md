@@ -588,6 +588,53 @@ line, which names the submit button and so differs per form. **Run the harness
 after ordinary feature work, not only after writing a guard.** 104 cases, all
 proven.
 
+### Chunk 7 — automations
+
+`SCREENS.automations` is two entries: the list, and one screen that serves both
+`#/automations/new` and `#/automations/<id>` because the router indexes by
+segment count and cannot tell them apart.
+
+**The mockup has one column fewer than v1.** v1 gave the trigger its own column;
+`mock-automations.html` folds it into the name cell's `.desc` line ("job complete
+&middot; SCIMAC/site_plan") and spends the column on Status instead. There is no
+mockup for the detail screen, so it follows the schedule editor's shape.
+
+`triggerDesc()` spells out a statusless trigger as "any finished job" rather
+than leaving it blank. The fixture automation has `status: null`, and blank is
+indistinguishable from a rendering failure.
+
+`ACTION_LABELS` is a second vocabulary — the list writes "webhook" where the
+server says `http_request`. It falls back to `replace(/_/g, ' ')` so a type
+nobody has labelled still reads as something, and a guard asserts its key set
+equals `automations.ACTIONS` in both directions.
+
+**The editor holds the stored YAML verbatim, never a re-serialisation of the
+parsed config.** Round-tripping through the parser would rewrite comments, key
+order and quoting on a save that changed nothing. The server is the only YAML
+parser: a document it refuses comes back as a banner on the form, not a
+navigation. PUT takes `{yaml}`; PATCH on the same resource takes only
+`{enabled}`.
+
+Chunk 6's `untilNode` is now `relativeNode`. The function already handled both
+directions — the difference is signed — but Last fired is a past time, and a
+function called `untilNode` returning "2 minutes ago" is a name that lies.
+
+**New guard: `test_v2_never_appends_a_child_that_can_be_nothing`. This is the
+mistake chunk 7 actually shipped.** `append(node, children)` is ours and skips
+`null`, `undefined` and `false`, which is why `el()` can take a conditional
+child. `view.append(...)` is the DOM's `Node.append`, which stringifies whatever
+it is handed. A conditional `last_error` banner passed to the wrong one printed
+a blue **null** under the automation's title. The full suite passed. The browser
+script's twelve assertions about that exact screen passed. `node --check` passes
+on the broken form — it is valid JavaScript. **Only reading the screenshot found
+it.** The rule the guard enforces: a dotted `.append(` is the DOM's and takes
+nodes and strings only; the bare `append(node, [...])` is where a child that can
+be nothing belongs. A blanket ban on `view.append(` was rejected — 34 call sites
+across finished chunks, plus a FormData `body.append('file', file)` it would
+have caught wrongly.
+
+106 cases, all proven.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers

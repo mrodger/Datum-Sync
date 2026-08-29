@@ -487,6 +487,115 @@ def test_v2_invents_no_css_classes():
         f"{n!r} (app.js:{line})" for n, line in missing)
 
 
+def _call_args(src: str, open_paren: int) -> list[str]:
+    """Split a JS call's top-level arguments, given the index of its `(`.
+
+    A regex cannot do this: the arguments are nested calls containing commas,
+    strings containing brackets and comments containing both. This walks the
+    text once, tracking bracket depth and skipping over string literals and
+    comments, and splits only on commas at depth 1.
+    """
+    depth, args, cur, i, n = 0, [], [], open_paren, len(src)
+    while i < n:
+        c = src[i]
+        if src.startswith("//", i):
+            i = src.index("\n", i)
+        elif src.startswith("/*", i):
+            i = src.index("*/", i) + 2
+        elif c in "'\"`":
+            j = i + 1
+            while j < n and src[j] != c:
+                j += 2 if src[j] == "\\" else 1
+            cur.append(src[i:j + 1])
+            i = j + 1
+        elif c in "([{":
+            depth += 1
+            if depth > 1:
+                cur.append(c)
+            i += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                args.append("".join(cur))
+                return args
+            cur.append(c)
+            i += 1
+        elif c == "," and depth == 1:
+            args.append("".join(cur))
+            cur = []
+            i += 1
+        else:
+            cur.append(c)
+            i += 1
+    raise AssertionError(f"unbalanced call at offset {open_paren}")
+
+
+def test_v2_never_appends_a_child_that_can_be_nothing():
+    """A conditional child may go to append(), never to node.append().
+
+    They are two different functions and only one of them is ours. app.js's
+    append() drops null, undefined and false, which is what lets el() take a
+    conditional child -- `glyph ? icon(glyph) : null` -- and render nothing.
+    Node.append is the DOM's, and it stringifies: hand it null and the page
+    gets the four characters "null".
+
+    Chunk 7 did exactly that. `a.last_error ? el('div', ...) : null` went
+    straight into view.append(), and an automation with no error printed a blue
+    "null" under its own title. Nothing in the suite could see it, and neither
+    could the browser script -- it read the badge, the toggle, the kv pairs and
+    the editor contents, all correct. Only the screenshot showed it.
+
+    So the rule is about the receiver, not the value: a dotted `.append(` is the
+    DOM's and must be handed nodes and strings only; the bare `append(node, [])`
+    is ours and is where a conditional child belongs.
+    """
+    src = (STATIC_V2_DIR / "app.js").read_text()
+
+    calls, bad = 0, []
+    for m in re.finditer(r"\.append\(", src):
+        calls += 1
+        for arg in _call_args(src, m.end() - 1):
+            tail = arg.split()[-1] if arg.split() else ""
+            if tail in ("null", "undefined", "false"):
+                bad.append((src.count("\n", 0, m.start()) + 1,
+                            " ".join(arg.split())[-60:]))
+
+    assert calls > 20, f"only {calls} .append() calls found; the parser drifted"
+    assert not bad, (
+        "a child that can evaluate to nothing was handed to the DOM's append, "
+        "which will render it as text -- use append(node, [...]) instead: "
+        + "; ".join(f"app.js:{line} ...{text}" for line, text in bad))
+
+
+def test_v2_labels_every_automation_action():
+    """The list's Actions column is a second vocabulary, and it can drift.
+
+    The server stores `run_workspace` and `http_request`; the mockup writes
+    "run workspace" and "webhook", so app.js carries a map between them. Add a
+    third action type in automations.py and nothing on this side knows about
+    it -- the tests for the automation engine would all pass, and the column
+    would be the only thing that was wrong.
+
+    The fallback in app.js keeps that from being a blank cell: an unmapped type
+    renders as its own name with the underscores opened up. This test is what
+    keeps the fallback from being the answer for a type we could have named
+    properly, and it fails in both directions -- a label left behind after a
+    type is removed is drift too, pointing at an action that cannot happen.
+    """
+    from datum_sync import automations
+
+    src = (STATIC_V2_DIR / "app.js").read_text()
+    block = re.search(r"const ACTION_LABELS = \{(.*?)\n\};", src, re.S)
+    assert block, "ACTION_LABELS is gone from app.js; the Actions column is unmapped"
+    labelled = set(re.findall(r"(\w+):", block.group(1)))
+
+    assert labelled, "ACTION_LABELS parsed as empty; the parser drifted"
+    assert labelled == set(automations.ACTIONS), (
+        "app.js and automations.py disagree about what an automation can do -- "
+        f"unlabelled: {sorted(set(automations.ACTIONS) - labelled)}, "
+        f"stale: {sorted(labelled - set(automations.ACTIONS))}")
+
+
 @pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
     """Same property as the v1 mount, and it has to be asserted separately:

@@ -374,7 +374,7 @@ const SCREENS = {
     repositories:     [screenRepositories, screenRepository, screenWorkspace],
     jobs:             [screenJobs, screenJob],
     schedules:        [screenSchedules, screenSchedule],
-    automations:      [(v) => portPending(v, 'Automations', 7)],
+    automations:      [screenAutomations, screenAutomation],
     connections:      [(v) => portPending(v, 'Connections', 8)],
     services:         [(v) => portPending(v, 'Services', 9)],
     admin:            [(v) => portPending(v, 'Admin', 10)],
@@ -1603,7 +1603,10 @@ function triggerOf(schedule) {
         : el('code', {}, 'every ', every(schedule.interval_s));
 }
 
-/* "in 6 hours", the way the mockup writes Next run.
+/* "in 6 hours", the way the mockup writes Next run -- and "2 minutes ago", the
+ * way it writes Last fired. The sign of the difference picks the direction, so
+ * one function serves both columns; it was called untilNode until chunk 7
+ * needed the backwards half.
  *
  * The absolute time goes in the title, and not as a nicety: a relative time is
  * computed once and then sits there, and this list has no repoll to correct
@@ -1612,7 +1615,7 @@ function triggerOf(schedule) {
  * wording, so it is the browser's locale rather than a table of English
  * plurals maintained here.
  */
-function untilNode(iso) {
+function relativeNode(iso) {
     if (!iso) return el('span', {}, '\u2014');
     const ms = new Date(iso) - new Date();
     const units = [['day', 86400000], ['hour', 3600000], ['minute', 60000], ['second', 1000]];
@@ -1761,7 +1764,7 @@ async function screenSchedules(view) {
         // Only for an enabled schedule. Pausing does not clear next_run, so a
         // paused one still carries whatever time it was paused at -- shown,
         // that reads as permanently overdue, which it is not.
-        el('td', {}, s.enabled ? untilNode(s.next_run) : '\u2014'),
+        el('td', {}, s.enabled ? relativeNode(s.next_run) : '\u2014'),
         el('td', {}, s.last_job
             ? el('a', { href: '#/jobs/' + s.last_job }, s.last_job.slice(0, 8))
             : '\u2014'))), { select: true }));
@@ -2001,7 +2004,7 @@ async function editSchedule(view, id) {
                             + `/${encodeURIComponent(s.workspace)}`,
                     }, s.repository + '/' + s.workspace)),
                     el('dt', {}, 'Next run'),
-                    el('dd', {}, s.enabled ? untilNode(s.next_run) : 'paused'),
+                    el('dd', {}, s.enabled ? relativeNode(s.next_run) : 'paused'),
                     el('dt', {}, 'Last run'), el('dd', {}, when(s.last_run)),
                     el('dt', {}, 'Last job'),
                     el('dd', {}, s.last_job
@@ -2013,6 +2016,322 @@ async function editSchedule(view, id) {
                     'Repository and workspace cannot be changed. A schedule that '
                     + 'could be repointed is a permission check made once, on a '
                     + 'row that no longer says what it said.'))));
+}
+
+// ---------------------------------------------------------------------------
+// automations
+// ---------------------------------------------------------------------------
+
+/* The document a new automation starts from. Deliberately complete and
+ * deliberately not runnable as-is: every field is shown with a real value so
+ * the shape is learnable from the form, and REPOSITORY/WORKSPACE are obvious
+ * placeholders so nobody saves the example by accident and wonders why it
+ * never fires. Carried over from v1 unchanged -- it is the server's vocabulary
+ * written out, not a piece of v1 chrome. */
+const AUTOMATION_TEMPLATE = [
+    'name: my-automation',
+    'enabled: true',
+    '',
+    'trigger:',
+    '  type: job_complete',
+    '  repository: REPOSITORY',
+    '  workspace: WORKSPACE',
+    '  status: complete        # omit for any terminal status, failures included',
+    '',
+    'actions:',
+    '  - type: http_request',
+    '    method: POST',
+    '    url: https://example.com/hook',
+    '    body: \'{"job": "{{job.id}}", "status": "{{job.status}}"}\'',
+    '',
+].join('\n');
+
+/* The mockup writes action types as English -- "run workspace", "webhook" --
+ * where v1 printed the stored `run_workspace` / `http_request`. That is a
+ * second vocabulary living in the browser, and the failure it invites is
+ * silent: a third action type added in automations.py would render as blank or
+ * `undefined` here, and no test of either side alone would notice.
+ *
+ * So the fallback is not a dash and not an empty string. An unrecognised type
+ * comes out as its own name with the underscores opened up, which is wrong-ish
+ * English but is never nothing -- the row still says what it does. The pairing
+ * with the server's ACTIONS tuple is what test_v2_labels_every_automation_action
+ * holds; this map is allowed to be incomplete only in the direction that still
+ * renders.
+ */
+const ACTION_LABELS = {
+    run_workspace: 'run workspace',
+    http_request: 'webhook',
+};
+
+function actionLabel(action) {
+    return ACTION_LABELS[action.type] || String(action.type).replace(/_/g, ' ');
+}
+
+function actionsOf(config) {
+    return (config.actions || []).map(actionLabel).join(', ');
+}
+
+/* The `.desc` line under the name, in the mockup's two halves: what fires it,
+ * then what it watches. "job complete &middot; SCIMAC/site_plan".
+ *
+ * v1 gave this its own Trigger column; the mockup folds it into the name cell,
+ * which is why the v2 table has one column fewer than v1's.
+ *
+ * A trigger with no status matches every terminal status, failures included --
+ * so it is spelled out rather than left blank, because a blank there reads as
+ * "complete" to anyone who has only ever seen the other rows.
+ */
+function triggerDesc(config) {
+    const t = config.trigger || {};
+    const fires = t.status ? 'job ' + t.status : 'any finished job';
+    let watches;
+    if (!t.repository) watches = 'any repository';
+    else if (!t.workspace) watches = 'any workspace in ' + t.repository;
+    else watches = t.repository + '/' + t.workspace;
+    return fires + ' \u00b7 ' + watches;
+}
+
+async function screenAutomations(view) {
+    const { items } = await api('/automations');
+
+    actionBar(view, 'Automations', {
+        desc: 'An automation watches for finished jobs and runs a workspace or '
+            + 'calls a URL when one matches.',
+        search: 'Search automations by name',
+        actions: [
+            el('a', { class: 'button', href: '#/automations/' + NEW }, 'Create'),
+            action('Pause', () => pauseSelected(), { needs: 'many' }),
+            action('Edit', () => editSelected(), { needs: 'one' }),
+            action('Remove', () => removeSelected(), { needs: 'many' }),
+        ],
+    });
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('automations', 48)),
+            el('h3', {}, 'No automations'),
+            el('p', {}, 'An automation watches for finished jobs and runs a '
+                + 'workspace or calls a URL when one matches.')));
+        return;
+    }
+
+    view.append(table([
+        { label: 'Status', sortable: true },
+        { label: 'Name', sortable: true, sorted: true },
+        { label: 'Actions', sortable: true },
+        { label: 'Last fired', sortable: true },
+        { label: 'Last error', sortable: true },
+    ], items.map((a) => el('tr', {},
+        rowCheck(a.name),
+        el('td', {}, badge(a.enabled ? 'enabled' : 'paused')),
+        el('td', {}, cellName('automations',
+            el('a', { href: '#/automations/' + a.id }, a.name),
+            triggerDesc(a.config))),
+        el('td', {}, actionsOf(a.config)),
+        // Unlike a schedule's next run, last_fired is a fact about the past: a
+        // paused automation still fired when it fired, so it is shown either
+        // way.
+        el('td', {}, relativeNode(a.last_fired)),
+        el('td', { class: 'error' }, a.last_error || ''))), { select: true }));
+
+    view.append(pagerBar(items.length));
+    const handle = mountTable(view);
+
+    const chosen = () => (handle
+        ? handle.selection().map((key) => items[Number(key)]).filter(Boolean)
+        : []);
+
+    // Sets enabled=false rather than toggling each row, for the reason set out
+    // on the schedules list: a mixed selection under a button labelled Pause
+    // must not start anything.
+    async function pauseSelected() {
+        await Promise.all(chosen().map((a) =>
+            api('/automations/' + a.id, { method: 'PATCH', json: { enabled: false } })));
+        route();
+    }
+
+    function editSelected() {
+        const [a] = chosen();
+        if (a) go('#/automations/' + a.id);
+    }
+
+    async function removeSelected() {
+        const picked = chosen();
+        if (!picked.length) return;
+        const names = picked.map((a) => a.name).join(', ');
+        // The second confirm() in the UI, for the same reason as the first: the
+        // YAML document is stored nowhere else, and the API has no undelete.
+        if (!window.confirm(`Delete ${picked.length} automation(s)?\n\n${names}`)) return;
+        await Promise.all(picked.map((a) =>
+            api('/automations/' + a.id, { method: 'DELETE' })));
+        route();
+    }
+}
+
+async function screenAutomation(view, id) {
+    return id === NEW ? newAutomation(view) : editAutomation(view, id);
+}
+
+/* The editor, shared by both forms.
+ *
+ * It holds the stored YAML verbatim -- not the parsed config re-serialised. An
+ * editor that hands back a normalised document silently discards comments, key
+ * order and quoting style, so opening an automation and saving it unchanged
+ * would rewrite it.
+ *
+ * Nothing here parses YAML. The server does, and it is the only thing that
+ * does, so the editor can neither accept a document the server would refuse
+ * nor refuse one it would accept.
+ */
+function yamlEditor(text) {
+    return el('textarea', { class: 'yaml', spellcheck: 'false', rows: 22 }, text);
+}
+
+function definitionCard(editor) {
+    return el('div', { class: 'card' }, el('h2', {}, 'Definition'), editor);
+}
+
+async function newAutomation(view) {
+    const editor = yamlEditor(AUTOMATION_TEMPLATE);
+    const status = el('div', {});
+    const create = el('button', { type: 'submit' }, 'Create automation');
+
+    const form = el('form', {},
+        definitionCard(editor),
+        el('div', { class: 'action-bar' },
+            el('div', { class: 'actions' },
+                create,
+                action('Cancel', () => go('#/automations')))),
+        status);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        create.disabled = true;
+        clear(status);
+        try {
+            await api('/automations', { method: 'POST', json: { yaml: editor.value } });
+            go('#/automations');
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            create.disabled = false;
+        }
+    });
+
+    view.append(
+        crumbs(['Automations', '#/automations'], ['New']),
+        el('h1', {}, 'New automation'),
+        el('p', { class: 'page-desc' },
+            'Placeholders are ', el('code', {}, '{{job.id}}'), ', ',
+            el('code', {}, '{{job.status}}'), ' and ',
+            el('code', {}, '{{params.NAME}}'), '. A name outside that set is '
+            + 'refused now rather than posted as literal text later.'),
+        form);
+}
+
+async function editAutomation(view, id) {
+    const a = await api('/automations/' + encodeURIComponent(id));
+    const { items: runs } = await api(
+        '/automations/' + encodeURIComponent(id) + '/runs');
+
+    const editor = yamlEditor(a.yaml);
+    const status = el('div', {});
+    const save = el('button', { type: 'submit' }, 'Save');
+
+    const form = el('form', {},
+        definitionCard(editor),
+        el('div', { class: 'action-bar' },
+            el('div', { class: 'actions' },
+                save,
+                action('Cancel', () => go('#/automations')))),
+        status);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        clear(status);
+        try {
+            // PUT, not PATCH: this replaces the whole document, including the
+            // name and the enabled flag it carries. PATCH on this resource
+            // takes only `enabled` and is what the toggle below uses.
+            await api('/automations/' + encodeURIComponent(id),
+                { method: 'PUT', json: { yaml: editor.value } });
+            go('#/automations');
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            save.disabled = false;
+        }
+    });
+
+    const toggle = el('button', {
+        type: 'button', class: 'secondary',
+        onclick: async () => {
+            toggle.disabled = true;
+            await api('/automations/' + encodeURIComponent(id),
+                { method: 'PATCH', json: { enabled: !a.enabled } });
+            route();
+        },
+    }, icon('refresh', 15), ' ', a.enabled ? 'Pause' : 'Resume');
+
+    const remove = el('button', {
+        type: 'button', class: 'danger',
+        onclick: async () => {
+            if (!window.confirm(`Delete the automation ${a.name}?`)) return;
+            remove.disabled = true;
+            await api('/automations/' + encodeURIComponent(id), { method: 'DELETE' });
+            go('#/automations');
+        },
+    }, 'Delete');
+
+    // append(), not view.append(). The banner below is conditional, and
+    // Node.append is the DOM's, which stringifies whatever it is handed: a null
+    // child renders as the four characters "null" on the page. Our append()
+    // drops null, undefined and false, which is why el() can take a conditional
+    // child and this cannot. It printed a blue "null" under the title for the
+    // length of one screenshot.
+    append(view, [
+        crumbs(['Automations', '#/automations'], [a.name]),
+        el('div', { class: 'page-header' },
+            el('h1', {}, a.name),
+            el('div', { class: 'actions' }, badge(a.enabled ? 'enabled' : 'paused'),
+                toggle, remove)),
+        // The last error sits above the editor, not in a column: this is the
+        // screen someone opens *because* the list showed one, and it is the
+        // document below that has to change to clear it.
+        a.last_error ? el('div', { class: 'banner' }, a.last_error) : null,
+        el('div', { class: 'split' },
+            form,
+            el('div', { class: 'panel' },
+                el('h2', {}, 'Details'),
+                el('dl', { class: 'kv' },
+                    el('dt', {}, 'Trigger'), el('dd', {}, triggerDesc(a.config)),
+                    el('dt', {}, 'Actions'), el('dd', {}, actionsOf(a.config)),
+                    el('dt', {}, 'Last fired'), el('dd', {}, relativeNode(a.last_fired)),
+                    el('dt', {}, 'Created by'), el('dd', {}, a.created_by || '\u2014'),
+                    el('dt', {}, 'Created'), el('dd', {}, when(a.created_at)),
+                    el('dt', {}, 'Updated'), el('dd', {}, when(a.updated_at))),
+                el('p', { class: 'hint' },
+                    'The name, the trigger and the enabled flag all live in the '
+                    + 'document. Saving replaces it whole.'))),
+        el('h2', {}, 'Runs'),
+        runs.length
+            ? table(['Result', 'Fired', 'Triggered by', 'Detail'],
+                runs.map((r) => el('tr', {},
+                    el('td', {}, badge(r.ok ? 'complete' : 'failed')),
+                    el('td', {}, when(r.fired_at)),
+                    el('td', {}, r.trigger_job
+                        ? el('a', { href: '#/jobs/' + r.trigger_job },
+                            r.trigger_job.slice(0, 8))
+                        : '\u2014'),
+                    el('td', {}, el('span', { class: 'mono' },
+                        JSON.stringify(r.results))))))
+            : el('div', { class: 'empty-state' },
+                el('div', { class: 'es-icon' }, icon('automations', 48)),
+                el('h3', {}, 'Not fired yet'),
+                el('p', {}, 'Runs appear here once a job matches the trigger.')),
+    ]);
 }
 
 // ---------------------------------------------------------------------------
