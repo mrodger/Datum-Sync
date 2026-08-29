@@ -174,6 +174,71 @@ stated gap. Chunk 2 either computes it client-side from the counters it already
 fetches, or omits it — deciding that is part of the chunk, and quietly shipping
 a ring fed by invented numbers is the failure mode to avoid.
 
+### Chunk 2 — the dashboard
+
+Done, and what it turned up.
+
+**The ring needed no third option.** It is computed from `summary.counts` —
+`/rest/v1/transformations/jobs/summary` already returns every status, and the
+mockup's own `stroke-dasharray` figures turn out to be exactly those counts
+scaled to the circumference (2π×70 = 439.82; 385.86/439.82 = 143/163 exactly,
+and likewise for the other two arcs). So the mockup was already drawing computed
+values and the gap was in the reading, not in the data. It is fed by the *same*
+response the counters below it use, which is the part worth keeping: the ring
+and the counters cannot disagree, because there is only one number for each. It
+returns `null` when nothing has settled — three zero-length arcs render as an
+empty grey circle with "0" in it, which reads as a chart that failed to load
+rather than as an instance where nothing has finished yet.
+
+**Three places the mockup and the app had to diverge**, each commented at the
+call site rather than silently:
+
+- Its first create tile points at `#/run`, which is not a section. An
+  unrouteable href lands on "Not found", quietly, one click away — `route()`
+  cannot help, because an unknown section is exactly how a mistyped URL arrives.
+  The tiles use routes that exist.
+- Its right rail has a second reference card promising "Engines, drivers and
+  disk" behind `#/resources`. That section is a `stubScreen`. Shipped with one
+  card: a card is a claim about content, and the screen behind it would have
+  contradicted it.
+- Its badges carry a glyph, and there is no mockup badge for `cancelled`. The
+  nearest candidates in `icons.js` are `remove` (a trash can) and `warn` (a
+  hazard triangle), either of which would say something untrue about a cancelled
+  job. `BADGE_GLYPHS` maps only the four states the mockups draw; the rest get
+  no glyph. A badge with no icon reads as a badge — a badge with the wrong icon
+  reads as a different status.
+
+**Two new guards, both for failures whose whole signature is an absence.**
+`icon()` appends a `<path>` only if it found one, so a misspelled name renders
+an empty `<svg>`; `route()` renders "Not found" rather than throwing.
+`test_every_v2_icon_app_js_asks_for_exists` collects names from four sources
+(`icon()` call sites, `BADGE_GLYPHS`, the pager's `arrow()` calls, and the
+section ids the nav builds glyphs from) with a floor on each, so a regex that
+stops matching fails rather than passes over an empty set. Its gap is worth
+knowing: a glyph reaching `icon()` through any *other* table of data is
+invisible to it — the create tiles are one, and they pass today only because
+every glyph they name is also a section id. Both are in `break_the_guard.py`
+(98 cases now, all proven).
+
+**The chunk-1 helpers have their first evidence.** `table`, `when` and `badge`
+now have a caller and render correctly. `actionBar`, `action`, `cellName`,
+`rowCheck`, `pagerBar`, `mountTable`, `pageTabs`, `crumbs` and `duration` are
+still shipped on the strength of reading — chunk 3 is their test.
+
+**A same-hash `goto()` fires no `hashchange`.** So a browser check that
+navigates to the hash the page is already on never runs `route()` and asserts
+against the *previous* render. The branch test for the ring first ran that way:
+it reported the empty-ring result twice and called the second one a failure.
+Hop through another screen between stubs.
+
+**Counting requests could not prove the poll cleanup.** The screen you navigate
+to fetches nothing, so a timer that outlived its screen fires `route()`,
+re-renders *jobs*, and calls summary zero times either way — an assertion that
+passes whether or not the bug is present. What a surviving timer does do is
+re-enter `route()`, which replaces `#view`'s child; so hold the new screen's
+container and ask whether it is still attached. Falsified by deleting the
+`clearTimeout` return, which turns it red.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers

@@ -230,6 +230,77 @@ async def test_every_v2_icon_is_a_single_path():
 
 
 @pytest.mark.asyncio
+async def test_every_v2_icon_app_js_asks_for_exists():
+    """A misspelled icon name renders an empty <svg>, not an error.
+
+    icon() looks the name up in ICON_PATHS and appends a <path> only if it
+    found one, because the alternative is throwing inside a render. So a typo,
+    or an icon renamed in icons.js, produces a correctly sized invisible box in
+    the middle of a working page -- a missing glyph that no console, no test
+    and no HTTP status reports. The nav in particular takes its glyph from the
+    section id, so renaming a section is enough to do it.
+
+    Four sources of a name, each with its own floor so that a regex which stops
+    matching fails here rather than passing over an empty set: the icon() call
+    sites, the BADGE_GLYPHS table, the pager's arrow() calls, and the section
+    ids -- the nav builds its glyph from the id, so renaming a section is
+    enough to lose its icon with no literal anywhere naming the glyph.
+
+    Not total, and the gap is worth knowing: a glyph handed to icon() through
+    any other table of data is invisible here. The dashboard's create tiles are
+    one, and they pass today only because every glyph they name is also a
+    section id.
+    """
+    code = (STATIC_V2_DIR / "app.js").read_text()
+    icons_src = (STATIC_V2_DIR / "icons.js").read_text()
+    available = set(re.findall(r'^\s*"([\w-]+)":\s*"', icons_src, re.M))
+    assert len(available) >= 50, f"only found {len(available)} icons; parser drifted"
+
+    calls = set(re.findall(r"""\bicon\(\s*'([\w-]+)'""", code))
+    arrows = set(re.findall(r"""\barrow\('[\w ]+',\s*'([\w-]+)'\)""", code))
+    # Scoped to SECTIONS: elsewhere `id:` is an element attribute, and
+    # buildNav's `id: 'nav-' + section.id` would otherwise read as a glyph.
+    sections = re.search(r"const SECTIONS = \[(.*?)\n\];", code, re.S)
+    assert sections, "SECTIONS is gone or no longer parseable"
+    ids = set(re.findall(r"id:\s*'([\w-]+)'", sections.group(1)))
+    table = re.search(r"const BADGE_GLYPHS = \{(.*?)\};", code, re.S)
+    assert table, "BADGE_GLYPHS is gone; badge() no longer carries a glyph"
+    badges = set(re.findall(r":\s*'([\w-]+)'", table.group(1)))
+
+    for label, names, floor in (("icon() calls", calls, 4), ("BADGE_GLYPHS", badges, 4),
+                                ("pager arrows", arrows, 4), ("section ids", ids, 20)):
+        assert len(names) >= floor, f"only found {len(names)} {label}; parser drifted"
+
+    asked = calls | arrows | ids | badges
+    assert asked <= available, f"no such icon: {sorted(asked - available)}"
+
+
+@pytest.mark.asyncio
+async def test_every_v2_hash_link_names_a_screen_that_exists():
+    """An unrouteable href lands on "Not found", quietly, one click away.
+
+    The dashboard mockup points its first create tile at `#/run`, which is not
+    a section -- copying that markup faithfully would have shipped a dead tile
+    on the first screen anybody sees, and it would look like a working link
+    until pressed. route() cannot help: an unknown section is exactly how a
+    mistyped URL arrives, so it has to render "Not found" rather than throw.
+
+    Only the section is checked. What follows it is an id, a `new`, or a query
+    the screen parses for itself.
+    """
+    code = (STATIC_V2_DIR / "app.js").read_text()
+    screens = re.search(r"const SCREENS = \{(.*?)\n\};", code, re.S)
+    assert screens, "SCREENS is gone or no longer parseable"
+    known = set(re.findall(r"^\s*'?([\w-]+)'?:", screens.group(1), re.M))
+    assert len(known) >= 20, f"only found {len(known)} screens; parser drifted"
+
+    linked = {h.split("?")[0].split("/")[0]
+              for h in re.findall(r"'#/([\w-]+[^']*)'", code)}
+    assert len(linked) >= 5, f"only found {len(linked)} hash links; parser drifted"
+    assert linked <= known, f"no such screen: {sorted(linked - known)}"
+
+
+@pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
     """Same property as the v1 mount, and it has to be asserted separately:
     the two are separate StaticFiles instances under separate prefixes, and

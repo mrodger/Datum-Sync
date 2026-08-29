@@ -1041,6 +1041,27 @@ CASES = [
         "$('nav-toggle').addEventListener('click', () => 0);",
         "tests/test_ui.py::test_the_v2_ui_leaves_the_nav_toggle_to_nav_collapse_js",
     ),
+    # Chunk 2 added two more of the same kind. icon() appends a <path> only if
+    # it found one, and route() renders "Not found" rather than throwing, so
+    # both of these leave a working page with something quietly absent from it.
+    (
+        # A glyph name no icon answers to draws a correctly sized, empty <svg>.
+        "every v2 icon app.js asks for exists",
+        "datum_sync/static-v2/app.js",
+        "    complete: 'ok',",
+        "    complete: 'okay',",
+        "tests/test_ui.py::test_every_v2_icon_app_js_asks_for_exists",
+    ),
+    (
+        # The dashboard mockup's first create tile points at #/run, which is
+        # not a section. Copied faithfully it is a dead link on the first
+        # screen anybody sees, and it looks live until it is pressed.
+        "every v2 hash link names a screen that exists",
+        "datum_sync/static-v2/app.js",
+        "['Run Workspace', 'repositories', '#/repositories'],",
+        "['Run Workspace', 'repositories', '#/run'],",
+        "tests/test_ui.py::test_every_v2_hash_link_names_a_screen_that_exists",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

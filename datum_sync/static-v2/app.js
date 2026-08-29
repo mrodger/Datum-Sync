@@ -370,7 +370,7 @@ function parseHash() {
  * which of the two you are looking at.
  */
 const SCREENS = {
-    dashboard:        [(v) => portPending(v, 'Dashboard', 2)],
+    dashboard:        [screenDashboard],
     repositories:     [(v) => portPending(v, 'Repositories', 3)],
     jobs:             [(v) => portPending(v, 'Jobs', 5)],
     schedules:        [(v) => portPending(v, 'Schedules', 6)],
@@ -515,8 +515,26 @@ function duration(from, to) {
     return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+/* v2's badge carries a glyph; v1's was text only.
+ *
+ * Only the four job states the mockups draw are mapped. `cancelled`, and the
+ * `enabled`/`paused` badges the schedule screens use, get no glyph rather than
+ * a nearly-right one -- the closest candidates in icons.js are `remove` (a
+ * trash can) and `warn` (a hazard triangle), and either would say something
+ * about a cancelled job that is not true. A badge with no icon reads as a
+ * badge; a badge with the wrong icon reads as a different status.
+ */
+const BADGE_GLYPHS = {
+    complete: 'ok',
+    failed: 'fail',
+    running: 'run',
+    queued: 'pending',
+};
+
 function badge(status) {
-    return el('span', { class: 'badge ' + status }, status);
+    const glyph = BADGE_GLYPHS[status];
+    return el('span', { class: 'badge ' + status },
+        glyph ? icon(glyph, 13) : null, glyph ? ' ' : null, status);
 }
 
 function banner(err) {
@@ -685,6 +703,183 @@ function pageTabs(tabs, activeId) {
                 class: id === activeId ? 'active' : '',
                 'aria-current': id === activeId ? 'page' : false,
             }, label)));
+}
+
+// ---------------------------------------------------------------------------
+// dashboard
+// ---------------------------------------------------------------------------
+
+/* The hash segment that means "the create form", not an existing record's id.
+ * Shared with the schedule and automation screens when those chunks land. */
+const NEW = 'new';
+
+/* Flow's landing page, carrying our data: create tiles across the top, recent
+ * items under them, job counters below those, reference links last. A Flow
+ * user should not have to look for anything.
+ *
+ * The counters carry Flow's labels where the two systems name a state
+ * differently ('complete' is 'Successful' there). The status in the link is
+ * ours, because that is what /transformations/jobs filters on.
+ */
+const COUNTERS = [
+    // Flow's grouping too: the three settled states on one row, the two live
+    // ones on a wider row under them.
+    [['failed', 'Failed'], ['complete', 'Successful'], ['cancelled', 'Cancelled']],
+    [['queued', 'Queued'], ['running', 'Running']],
+];
+
+/* The ring: one arc per settled outcome, sized by its share of the settled
+ * total. r=70 on a 160 viewBox, so the circumference is 2*pi*70 and every
+ * dasharray below is a fraction of it. style.css rotates the svg -90deg, so
+ * the first segment starts at twelve o'clock.
+ *
+ * PORT.md left this open -- the mockup draws a ring the backend does not
+ * serve, and warned against shipping one fed by invented numbers. It does not
+ * need any: /transformations/jobs/summary already returns every count, and the
+ * mockup's own figures turn out to be exactly these three counts scaled to the
+ * circumference. So it is computed, not faked, and it is drawn from the same
+ * response the counters below it use -- the ring and the counters cannot
+ * disagree, because there is only one number for each.
+ *
+ * Returns null when nothing has settled. A ring of three zero-length arcs is
+ * an empty grey circle with "0" in it, which reads as a chart that failed to
+ * load rather than as an instance where nothing has finished yet.
+ */
+function ringChart(counts) {
+    const segments = ['complete', 'failed', 'cancelled'].map((s) => [s, counts[s] || 0]);
+    const total = segments.reduce((sum, [, n]) => sum + n, 0);
+    if (!total) return null;
+
+    const circumference = 2 * Math.PI * 70;
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('viewBox', '0 0 160 160');
+    svg.setAttribute('role', 'img');
+    // The only description of the ring a screen reader gets, so it carries the
+    // numbers rather than the word "chart".
+    svg.setAttribute('aria-label', segments.map(([s, n]) => `${n} ${s}`).join(', '));
+
+    let offset = 0;
+    for (const [status, n] of segments) {
+        const length = (n / total) * circumference;
+        const arc = document.createElementNS(SVG, 'circle');
+        arc.setAttribute('class', status);
+        arc.setAttribute('cx', '80');
+        arc.setAttribute('cy', '80');
+        arc.setAttribute('r', '70');
+        arc.setAttribute('fill', 'none');
+        // currentColor, so .ring-chart .complete etc. colour it. A stroke:
+        // rule would be the odd one out -- every other svg here is coloured
+        // through the text colour, and without those rules the whole ring
+        // inherits --text and paints one solid near-black arc.
+        arc.setAttribute('stroke', 'currentColor');
+        arc.setAttribute('stroke-width', '14');
+        arc.setAttribute('stroke-dasharray', `${length.toFixed(2)} ${circumference.toFixed(2)}`);
+        arc.setAttribute('stroke-dashoffset', (-offset).toFixed(2));
+        svg.append(arc);
+        offset += length;
+    }
+
+    return el('div', { class: 'ring-chart' }, svg,
+        el('div', { class: 'center' },
+            el('span', { class: 'n' }, total),
+            el('span', { class: 'label' }, 'Completed')));
+}
+
+async function screenDashboard(view) {
+    // Scopes the h2 rule to this screen; elsewhere an h2 is a panel title.
+    view.className = 'dashboard';
+    view.append(el('h1', {}, 'Dashboard'));
+
+    // Create tiles. The mockup points the first one at #/run, which is not a
+    // section -- these use the routes that exist.
+    const tiles = [
+        ['Run Workspace', 'repositories', '#/repositories'],
+        ['Create Schedule', 'schedules', '#/schedules/' + NEW],
+        ['Create Automation', 'automations', '#/automations/' + NEW],
+        // Creating a connection is admin-only at the API. Offering it here
+        // unconditionally would put a form nobody may submit one click away.
+        me.is_admin && ['Create Connection', 'connections', '#/connections?new=1'],
+    ].filter(Boolean);
+    view.append(el('div', { class: 'tiles' }, tiles.map(([label, glyph, href]) =>
+        el('a', { class: 'tile', href }, icon(glyph, 18), el('span', {}, label)))));
+
+    // Two-column grid: main content on the left, right rail on the right.
+    const main = el('div', { class: 'dash-main' });
+    const rail = el('div', { class: 'dash-rail' });
+    view.append(el('div', { class: 'dash-grid' }, main, rail));
+
+    // All three requests overlap; any one failing fails the whole screen.
+    const [reposData, recent, summary] = await Promise.all([
+        api('/repositories'),
+        api('/transformations/jobs?limit=5'),
+        api('/transformations/jobs/summary'),
+    ]);
+
+    // Published repositories as workspace cards.
+    if (reposData.items.length) {
+        main.append(el('h2', {}, 'Repositories'));
+        main.append(el('div', { class: 'ws-cards' }, reposData.items.map((repo) =>
+            el('a', { class: 'ws-card',
+                href: '#/repositories/' + encodeURIComponent(repo.name) },
+                icon('repositories', 18),
+                el('span', { class: 'ws-name' }, repo.name),
+                el('span', { class: 'ws-meta' },
+                    repo.workspaces, ' workspace', repo.workspaces === 1 ? '' : 's')))));
+    }
+
+    // Recent jobs. Single-line rows -- no cellName here. That is the 59-vs-78
+    // row pitch check_style.py locks: the dashboard's tables are a glance, the
+    // list screens' are a working surface.
+    //
+    // Not handed to mountTable(): five rows with no toolbar and no pager have
+    // nothing for table.js to sort, select or page, and wiring it would give
+    // this table a search box the mockup does not have.
+    main.append(el('h2', {}, 'Recent jobs'));
+    main.append(recent.items.length
+        ? table(['Status', 'Workspace', 'Submitted', ''],
+            recent.items.map((job) => el('tr', {},
+                el('td', {}, badge(job.status)),
+                el('td', {}, job.repository + '/' + job.workspace),
+                el('td', {}, when(job.submitted_at)),
+                el('td', {}, el('a', { href: '#/jobs/' + job.id }, 'open')))))
+        : el('div', { class: 'empty' }, 'Nothing has run yet.'));
+
+    // Job counters — links into the filtered job list, same as Flow.
+    const counts = summary.counts;
+    main.append(el('h2', {}, 'Jobs'));
+    main.append(el('div', { class: 'counters' }, COUNTERS.map((row) =>
+        el('div', { class: 'counter-row' }, row.map(([status, label]) =>
+            el('a', { class: 'counter ' + status, href: '#/jobs?status=' + status },
+                el('span', { class: 'label' }, label),
+                el('span', { class: 'n' }, counts[status])))))));
+
+    // Right rail.
+    const ring = ringChart(counts);
+    if (ring) {
+        rail.append(el('div', { class: 'rail-card' },
+            el('h3', {}, 'Job outcomes'), ring));
+    }
+
+    // One reference card, not the mockup's two. Its second points at
+    // #/resources and promises "Engines, drivers and disk"; that section is a
+    // stubScreen with no backend, so the card would be a claim about content
+    // the screen behind it then contradicts. Same reason the ring is computed
+    // rather than drawn from the mockup's numbers.
+    rail.append(el('div', { class: 'rail-card' },
+        el('h3', {}, 'Reference'),
+        el('a', { class: 'link-card', href: '/docs', target: '_blank', rel: 'noopener' },
+            el('span', { class: 'lc-text' },
+                el('b', {}, 'REST API'),
+                el('span', {}, 'Every route this page calls, with its schema')),
+            el('span', { class: 'lc-arrow' }, '\u2192'))));
+
+    // Repoll only while something is moving, and hand back the cancel. Without
+    // it the timer outlives the screen and calls route() from whatever page
+    // the user navigated to.
+    if (counts.queued || counts.running) {
+        const timer = setTimeout(route, 4000);
+        return () => clearTimeout(timer);
+    }
 }
 
 // ---------------------------------------------------------------------------
