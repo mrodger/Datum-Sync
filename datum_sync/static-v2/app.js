@@ -371,7 +371,8 @@ function parseHash() {
  */
 const SCREENS = {
     dashboard:        [screenDashboard],
-    repositories:     [(v) => portPending(v, 'Repositories', 3)],
+    repositories:     [screenRepositories, screenRepository,
+                       (v) => portPending(v, 'Run Workspace', 4)],
     jobs:             [(v) => portPending(v, 'Jobs', 5)],
     schedules:        [(v) => portPending(v, 'Schedules', 6)],
     automations:      [(v) => portPending(v, 'Automations', 7)],
@@ -598,15 +599,25 @@ function actionBar(view, title, opts) {
 
 /* A toolbar button. `needs` is 'one' or 'many' for the ones that act on a
  * selection; they start disabled because at zero selection they are, and
- * table.js is what turns them on. */
+ * table.js is what turns them on.
+ *
+ * `off` is for a button with no backend behind it at all, and it is NOT the
+ * same as `needs` with nothing selected. table.js assigns `btn.disabled` from
+ * the selection count on every change (table.js 164-167), so a `data-needs`
+ * button is enabled the moment a row is ticked, whatever it was built with.
+ * A button that must never be clickable therefore has to carry no `needs` --
+ * otherwise it lights up and does nothing, which reads as a broken feature
+ * rather than an absent one.
+ */
 function action(label, onclick, opts) {
     const o = opts || {};
     return el('button', {
         type: 'button',
         class: o.primary ? null : 'secondary',
-        'data-needs': o.needs || null,
-        disabled: o.needs ? true : null,
-        onclick,
+        'data-needs': o.off ? null : (o.needs || null),
+        disabled: o.off || o.needs ? true : null,
+        title: o.title || null,
+        onclick: o.off ? null : onclick,
     }, label);
 }
 
@@ -880,6 +891,103 @@ async function screenDashboard(view) {
         const timer = setTimeout(route, 4000);
         return () => clearTimeout(timer);
     }
+}
+
+// ---------------------------------------------------------------------------
+// repositories
+// ---------------------------------------------------------------------------
+
+/* Publishing is a CLI operation. There is no POST, PUT or DELETE anywhere
+ * under /rest/v1/repositories -- `repos` on the server is the only way in --
+ * so all four toolbar buttons are `off` rather than wired or `needs`-gated.
+ * The mockup draws Create and Upload live and Edit/Remove as selection-gated;
+ * drawn that way here, ticking a row would enable Edit and clicking it would
+ * do nothing. The empty state below says where the operation actually lives.
+ */
+async function screenRepositories(view) {
+    const { items } = await api('/repositories');
+
+    if (!items.length) {
+        view.append(el('h1', {}, 'Repositories'));
+        // .empty-state, not .empty: style.css calls the latter "legacy ...
+        // for inline empties", and this is the whole screen. h3, not the
+        // connections mockup's h2 -- style.css only sizes `.empty-state h3`,
+        // so that mockup's heading renders at 1.375rem where the sheet
+        // designed 1rem.
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('repositories', 48)),
+            el('h3', {}, 'Nothing published'),
+            el('p', {}, 'Use the ', el('code', {}, 'repos'),
+                ' CLI on the server to publish a repository. There is no '
+                + 'endpoint for it, so it cannot be done from here.')));
+        return;
+    }
+
+    actionBar(view, 'Repositories', {
+        search: 'Search repositories by name',
+        actions: [
+            action('Create', null, { primary: true, off: true, title: 'Use the repos CLI' }),
+            action('Upload', null, { off: true, title: 'Use the repos CLI' }),
+            action('Edit', null, { off: true, title: 'Use the repos CLI' }),
+            action('Remove', null, { off: true, title: 'Use the repos CLI' }),
+        ],
+    });
+
+    /* Two columns, where the mockup has four. The two it loses are the two
+     * the endpoint cannot fill:
+     *
+     * OWNER does not exist. The repositories table has `name` and `path` and
+     * nothing else; v1 renders the literal string 'admin' in every row. A
+     * column that is the same invented word all the way down is not a fact
+     * about a repository, and porting it would carry the invention forward.
+     *
+     * WORKSPACES exists, but as the second line of the name cell rather than
+     * as its own column. The count is the only other thing this response
+     * carries, and the v2 list row wants a description under the name -- with
+     * a column too it would be the same number printed twice on one row.
+     *
+     * `path` is left off deliberately: it is an absolute server path, and the
+     * list is the one screen every reader of every repository sees.
+     *
+     * The mockup's trailing "open" cell goes with them, and for a reason only
+     * the screenshot showed: it is the same href as the name beside it, and
+     * with nothing between the two columns the browser splits the row down
+     * the middle and strands it there. In the mockup it sits at the right
+     * edge because Owner and Workspaces fill the space -- take those away and
+     * a duplicate link floats in the gap they left.
+     */
+    const rows = items.map((repo) => el('tr', {},
+        rowCheck(repo.name),
+        el('td', {}, cellName('repositories',
+            el('a', { href: '#/repositories/' + encodeURIComponent(repo.name) }, repo.name),
+            repo.workspaces + ' workspace' + (repo.workspaces === 1 ? '' : 's')))));
+
+    // No hand-wired select-all here. v1 syncs the header checkbox to the rows
+    // itself; from mountTable() on, that is table.js's, and both running would
+    // toggle each row twice.
+    view.append(table([{ label: 'Repository', sortable: true, sorted: true }],
+        rows, { select: true }));
+    view.append(pagerBar(items.length));
+    mountTable(view);
+}
+
+async function screenRepository(view, repo) {
+    const { items } = await api(`/repositories/${encodeURIComponent(repo)}/workspaces`);
+    view.append(
+        crumbs(['Repositories', '#/repositories'], [repo]),
+        el('h1', {}, repo));
+    if (!items.length) {
+        view.append(el('div', { class: 'empty' }, 'No published workspaces.'));
+        return;
+    }
+    view.append(el('div', { class: 'cards' }, items.map((ws) =>
+        el('a', {
+            class: 'card',
+            href: `#/repositories/${encodeURIComponent(repo)}/${encodeURIComponent(ws.name)}`,
+        },
+            el('h3', {}, ws.name),
+            el('p', {}, ws.description || 'No description.'),
+            el('div', { class: 'meta' }, 'v', ws.version, ' \u00b7 ', when(ws.published_at))))));
 }
 
 // ---------------------------------------------------------------------------

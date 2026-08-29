@@ -239,6 +239,78 @@ re-enter `route()`, which replaces `#view`'s child; so hold the new screen's
 container and ask whether it is still attached. Falsified by deleting the
 `clearTimeout` return, which turns it red.
 
+### Chunk 3 — repositories
+
+Done. Three columns of the mockup's four are gone, and each is gone because the
+endpoint cannot fill it — not as a simplification.
+
+**OWNER does not exist.** The repositories table has `name` and `path`; the
+handler adds a workspace count and nothing else. v1 renders the literal string
+`'admin'` in every row. A column that is the same invented word all the way down
+is not a fact about a repository, and porting it faithfully would have carried
+the invention into v2 with a fresh coat of paint on it.
+
+**WORKSPACES is real, but it is the name cell's second line rather than its own
+column.** The count is the only other field in the response, and the v2 list row
+wants a description under the name; with a column as well it would be the same
+number printed twice on one row. `path` is withheld on purpose — it is an
+absolute server path and this is the screen every reader of every repository
+sees.
+
+**Only the screenshot found the fourth.** The mockup's trailing `open` link sits
+at the right edge because Owner and Workspaces fill the space between it and the
+name. Take those away and the browser splits the row down the middle and strands
+a duplicate of the name's own href in the gap. No assertion caught this; the
+PNG did, on the first render, which is the STYLE.md habit paying for the second
+time.
+
+**All four toolbar buttons are `off`, and `off` is not `needs` with nothing
+selected.** Publishing is a CLI operation — there is no POST, PUT or DELETE
+anywhere under `/rest/v1/repositories`. The reason the distinction had to become
+a new `action()` option is `table.js` 164–167: on every selection change it
+assigns `btn.disabled = need === 'one' ? n !== 1 : n < 1` across the whole action
+bar, without consulting what the button was built with. So a button built
+disabled but carrying `data-needs` is enabled by the first tick, and a
+handler-less one then reads as a broken feature rather than an absent one — and
+reads that way only to somebody who ticks a row first. The new guard,
+`test_no_v2_toolbar_button_is_woken_up_with_nothing_behind_it`, checks the
+pairing both ways: `needs` requires a handler, `off` forbids `needs` and forbids
+a handler. The browser check deliberately ticks a row before re-reading
+`disabled`, because the assertion passes trivially if you never do.
+
+**Select-all is `table.js`'s.** v1 syncs the header checkbox to the rows with its
+own listener; from `mountTable()` onwards that belongs to `table.js`, and both
+running would toggle every row twice and land back where it started — a
+select-all that visibly does nothing.
+
+**The empty state is `.empty-state`, not v1's `.empty`,** which `style.css` marks
+as legacy and reserves for inline empties; this is the whole screen. It uses
+`h3` rather than the `h2` in `mock-connections.html`, because the sheet sizes
+only `.empty-state h3` (1rem) — that mockup's heading falls through to the
+generic 1.375rem rule. The stylesheet is the locked artifact, so it wins. The
+copy says where publishing actually happens, which is the point of reaching this
+branch at all: no repository is publishable from the UI, so a fresh install is
+the only thing that lands here.
+
+**`cellName()`'s glyph was exactly the gap chunk 2 wrote down.** A name handed to
+`icon()` as somebody else's argument names no `icon()` call site, so every list
+row's folder was invisible to the four sources the icon guard read. It now reads
+a fifth. Still not total — the dashboard's create tiles pass a glyph through a
+table of literals and pass only because each name they use happens to be a
+section id too. Three cases added to `break_the_guard.py` (101 now, all proven).
+
+**More of the chunk-1 helpers have evidence.** `actionBar`, `action`, `cellName`,
+`rowCheck`, `pagerBar`, `mountTable` and `crumbs` now have a caller and render
+correctly. `pageTabs` and `duration` are still shipped on the strength of
+reading — chunk 5 is their test.
+
+**The `[data-ready]` selector needs its full route value.** Waiting on a bare
+`#view [data-ready]` after navigating matches the screen already on display, so
+`wait_for()` returns instantly and the reads straddle the navigation. The first
+run of the chunk-3 check printed the `h1` of the old screen next to the `h2` of
+the new one. Same family as the same-hash `goto()` trap above: both are checks
+that quietly assert against the previous render.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers

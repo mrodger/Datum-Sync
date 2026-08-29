@@ -240,16 +240,19 @@ async def test_every_v2_icon_app_js_asks_for_exists():
     and no HTTP status reports. The nav in particular takes its glyph from the
     section id, so renaming a section is enough to do it.
 
-    Four sources of a name, each with its own floor so that a regex which stops
+    Five sources of a name, each with its own floor so that a regex which stops
     matching fails here rather than passing over an empty set: the icon() call
-    sites, the BADGE_GLYPHS table, the pager's arrow() calls, and the section
-    ids -- the nav builds its glyph from the id, so renaming a section is
-    enough to lose its icon with no literal anywhere naming the glyph.
+    sites, the BADGE_GLYPHS table, the pager's arrow() calls, cellName()'s
+    leading argument, and the section ids -- the nav builds its glyph from the
+    id, so renaming a section is enough to lose its icon with no literal
+    anywhere naming the glyph.
 
-    Not total, and the gap is worth knowing: a glyph handed to icon() through
-    any other table of data is invisible here. The dashboard's create tiles are
-    one, and they pass today only because every glyph they name is also a
-    section id.
+    cellName() is here because chunk 2 wrote the gap down and chunk 3 walked
+    into it: a glyph that reaches icon() as somebody else's argument names no
+    icon() call site, so every list row's folder was invisible to the four
+    sources above. Still not total -- the dashboard's create tiles pass a glyph
+    through a table of literals, and are covered only because each name they
+    use happens to be a section id as well.
     """
     code = (STATIC_V2_DIR / "app.js").read_text()
     icons_src = (STATIC_V2_DIR / "icons.js").read_text()
@@ -258,6 +261,7 @@ async def test_every_v2_icon_app_js_asks_for_exists():
 
     calls = set(re.findall(r"""\bicon\(\s*'([\w-]+)'""", code))
     arrows = set(re.findall(r"""\barrow\('[\w ]+',\s*'([\w-]+)'\)""", code))
+    cells = set(re.findall(r"""\bcellName\(\s*'([\w-]+)'""", code))
     # Scoped to SECTIONS: elsewhere `id:` is an element attribute, and
     # buildNav's `id: 'nav-' + section.id` would otherwise read as a glyph.
     sections = re.search(r"const SECTIONS = \[(.*?)\n\];", code, re.S)
@@ -268,10 +272,11 @@ async def test_every_v2_icon_app_js_asks_for_exists():
     badges = set(re.findall(r":\s*'([\w-]+)'", table.group(1)))
 
     for label, names, floor in (("icon() calls", calls, 4), ("BADGE_GLYPHS", badges, 4),
-                                ("pager arrows", arrows, 4), ("section ids", ids, 20)):
+                                ("pager arrows", arrows, 4), ("section ids", ids, 20),
+                                ("cellName() glyphs", cells, 1)):
         assert len(names) >= floor, f"only found {len(names)} {label}; parser drifted"
 
-    asked = calls | arrows | ids | badges
+    asked = calls | arrows | ids | badges | cells
     assert asked <= available, f"no such icon: {sorted(asked - available)}"
 
 
@@ -298,6 +303,39 @@ async def test_every_v2_hash_link_names_a_screen_that_exists():
               for h in re.findall(r"'#/([\w-]+[^']*)'", code)}
     assert len(linked) >= 5, f"only found {len(linked)} hash links; parser drifted"
     assert linked <= known, f"no such screen: {sorted(linked - known)}"
+
+
+@pytest.mark.asyncio
+async def test_no_v2_toolbar_button_is_woken_up_with_nothing_behind_it():
+    """table.js decides `disabled` for every [data-needs] button, on its own.
+
+    On each selection change it assigns `btn.disabled = need === 'one' ? n !== 1
+    : n < 1` over the whole action bar (table.js 164-167). It does not consult
+    what the button was built with, so `data-needs` plus a null handler is a
+    button that sits correctly greyed until a row is ticked and then lights up
+    and does nothing when pressed -- which reads as a broken feature rather
+    than an absent one, and reads that way only to somebody who ticks a row
+    first. Every repositories button is in this position: publishing is a CLI
+    operation and there is no POST, PUT or DELETE under /rest/v1/repositories
+    at all.
+
+    So the rule is a pairing, checked both ways round. `needs` means table.js
+    will make this clickable, therefore there must be something to click. `off`
+    means there is nothing, therefore it must not carry `needs` -- and action()
+    drops the handler on that path too, so a later edit that adds one without
+    removing `off` fails here instead of silently doing nothing.
+    """
+    code = (STATIC_V2_DIR / "app.js").read_text()
+    calls = re.findall(r"\baction\(\s*'([^']+)',\s*([^,]+?),\s*\{([^}]*)\}\)", code)
+    assert len(calls) >= 4, f"only found {len(calls)} action() calls; parser drifted"
+
+    for label, handler, opts in calls:
+        handler = handler.strip()
+        if "needs:" in opts:
+            assert handler != "null", f"{label!r} is selection-gated with no handler"
+        if "off:" in opts:
+            assert "needs:" not in opts, f"{label!r} is both off and selection-gated"
+            assert handler == "null", f"{label!r} is off but was passed a handler"
 
 
 @pytest.mark.asyncio

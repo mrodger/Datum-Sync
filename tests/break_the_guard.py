@@ -1062,6 +1062,36 @@ CASES = [
         "['Run Workspace', 'repositories', '#/run'],",
         "tests/test_ui.py::test_every_v2_hash_link_names_a_screen_that_exists",
     ),
+    (
+        # Same empty <svg> as above, reached the other way: this glyph is an
+        # argument to cellName(), so it names no icon() call site and the four
+        # sources the guard read before chunk 3 all miss it.
+        "a list row's glyph is checked too",
+        "datum_sync/static-v2/app.js",
+        "cellName('repositories',",
+        "cellName('repository',",
+        "tests/test_ui.py::test_every_v2_icon_app_js_asks_for_exists",
+    ),
+    (
+        # table.js assigns disabled from the selection count over the whole
+        # action bar, so data-needs on a button with no handler is a control
+        # that greys correctly, wakes on the first tick, and does nothing.
+        "no v2 toolbar button is woken up with nothing behind it",
+        "datum_sync/static-v2/app.js",
+        "action('Edit', null, { off: true,",
+        "action('Edit', null, { needs: 'one',",
+        "tests/test_ui.py::test_no_v2_toolbar_button_is_woken_up_with_nothing_behind_it",
+    ),
+    (
+        # The other direction: action() drops the handler on the `off` path,
+        # so wiring one up without clearing the flag is a button that looks
+        # deliberate and is silently inert.
+        "an off button that was handed a handler",
+        "datum_sync/static-v2/app.js",
+        "action('Upload', null, { off: true,",
+        "action('Upload', doUpload, { off: true,",
+        "tests/test_ui.py::test_no_v2_toolbar_button_is_woken_up_with_nothing_behind_it",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
