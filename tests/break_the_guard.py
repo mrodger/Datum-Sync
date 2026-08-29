@@ -1104,10 +1104,17 @@ CASES = [
         # the file is indented differently and stays -- so the test's `>= 2`
         # sanity check still holds and it fails on the missing call rather than
         # on a parser that found nothing to check.
+        #
+        # The next line is part of the anchor, and has to be. The bare
+        # `event.preventDefault();` at this indent was unique when chunk 4
+        # wrote it and stopped being unique the moment chunk 6 added two more
+        # forms: the harness then skipped this case for matching three times,
+        # so ordinary feature work disarmed a guard nobody had touched. The
+        # following line names the submit button, which differs per form.
         "a v2 submit handler that lets the browser navigate",
         "datum_sync/static-v2/app.js",
-        "        event.preventDefault();\n",
-        "",
+        "        event.preventDefault();\n        run.disabled = true;\n",
+        "        run.disabled = true;\n",
         "tests/test_ui.py::test_every_v2_submit_handler_stops_the_browser_submitting",
     ),
     (
@@ -1127,6 +1134,22 @@ CASES = [
         "            route();\n",
         "            route();\n",
         "tests/test_ui.py::test_no_v2_list_repolls_itself_out_from_under_a_selection",
+    ),
+    (
+        # The break is not invented: it is what chunk 6 first wrote, restored
+        # verbatim. `.form-actions` sounds like a class this design system
+        # would own, renders without error, and leaves the footer unstyled --
+        # which reads as a deliberately plain div rather than a mistake.
+        "a form footer styled by a class that does not exist",
+        "datum_sync/static-v2/app.js",
+        "        el('div', { class: 'action-bar' },\n"
+        "            el('div', { class: 'actions' },\n"
+        "                save,\n"
+        "                action('Cancel', () => go('#/schedules')))),\n"
+        "        status);\n",
+        "        el('div', { class: 'form-actions' }, save),\n"
+        "        status);\n",
+        "tests/test_ui.py::test_v2_invents_no_css_classes",
     ),
 ]
 

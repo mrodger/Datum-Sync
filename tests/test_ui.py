@@ -438,6 +438,55 @@ async def test_no_v2_list_repolls_itself_out_from_under_a_selection():
     assert checked, "no timer on a selectable list was found; the rule matched nothing"
 
 
+def test_v2_invents_no_css_classes():
+    """Every class name app.js writes has to exist somewhere real.
+
+    A class the stylesheet has never heard of is the worst kind of mistake to
+    make here, because it does not look like one. The element renders, the
+    page does not break, and the div simply has no styling -- which reads as a
+    deliberately plain div. Chunk 6 wrote `.form-actions` for a form footer on
+    the strength of it sounding like a class this design system would have.
+    It is not one; the idiom is `.action-bar > .actions`. Nothing else in the
+    suite would ever have said so.
+
+    Two sources count as real, not one:
+
+      - style.css, which is the locked artifact and the usual answer; and
+      - the mockups' own markup, because a few classes are legitimately
+        unstyled. `.dash-main` and `.dash-rail` are the two grid CHILDREN of
+        `.dash-grid`: the parent's grid-template-columns places them and they
+        carry no rules of their own. Requiring a rule per class would have
+        failed on those two, and the honest reading is not that they are
+        wrong -- it is that the designer wrote them, so they came from
+        somewhere.
+
+    Only literals are checked. `class: 'badge ' + status` and
+    `class: o.primary ? null : 'secondary'` are expressions, and this does not
+    evaluate them; the string half of the latter is still caught, since it is
+    matched as a literal wherever one appears.
+    """
+    app = (STATIC_V2_DIR / "app.js").read_text()
+
+    known = set(re.findall(r"\.([A-Za-z][\w-]*)",
+                           (STATIC_V2_DIR / "style.css").read_text()))
+    mocks = sorted(STATIC_V2_DIR.glob("mock-*.html"))
+    assert mocks, "no mockups found; the second source of truth vanished"
+    for mock in mocks:
+        for m in re.finditer(r'class="([^"]*)"', mock.read_text()):
+            known.update(m.group(1).split())
+
+    used = {}
+    for m in re.finditer(r"""class:\s*(['"])([^'"]*)\1""", app):
+        line = app.count("\n", 0, m.start()) + 1
+        for name in m.group(2).split():
+            used.setdefault(name, line)
+
+    assert len(used) > 40, f"only {len(used)} class literals found; parser drifted"
+    missing = sorted((n, line) for n, line in used.items() if n not in known)
+    assert not missing, "app.js writes class names that exist nowhere: " + ", ".join(
+        f"{n!r} (app.js:{line})" for n, line in missing)
+
+
 @pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
     """Same property as the v1 mount, and it has to be asserted separately:

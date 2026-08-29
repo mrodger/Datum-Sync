@@ -485,6 +485,109 @@ comment says its table is "Not handed to `mountTable()`"** — a substring test
 read that sentence as the opposite of what it says, so the rule now matches a
 call, not a mention. 103 cases now, all proven.
 
+### Chunk 6 — schedules
+
+Three screens: the list, the create form and the edit form. `SCREENS.schedules`
+is `[screenSchedules, screenSchedule]`, and `screenSchedule` splits on the id —
+`#/schedules/new` reaches `newSchedule`, anything else `editSchedule`. That is a
+two-entry table because the router indexes by segment count, not by matching, so
+`new` and an id are the same shape of route and have to be told apart in the
+screen.
+
+**There is no mockup for the two forms.** `mock-schedules.html` is the list only,
+so the forms are chunk 4's run-workspace idiom applied again: `.card` per
+section, `.field` per control, `.action-bar > .actions` for the footer. That last
+one is the thing this chunk got wrong first, and the new guard exists because of
+it — see below.
+
+**The list follows the mockup, with one deliberate exception.** The mockup drops
+the timezone from the Trigger column; v2 keeps it. `0 2 * * *` is not a time
+until you know the zone it is read in, the zone is a stored and editable field,
+and a column whose entire job is to say when this runs should not state two
+thirds of the answer. An interval carries no zone, because it is not evaluated in
+one. Otherwise the mockup wins: both forms of trigger are set in `<code>` so the
+column reads as one kind of thing, Name is the sorted column, and v1's separate
+Workspace column, Last run column and trailing "open" link are all gone — the
+workspace now rides under the name in `cellName`, the way every other v2 list
+writes it.
+
+**Next run is relative, and the absolute time is in the `title`.** "in 6 hours"
+is what the mockup asks for, and it is computed exactly once: this list has no
+repoll to correct it, so a tab left open overnight would sit there claiming a run
+is six hours away that happened at 2am. Hovering gives the timestamp that is
+still true. `Intl.RelativeTimeFormat` does the wording, so it is the browser's
+locale rather than a table of English plurals maintained here.
+
+**A paused schedule shows no next run at all.** Pausing does not clear
+`next_run` server-side, so a paused row still carries whatever time it was paused
+at. Rendered, that reads as permanently overdue, which is precisely wrong — it is
+not late, it is off.
+
+**Bulk Pause sets `enabled: false`; it does not toggle.** Over a mixed selection
+a toggle would resume the paused rows, so a reader who pressed a button labelled
+Pause would have started something. Setting the state named on the button makes
+the already-paused rows a no-op, which is what pressing Pause is understood to
+mean. Resuming is therefore only on the detail screen, where there is exactly one
+schedule, its state is known, and the button can say which direction it goes —
+which is why that button reads Pause or Resume rather than Toggle.
+
+**Delete is the only `confirm()` in the UI, and deliberately the only one.**
+Cancelling a job is reversible by resubmitting it and pausing is reversible by
+definition, so neither earns a dialog. A schedule is a row nothing else stores:
+delete it and its cron expression, its timezone and the parameter set it has been
+running with are gone, with no undo anywhere in the API.
+
+**Repository and workspace are not editable, and the API agrees** — `PATCH
+/schedules/{id}` does not accept them. That is not an omission to route around. A
+schedule that could be repointed is a permission check made once, on a row that
+no longer says what it said. The edit form states this rather than silently
+omitting the fields.
+
+**The edit form degrades instead of failing when the workspace is gone.**
+Unpublishing does not delete schedules, and a schedule pointing at a workspace
+that no longer exists is exactly the one someone comes to look at. A 404 on the
+manifest gives a read-only dump of the stored params and a banner, not a dead
+screen. In that state `params` is omitted from the PATCH rather than sent empty,
+because an empty object would erase what the schedule runs with.
+
+`paramControls()` also holds a FILE parameter's stored upload id. A file input
+cannot be given a value, so an untouched FILE field reads as null, and on an edit
+form that would quietly drop the upload the schedule has been running with for
+weeks — the next run failing on a missing required parameter, hours later, with
+nothing pointing back at the edit. `readParams()` was written in chunk 4 to key
+its upload branch off `instanceof File` precisely so an id handed back this way
+passes through untouched.
+
+One latent bug fixed in passing: `actionBar`'s `subtitle` option emitted v1's
+`.subtitle` class. Both classes are styled, so either would have looked
+deliberate; the mockups settle it — schedules, automations and connections all
+write the sentence under a list title as `.page-desc`, and no mockup uses
+`.subtitle` at all. The option had no callers until this chunk, so the wrong
+class had never reached a screen. Renamed to `desc`.
+
+New guard: `test_v2_invents_no_css_classes`. Every class name `app.js` writes as
+a literal must exist either as a rule in `style.css` or in a mockup's own markup.
+**This is the mistake chunk 6 actually made:** the schedule forms' footer was
+first written as `.form-actions`, a class that sounds exactly like one this
+design system would own and that does not exist. Nothing would have caught it —
+the element renders, the page does not break, and the footer is simply unstyled,
+which reads as a deliberately plain div. The idiom is `.action-bar > .actions`.
+The mockups have to count as a second source of truth, not just the stylesheet:
+`.dash-main` and `.dash-rail` are the two grid *children* of `.dash-grid`, placed
+entirely by the parent's `grid-template-columns` and carrying no rules of their
+own. Requiring a rule per class would fail on those, and the honest reading is
+not that they are wrong — it is that the designer wrote them.
+
+**This chunk also silently disarmed a guard that had nothing to do with it.**
+`break_the_guard`'s "a v2 submit handler that lets the browser navigate" anchored
+on a bare `event.preventDefault();` at eight spaces, which was unique when chunk
+4 wrote it. Adding two more forms made it match three times, and the harness
+skipped the case — a guard from a finished chunk, quietly no longer proving
+anything, with no test failing to say so. The anchor now includes the following
+line, which names the submit button and so differs per form. **Run the harness
+after ordinary feature work, not only after writing a guard.** 104 cases, all
+proven.
+
 ## Verifying a chunk
 
 `tests/browser_smoke.py` already drives v1 through `BASE + "/ui"` and covers

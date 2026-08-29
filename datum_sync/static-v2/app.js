@@ -373,7 +373,7 @@ const SCREENS = {
     dashboard:        [screenDashboard],
     repositories:     [screenRepositories, screenRepository, screenWorkspace],
     jobs:             [screenJobs, screenJob],
-    schedules:        [(v) => portPending(v, 'Schedules', 6)],
+    schedules:        [screenSchedules, screenSchedule],
     automations:      [(v) => portPending(v, 'Automations', 7)],
     connections:      [(v) => portPending(v, 'Connections', 8)],
     services:         [(v) => portPending(v, 'Services', 9)],
@@ -566,7 +566,12 @@ function banner(err) {
 function actionBar(view, title, opts) {
     const o = opts || {};
     if (title) view.append(el('h1', {}, title));
-    if (o.subtitle) view.append(el('p', { class: 'subtitle' }, o.subtitle));
+    // `.page-desc`, not v1's `.subtitle`. Both are styled, so either would have
+    // looked deliberate; the mockups settle it -- schedules, automations and
+    // connections all write the sentence under a list title as `.page-desc`,
+    // and no mockup uses `.subtitle` at all. This option had no callers until
+    // chunk 6, so the wrong class had never reached a screen.
+    if (o.desc) view.append(el('p', { class: 'page-desc' }, o.desc));
 
     const bar = el('div', { class: 'action-bar' });
 
@@ -1568,6 +1573,446 @@ async function screenJob(view, id) {
     stream.addEventListener('error', () => stream.close());
 
     return () => stream.close();
+}
+
+// ---------------------------------------------------------------------------
+// schedules
+// ---------------------------------------------------------------------------
+
+function every(seconds) {
+    for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60]]) {
+        if (seconds % size === 0) return (seconds / size) + unit;
+    }
+    return seconds + 's';
+}
+
+/* The Trigger cell. The mockup sets both forms in `<code>` -- cron and
+ * "every 1h" alike -- so the column reads as one kind of thing, and v2 follows
+ * it there.
+ *
+ * It does not follow the mockup in dropping the timezone. `0 2 * * *` is not a
+ * time until you know the zone it is read in, and the zone is a stored,
+ * editable field of the schedule: showing the expression without it states
+ * two thirds of the answer in a column whose whole job is to say when this
+ * runs. An interval carries no zone because it is not evaluated in one.
+ */
+function triggerOf(schedule) {
+    return schedule.cron
+        ? el('span', {}, el('code', {}, schedule.cron), ' ',
+             el('span', { class: 'hint' }, schedule.timezone))
+        : el('code', {}, 'every ', every(schedule.interval_s));
+}
+
+/* "in 6 hours", the way the mockup writes Next run.
+ *
+ * The absolute time goes in the title, and not as a nicety: a relative time is
+ * computed once and then sits there, and this list has no repoll to correct
+ * it, so a tab left open overnight reads "in 6 hours" about a run that
+ * happened. Hovering gives the timestamp that is still true. Intl does the
+ * wording, so it is the browser's locale rather than a table of English
+ * plurals maintained here.
+ */
+function untilNode(iso) {
+    if (!iso) return el('span', {}, '\u2014');
+    const ms = new Date(iso) - new Date();
+    const units = [['day', 86400000], ['hour', 3600000], ['minute', 60000], ['second', 1000]];
+    let text;
+    try {
+        const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+        const [unit, size] = units.find(([, s]) => Math.abs(ms) >= s) || units[3];
+        text = rtf.format(Math.round(ms / size), unit);
+    } catch (e) {
+        text = when(iso);
+    }
+    return el('span', { title: when(iso) }, text);
+}
+
+/* The trigger half of a schedule form: cron or interval, and the zone the cron
+ * is read in. Returned as {node, read} for the same reason control() is, so a
+ * trigger cannot be rendered as one kind and read as another. */
+function triggerFields(schedule) {
+    const isCron = !schedule || schedule.cron !== null;
+    const zone = (schedule && schedule.timezone) || 'Pacific/Auckland';
+
+    // Intl ships the zone list, so there is no bundled table to go stale and
+    // no third-party fetch. The current value is prepended if this browser
+    // does not know it, so editing a schedule can never silently retime it.
+    let all;
+    try { all = Intl.supportedValuesOf('timeZone'); } catch (e) { all = ['UTC']; }
+    if (!all.includes(zone)) all = [zone, ...all];
+
+    const kind = el('select', { id: 'trigger-kind' },
+        el('option', { value: 'cron', selected: isCron }, 'Cron expression'),
+        el('option', { value: 'interval', selected: !isCron }, 'Fixed interval'));
+    const cron = el('input', {
+        type: 'text', id: 'trigger-cron', placeholder: '0 7 * * 1-5',
+        value: (schedule && schedule.cron) || '',
+    });
+    const seconds = el('input', {
+        type: 'number', id: 'trigger-interval', min: '1',
+        value: (schedule && schedule.interval_s) || 900,
+    });
+    const zoneInput = el('select', { id: 'trigger-zone' },
+        all.map((z) => el('option', { value: z, selected: z === zone }, z)));
+
+    const wrap = (id, label, input, hint) => el('div', { class: 'field' },
+        el('label', { for: id }, label), input, el('div', { class: 'hint' }, hint));
+
+    const cronField = wrap('trigger-cron', 'Cron expression', cron,
+        'Five fields: minute hour day month weekday.');
+    const intervalField = wrap('trigger-interval', 'Interval (seconds)', seconds,
+        'A duration, so it does not shift when the clocks do.');
+    const zoneField = wrap('trigger-zone', 'Timezone', zoneInput,
+        '07:00 here stays 07:00 across a daylight saving change.');
+
+    function show() {
+        const cronNow = kind.value === 'cron';
+        cronField.hidden = !cronNow;
+        intervalField.hidden = cronNow;
+        // An interval is not evaluated in a zone, so offering one would suggest
+        // it changes something. It is still sent and still stored.
+        zoneField.hidden = !cronNow;
+    }
+    kind.addEventListener('change', show);
+    show();
+
+    return {
+        node: el('div', { class: 'card' },
+            el('h2', {}, 'Trigger'),
+            wrap('trigger-kind', 'Trigger', kind, 'How the next run time is decided.'),
+            cronField, intervalField, zoneField),
+        read: () => (kind.value === 'cron'
+            ? { cron: cron.value.trim(), interval_s: null, timezone: zoneInput.value }
+            : { cron: null, interval_s: parseInt(seconds.value, 10),
+                timezone: zoneInput.value }),
+    };
+}
+
+/* Controls for a workspace's parameters, seeded with what a schedule already
+ * stores. */
+function paramControls(parameters, stored) {
+    return parameters.map((p) => {
+        const seeded = Object.assign({}, p);
+        if (stored && p.name in stored) seeded.default = stored[p.name];
+        const ctl = control(seeded);
+        if (ctl.file && stored && stored[p.name]) {
+            // A file input cannot be given a value, so an untouched FILE field
+            // reads as null. On an edit form that would quietly drop the upload
+            // the schedule has been running with for weeks, and the next run
+            // would fail on a missing required parameter. Hold the stored id
+            // and return it unless a new file is actually chosen. readParams()
+            // keys its upload branch off `instanceof File`, so an id handed
+            // back this way passes through untouched.
+            const held = stored[p.name];
+            const chosen = ctl.read;
+            ctl.read = () => chosen() || held;
+        }
+        return { param: seeded, ctl };
+    });
+}
+
+async function screenSchedules(view) {
+    const { items } = await api('/schedules');
+
+    /* Create is a link dressed as a button, not a button with go() behind it.
+     * The mockup draws a <button>, but this one navigates: as an <a href> it
+     * gets middle-click, ctrl-click and the status-bar preview for free, and
+     * the toolbar in style.css sizes `.button` to match. Pause, Edit and Remove
+     * are real buttons because they act.
+     *
+     * All three selection actions have an endpoint behind them -- PATCH for
+     * enabled, DELETE for removal -- which is why none of them is `off` the way
+     * chunk 3's publish buttons are.
+     */
+    actionBar(view, 'Schedules', {
+        desc: 'A schedule runs one workspace on a cron expression or a fixed '
+            + 'interval. Pausing one stops it firing without discarding it.',
+        search: 'Search schedules by name or workspace',
+        actions: [
+            el('a', { class: 'button', href: '#/schedules/' + NEW }, 'Create'),
+            action('Pause', () => pauseSelected(), { needs: 'many' }),
+            action('Edit', () => editSelected(), { needs: 'one' }),
+            action('Remove', () => removeSelected(), { needs: 'many' }),
+        ],
+    });
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('schedules', 48)),
+            el('h3', {}, 'Nothing scheduled'),
+            el('p', {}, 'A schedule runs one workspace on a cron expression or '
+                + 'a fixed interval.')));
+        return;
+    }
+
+    view.append(table([
+        { label: 'Status', sortable: true },
+        { label: 'Name', sortable: true, sorted: true },
+        { label: 'Trigger', sortable: true },
+        { label: 'Next run', sortable: true },
+        { label: 'Last job', sortable: true },
+    ], items.map((s) => el('tr', {},
+        rowCheck(s.name),
+        el('td', {}, badge(s.enabled ? 'enabled' : 'paused')),
+        el('td', {}, cellName('schedules',
+            el('a', { href: '#/schedules/' + s.id }, s.name),
+            s.repository + '/' + s.workspace)),
+        el('td', {}, triggerOf(s)),
+        // Only for an enabled schedule. Pausing does not clear next_run, so a
+        // paused one still carries whatever time it was paused at -- shown,
+        // that reads as permanently overdue, which it is not.
+        el('td', {}, s.enabled ? untilNode(s.next_run) : '\u2014'),
+        el('td', {}, s.last_job
+            ? el('a', { href: '#/jobs/' + s.last_job }, s.last_job.slice(0, 8))
+            : '\u2014'))), { select: true }));
+
+    view.append(pagerBar(items.length));
+    const handle = mountTable(view);
+
+    const chosen = () => (handle
+        ? handle.selection().map((key) => items[Number(key)]).filter(Boolean)
+        : []);
+
+    /* Pause sets enabled=false; it does not toggle each row to its opposite.
+     *
+     * The button says Pause, and over a mixed selection a toggle would resume
+     * the paused ones -- the reader would have pressed a button labelled Pause
+     * and started something. Setting the state named on the button makes the
+     * paused rows a no-op, which is the outcome somebody pressing Pause
+     * expects. Resuming stays on the detail screen, where there is one
+     * schedule and the button can say which way it goes.
+     */
+    async function pauseSelected() {
+        await Promise.all(chosen().map((s) =>
+            api('/schedules/' + s.id, { method: 'PATCH', json: { enabled: false } })));
+        route();
+    }
+
+    function editSelected() {
+        const [s] = chosen();
+        if (s) go('#/schedules/' + s.id);
+    }
+
+    async function removeSelected() {
+        const picked = chosen();
+        if (!picked.length) return;
+        const names = picked.map((s) => s.name).join(', ');
+        // The only confirm() in the UI, and deliberately the only one. Cancel
+        // is reversible -- resubmit the job -- and pausing is reversible by
+        // definition. A schedule is a row nothing else stores: delete it and
+        // the cron expression, the timezone and the parameter set it has been
+        // running with are gone, with no undo anywhere in the API.
+        if (!window.confirm(`Delete ${picked.length} schedule(s)?\n\n${names}`)) return;
+        await Promise.all(picked.map((s) =>
+            api('/schedules/' + s.id, { method: 'DELETE' })));
+        route();
+    }
+}
+
+async function screenSchedule(view, id) {
+    return id === NEW ? newSchedule(view) : editSchedule(view, id);
+}
+
+async function newSchedule(view) {
+    const { items: repos } = await api('/repositories');
+
+    const name = el('input', {
+        type: 'text', id: 'sched-name', required: true, placeholder: 'nightly-export' });
+    const repo = el('select', { id: 'sched-repo', required: true },
+        el('option', { value: '' }, 'Choose a repository\u2026'),
+        repos.map((r) => el('option', { value: r.name }, r.name)));
+    const workspace = el('select', { id: 'sched-workspace', required: true, disabled: true },
+        el('option', { value: '' }, '\u2014'));
+    const params = el('div', {});
+    const trigger = triggerFields(null);
+    const status = el('div', {});
+    const create = el('button', { type: 'submit', disabled: true }, 'Create schedule');
+    let controls = [];
+
+    repo.addEventListener('change', async () => {
+        controls = [];
+        clear(params);
+        create.disabled = true;
+        workspace.disabled = !repo.value;
+        clear(workspace).append(el('option', { value: '' }, 'Choose a workspace\u2026'));
+        if (!repo.value) return;
+        const { items } = await api(
+            `/repositories/${encodeURIComponent(repo.value)}/workspaces`);
+        append(workspace, [items.map((w) => el('option', { value: w.name }, w.name))]);
+    });
+
+    workspace.addEventListener('change', async () => {
+        controls = [];
+        clear(params);
+        create.disabled = !workspace.value;
+        if (!workspace.value) return;
+        const ws = await api(`/repositories/${encodeURIComponent(repo.value)}`
+            + `/workspaces/${encodeURIComponent(workspace.value)}`);
+        controls = paramControls(ws.parameters, null);
+        append(params, [parameterCards(controls)]);
+    });
+
+    const fieldOf = (id, label, input, hint) => el('div', { class: 'field' },
+        el('label', { for: id }, label), input, el('div', { class: 'hint' }, hint));
+
+    const form = el('form', {},
+        el('div', { class: 'card' },
+            el('h2', {}, 'Schedule'),
+            fieldOf('sched-name', 'Name', name,
+                'Unique, and how the schedule signs the jobs it submits.'),
+            fieldOf('sched-repo', 'Repository', repo,
+                'Cannot be changed later: a schedule that could be repointed is '
+                + 'a permission check made once, on a row that no longer says '
+                + 'what it said.'),
+            fieldOf('sched-workspace', 'Workspace', workspace,
+                'Its published parameters appear below once chosen.')),
+        trigger.node,
+        params,
+        status,
+        // Chunk 4's form footer, not a new class: `.form-actions` does not
+        // exist in style.css, and an unstyled div would have looked deliberate.
+        el('div', { class: 'action-bar' },
+            el('div', { class: 'actions' },
+                create,
+                action('Cancel', () => go('#/schedules')))));
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        create.disabled = true;
+        clear(status);
+        try {
+            const body = Object.assign({
+                name: name.value.trim(),
+                repository: repo.value,
+                workspace: workspace.value,
+                params: await readParams(controls),
+                enabled: true,
+            }, trigger.read());
+            await api('/schedules', { method: 'POST', json: body });
+            go('#/schedules');
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            create.disabled = false;
+        }
+    });
+
+    view.append(
+        crumbs(['Schedules', '#/schedules'], ['New']),
+        el('h1', {}, 'New schedule'),
+        el('p', { class: 'page-desc' },
+            'The workspace and its parameters are checked now, so a schedule '
+            + 'that could never run is refused here rather than at 3am.'),
+        form);
+}
+
+async function editSchedule(view, id) {
+    const s = await api('/schedules/' + encodeURIComponent(id));
+
+    // A schedule can outlive the workspace it points at -- unpublishing does
+    // not delete schedules -- and that is exactly when someone comes to look at
+    // it. So a 404 here degrades to a read-only view of the stored params
+    // rather than taking the whole screen down with it.
+    let parameters = null;
+    try {
+        const ws = await api(`/repositories/${encodeURIComponent(s.repository)}`
+            + `/workspaces/${encodeURIComponent(s.workspace)}`);
+        parameters = ws.parameters;
+    } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 404) throw err;
+    }
+
+    const controls = parameters ? paramControls(parameters, s.params) : [];
+    const trigger = triggerFields(s);
+    const status = el('div', {});
+    const save = el('button', { type: 'submit' }, 'Save');
+
+    const form = el('form', {},
+        trigger.node,
+        parameters
+            ? parameterCards(controls)
+            : el('div', { class: 'card' },
+                el('h2', {}, 'Published Parameters'),
+                el('div', { class: 'banner' },
+                    s.repository, '/', s.workspace, ' is no longer published. ',
+                    'The stored parameters are shown but cannot be edited here.'),
+                el('pre', { class: 'mono' }, JSON.stringify(s.params, null, 2))),
+        el('div', { class: 'action-bar' },
+            el('div', { class: 'actions' },
+                save,
+                action('Cancel', () => go('#/schedules')))),
+        status);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        clear(status);
+        try {
+            const body = trigger.read();
+            // Omitted, not sent empty, when the manifest could not be loaded:
+            // an empty params object would erase what the schedule runs with.
+            if (parameters) body.params = await readParams(controls);
+            await api('/schedules/' + encodeURIComponent(id),
+                { method: 'PATCH', json: body });
+            go('#/schedules');
+        } catch (err) {
+            status.append(banner(err));
+        } finally {
+            save.disabled = false;
+        }
+    });
+
+    // Pause/Resume names the direction because there is one schedule here and
+    // its state is known -- unlike the list's Pause, which acts on a mixed set.
+    const toggle = el('button', {
+        type: 'button', class: 'secondary',
+        onclick: async () => {
+            toggle.disabled = true;
+            await api('/schedules/' + encodeURIComponent(id),
+                { method: 'PATCH', json: { enabled: !s.enabled } });
+            route();
+        },
+    }, icon('refresh', 15), ' ', s.enabled ? 'Pause' : 'Resume');
+
+    const remove = el('button', {
+        type: 'button', class: 'danger',
+        onclick: async () => {
+            if (!window.confirm(`Delete the schedule ${s.name}?`)) return;
+            remove.disabled = true;
+            await api('/schedules/' + encodeURIComponent(id), { method: 'DELETE' });
+            go('#/schedules');
+        },
+    }, 'Delete');
+
+    view.append(
+        crumbs(['Schedules', '#/schedules'], [s.name]),
+        el('div', { class: 'page-header' },
+            el('h1', {}, s.name),
+            el('div', { class: 'actions' }, badge(s.enabled ? 'enabled' : 'paused'),
+                toggle, remove)),
+        el('div', { class: 'split' },
+            form,
+            el('div', { class: 'panel' },
+                el('h2', {}, 'Details'),
+                el('dl', { class: 'kv' },
+                    el('dt', {}, 'Workspace'),
+                    el('dd', {}, el('a', {
+                        href: `#/repositories/${encodeURIComponent(s.repository)}`
+                            + `/${encodeURIComponent(s.workspace)}`,
+                    }, s.repository + '/' + s.workspace)),
+                    el('dt', {}, 'Next run'),
+                    el('dd', {}, s.enabled ? untilNode(s.next_run) : 'paused'),
+                    el('dt', {}, 'Last run'), el('dd', {}, when(s.last_run)),
+                    el('dt', {}, 'Last job'),
+                    el('dd', {}, s.last_job
+                        ? el('a', { href: '#/jobs/' + s.last_job }, s.last_job.slice(0, 8))
+                        : '\u2014'),
+                    el('dt', {}, 'Created by'), el('dd', {}, s.created_by || '\u2014'),
+                    el('dt', {}, 'Created'), el('dd', {}, when(s.created_at))),
+                el('p', { class: 'hint' },
+                    'Repository and workspace cannot be changed. A schedule that '
+                    + 'could be repointed is a permission check made once, on a '
+                    + 'row that no longer says what it said.'))));
 }
 
 // ---------------------------------------------------------------------------
