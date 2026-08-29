@@ -87,13 +87,15 @@ PUBLIC_PATHS = frozenset(
         "/ui",
         "/ui/login",
         "/ui/logout",
+        # The v2 shell, public for the same reason and with the same contents.
+        "/ui/v2",
     }
 )
 
 # Prefix-matched, for the UI's own assets. Separate from PUBLIC_PATHS because a
 # prefix is a blunter instrument -- everything beneath it is public -- so the
 # two are not worth blurring into one set.
-PUBLIC_PREFIXES = ("/ui/static/",)
+PUBLIC_PREFIXES = ("/ui/static/", "/v2/")
 
 # Where a session cookie is accepted. Everything else requires a bearer token
 # even when a valid cookie is attached.

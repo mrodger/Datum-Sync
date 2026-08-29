@@ -15,6 +15,8 @@ job and would need a browser to test.
 """
 from __future__ import annotations
 
+import re
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -22,7 +24,7 @@ import pytest_asyncio
 from datum_sync import config, uploads
 from datum_sync import db as db_module
 from datum_sync.api import app
-from datum_sync.ui import STATIC_DIR
+from datum_sync.ui import STATIC_DIR, STATIC_V2_DIR
 
 APP_JS = (STATIC_DIR / "app.js").read_text()
 ROOT = STATIC_DIR.parents[1]
@@ -142,6 +144,65 @@ async def test_the_static_mount_does_not_escape_its_directory(anon):
         r = await anon.get(f"/ui/static/{attempt}")
         assert r.status_code in (401, 404), (attempt, r.status_code)
         assert "STATIC_DIR" not in r.text, attempt
+
+
+# --------------------------------------------------------------------------
+# the v2 shell
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_v2_shell_is_served_without_a_credential(anon):
+    """v2 is a second shell beside v1, not a replacement, so the two can be
+    opened side by side while the port runs. It is public for the same reason
+    v1 is: it contains no data and draws a sign-in form off a 401."""
+    r = await anon.get("/ui/v2")
+    assert r.status_code == 200
+    assert "signin-form" in r.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/ui/v2", "/v2/style.css"])
+async def test_the_v2_ui_is_revalidated_rather_than_assumed_fresh(anon, path):
+    r = await anon.get(path)
+    assert r.status_code == 200
+    assert "no-cache" in r.headers.get("cache-control", "")
+
+
+@pytest.mark.asyncio
+async def test_every_asset_the_v2_shell_names_is_served(anon):
+    """The shell is a list of asset URLs, and a wrong one fails silently: a
+    404'd stylesheet is an unstyled page, a 404'd script is a page that does
+    nothing, and neither says so anywhere but the console. This asserts the
+    list rather than a hardcoded copy of it, so adding a tag adds a check.
+
+    `app.js` is excluded BY NAME because chunk 1 of the port writes it and it
+    does not exist yet -- and the exclusion is paired with an assertion that it
+    really is missing, so this test starts failing the moment chunk 1 lands
+    rather than quietly skipping the file the whole UI is made of.
+    """
+    shell = (STATIC_V2_DIR / "index.html").read_text()
+    named = re.findall(r'(?:src|href)="(/v2/[^"]+)"', shell)
+    assert "/v2/app.js" in named, "the shell no longer loads app.js"
+
+    for url in named:
+        expected = 404 if url == "/v2/app.js" else 200
+        r = await anon.get(url)
+        assert r.status_code == expected, (url, r.status_code)
+        if expected == 200:
+            assert r.content
+
+
+@pytest.mark.asyncio
+async def test_the_v2_mount_does_not_escape_its_directory(anon):
+    """Same property as the v1 mount, and it has to be asserted separately:
+    the two are separate StaticFiles instances under separate prefixes, and
+    `/v2/` is a public prefix, so nothing else refuses these.
+    """
+    for attempt in ("../ui.py", "..%2Fui.py", "%2e%2e%2fui.py",
+                    "../../migrations/001_core.sql"):
+        r = await anon.get(f"/v2/{attempt}")
+        assert r.status_code in (401, 404), (attempt, r.status_code)
+        assert "STATIC_V2_DIR" not in r.text, attempt
 
 
 # --------------------------------------------------------------------------

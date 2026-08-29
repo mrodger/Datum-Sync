@@ -77,6 +77,15 @@ Then fix `index.html`: `/v2/app.js` has to match wherever the mount lands, and
 relatively and the real shell loads neither, so **the shell today has none of
 the behaviour the mockups demonstrate**.
 
+Done, and one thing it turned up. `nav-collapse.js` works from a script tag —
+it binds `#app` and `#nav-toggle`, both of which are in the static markup.
+`table.js` does not: it is an IIFE exporting nothing, entered only by
+`document.querySelectorAll('.view table')` at load, and in the real shell the
+view is empty until `app.js` renders. Verified in a browser against the running
+server — `typeof window.initTable` is `undefined`. **So its script tag is inert
+until chunk 1 gives it an export and calls it per render**, which is why
+`listbar` is where it gets wired.
+
 ### Chunk 1 — the shell
 
 Ports lines 1–566: `el`/`append`/`clear`, `icon` + `GLYPHS`, `ApiError` +

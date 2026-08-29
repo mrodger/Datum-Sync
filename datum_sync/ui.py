@@ -18,6 +18,7 @@ from datum_sync import auth, config, db
 from datum_sync.errors import ApiError
 
 STATIC_DIR = config.REPO_ROOT / "datum_sync" / "static"
+STATIC_V2_DIR = config.REPO_ROOT / "datum_sync" / "static-v2"
 
 router = APIRouter(tags=["ui"])
 
@@ -49,12 +50,21 @@ class _RevalidatedStatics(StaticFiles):
 def install(app: FastAPI) -> None:
     app.include_router(router)
     app.mount("/ui/static", _RevalidatedStatics(directory=STATIC_DIR), name="ui-static")
+    # The v2 reskin, served alongside v1 rather than over it, so the two can be
+    # opened side by side while the port runs. `/v2` is the prefix static-v2's
+    # markup already names in its <link> and <script> tags.
+    app.mount("/v2", _RevalidatedStatics(directory=STATIC_V2_DIR), name="ui-static-v2")
 
 
 @router.get("/ui", include_in_schema=False)
 async def shell() -> FileResponse:
     # The shell names the assets, so caching it hides a change to any of them.
     return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/ui/v2", include_in_schema=False)
+async def shell_v2() -> FileResponse:
+    return FileResponse(STATIC_V2_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @router.post("/ui/login")

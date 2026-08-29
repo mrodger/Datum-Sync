@@ -958,8 +958,8 @@ CASES = [
         # files feel harmless publishes whatever the last job wrote.
         "/serve/ is not public",
         "datum_sync/api.py",
-        "PUBLIC_PREFIXES = (\"/ui/static/\",)",
-        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/serve/\")",
+        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\")",
+        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\", \"/serve/\")",
         "tests/test_services.py::test_serve_needs_a_credential",
     ),
     (
@@ -971,6 +971,23 @@ CASES = [
         "    if services.is_service(artifact[\"type\"]):",
         "    if False:",
         "tests/test_services.py::test_a_service_artifact_is_not_downloadable",
+    ),
+    (
+        # Not a leak -- the opposite. The v2 assets are fetched by a page
+        # nobody has signed in to yet, so gating them means an unstyled,
+        # inert sign-in form, and the only symptom is in the console.
+        "the v2 assets are public",
+        "datum_sync/api.py",
+        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\")",
+        "PUBLIC_PREFIXES = (\"/ui/static/\",)",
+        "tests/test_ui.py::test_every_asset_the_v2_shell_names_is_served",
+    ),
+    (
+        "the v2 shell is public",
+        "datum_sync/api.py",
+        "        \"/ui/v2\",\n",
+        "",
+        "tests/test_ui.py::test_the_v2_shell_is_served_without_a_credential",
     ),
 ]
 
