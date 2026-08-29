@@ -37,6 +37,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import Request
 
+from datum_sync import agents as agents_mod
 from datum_sync import config, db, vault
 from datum_sync.errors import ApiError
 
@@ -133,6 +134,11 @@ class Principal:
     vault_scope: dict | None
     client_id: str | None = None
     scope: str | None = None
+    # Agent identity — set when the token belongs to an agent, not the account.
+    # proxy_grants is the agent's own list, separate from connection_grants.
+    agent_id: int | None = None
+    agent_name: str | None = None
+    proxy_grants: list[str] | None = None
 
     def allows_repo(self, repo: str) -> bool:
         # NULL scope means every repository (001_core.sql).
@@ -273,6 +279,33 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
     the one presented on nearly every MCP request.
     """
     token_hash = hash_token(raw_token)
+
+    # Agent tokens — checked first because they are the most specific
+    # credential: a sub-identity of a service account, with its own proxy
+    # grants. Falls through to the broader token paths if not found.
+    agent_row = await agents_mod.resolve_token(conn, token_hash)
+    if agent_row is not None:
+        if agent_row["disabled"]:
+            raise _unauthenticated("agent is disabled", "AGENT_DISABLED")
+        if agent_row["account_disabled"]:
+            raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
+        await conn.execute(
+            "UPDATE agents SET last_used_at = now() WHERE id = $1",
+            agent_row["id"],
+        )
+        return Principal(
+            account_id=agent_row["account_id"],
+            name=agent_row["account_name"],
+            max_tier=agent_row["max_tier"],
+            repo_scope=agent_row["repo_scope"],
+            connection_grants=agent_row["connection_grants"],
+            is_admin=False,  # agents are never admin
+            vault_scope=vault_scope_of(agent_row),
+            source="agent",
+            agent_id=agent_row["id"],
+            agent_name=agent_row["name"],
+            proxy_grants=list(agent_row["proxy_grants"]),
+        )
 
     row = await conn.fetchrow(
         """

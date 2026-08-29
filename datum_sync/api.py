@@ -38,8 +38,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.datastructures import UploadFile
 
 from datum_sync import (
-    auth, automations, config, connections, crypto, db, errors, events, execute,
-    jobs, mcp, oauth, schedules, services, ui, uploads,
+    agents, auth, automations, config, connections, crypto, db, errors, events,
+    execute, jobs, mcp, oauth, schedules, services, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -810,6 +810,115 @@ async def revoke_grants(name: str, caller: Principal = Caller) -> dict[str, Any]
             account_id,
         )
     return {"account": name, "revoked": revoked}
+
+
+# -- agents ----------------------------------------------------------------
+# Sub-identities of a service account, each with its own bearer token and
+# proxy grants. Admin-only for creation and grant changes; the agent itself
+# authenticates via its own token and can only proxy.
+
+
+async def _account_id_or_404(conn, name: str) -> int:
+    account_id = await conn.fetchval(
+        "SELECT id FROM service_accounts WHERE name = $1", name
+    )
+    if account_id is None:
+        raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+    return account_id
+
+
+@app.get("/rest/v1/accounts/{account_name}/agents")
+async def list_agents(account_name: str, caller: Principal = Caller) -> dict:
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        account_id = await _account_id_or_404(conn, account_name)
+        rows = await agents.list_for_account(conn, account_id)
+    return {"items": [agents.public(r) for r in rows]}
+
+
+@app.post("/rest/v1/accounts/{account_name}/agents", status_code=201)
+async def create_agent(
+    account_name: str, body: dict = Body(), caller: Principal = Caller,
+) -> dict:
+    auth.require_admin(caller)
+    agent_name = body.get("name")
+    if not isinstance(agent_name, str) or not agent_name.strip():
+        raise ApiError(400, "INVALID_PARAMETER", "agent name is required")
+    proxy_grants = body.get("proxy_grants", [])
+    if not isinstance(proxy_grants, list):
+        raise ApiError(400, "INVALID_PARAMETER", "proxy_grants must be a list")
+
+    async with db.pool().acquire() as conn:
+        account_id = await _account_id_or_404(conn, account_name)
+        try:
+            row, raw_token = await agents.create(
+                conn, account_id, agent_name.strip(), proxy_grants,
+            )
+        except asyncpg.UniqueViolationError:
+            raise ApiError(
+                409, "ALREADY_EXISTS",
+                f"agent {agent_name!r} already exists",
+            )
+    return agents.public(row, token=raw_token)
+
+
+@app.get("/rest/v1/accounts/{account_name}/agents/{agent_name}")
+async def get_agent(
+    account_name: str, agent_name: str, caller: Principal = Caller,
+) -> dict:
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        await _account_id_or_404(conn, account_name)
+        row = await agents.get(conn, agent_name)
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no agent named {agent_name!r}")
+    return agents.public(row)
+
+
+@app.patch("/rest/v1/accounts/{account_name}/agents/{agent_name}")
+async def update_agent(
+    account_name: str, agent_name: str,
+    body: dict = Body(), caller: Principal = Caller,
+) -> dict:
+    auth.require_admin(caller)
+    proxy_grants = body.get("proxy_grants")
+    if proxy_grants is None:
+        raise ApiError(400, "INVALID_PARAMETER", "proxy_grants is required")
+    if not isinstance(proxy_grants, list):
+        raise ApiError(400, "INVALID_PARAMETER", "proxy_grants must be a list")
+
+    async with db.pool().acquire() as conn:
+        await _account_id_or_404(conn, account_name)
+        row = await agents.update_grants(conn, agent_name, proxy_grants)
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no agent named {agent_name!r}")
+    return agents.public(row)
+
+
+@app.post("/rest/v1/accounts/{account_name}/agents/{agent_name}/token")
+async def mint_agent_token(
+    account_name: str, agent_name: str, caller: Principal = Caller,
+) -> dict:
+    """Replace an agent's bearer token. The previous one stops working."""
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        await _account_id_or_404(conn, account_name)
+        raw_token, found = await agents.mint_token(conn, agent_name)
+    if not found:
+        raise ApiError(404, "NOT_FOUND", f"no agent named {agent_name!r}")
+    return {"agent": agent_name, "token": raw_token}
+
+
+@app.delete("/rest/v1/accounts/{account_name}/agents/{agent_name}")
+async def delete_agent(
+    account_name: str, agent_name: str, caller: Principal = Caller,
+) -> dict:
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        await _account_id_or_404(conn, account_name)
+        if not await agents.delete(conn, agent_name):
+            raise ApiError(404, "NOT_FOUND", f"no agent named {agent_name!r}")
+    return {"agent": agent_name, "deleted": True}
 
 
 # -- schedules and automations ---------------------------------------------

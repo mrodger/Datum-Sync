@@ -42,6 +42,7 @@ from datum_sync import crypto
 
 TYPES = ("database", "http", "email_smtp", "email_imap", "file", "oauth_client")
 SCOPES = ("global", "repository", "workspace")
+_AUTH_INJECT_TYPES = frozenset({"bearer", "basic", "header", "query_param"})
 ACCESS = ("read", "write")
 
 # Config keys that are almost certainly credentials. Refused in the readable
@@ -121,6 +122,21 @@ def validate(
         raise ConnectionStoreError(
             f"a {type_} connection needs config: {', '.join(missing)}"
         )
+
+    auth_inject = config.get("auth_inject")
+    if auth_inject is not None:
+        if type_ != "http":
+            raise ConnectionStoreError(
+                "auth_inject is only valid for http connections"
+            )
+        if not isinstance(auth_inject, dict):
+            raise ConnectionStoreError("auth_inject must be an object")
+        inject_type = auth_inject.get("type")
+        if inject_type not in _AUTH_INJECT_TYPES:
+            raise ConnectionStoreError(
+                f"auth_inject.type must be one of "
+                f"{', '.join(sorted(_AUTH_INJECT_TYPES))}"
+            )
 
 
 def matches_scope(row: asyncpg.Record, repository: str, workspace: str) -> bool:

@@ -31,7 +31,7 @@ import asyncpg
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
-from datum_sync import auth, config, db, execute
+from datum_sync import auth, config, db, execute, proxy
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 from datum_sync.manifest import Manifest, ParameterType
@@ -215,15 +215,81 @@ async def _initialize(_: Principal, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+PROXY_TOOL = {
+    "name": "proxy_request",
+    "title": "Credential Proxy",
+    "description": (
+        "Forward an HTTP request through a named connection. "
+        "The connection's credentials are injected server-side; "
+        "the caller never sees the key."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "connection": {
+                "type": "string",
+                "description": "Connection name from the connection store",
+            },
+            "method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
+            },
+            "path": {
+                "type": "string",
+                "description": "Path appended to the connection's base_url",
+            },
+            "headers": {
+                "type": "object",
+                "description": "Additional request headers",
+            },
+            "body": {
+                "description": "Request body (JSON-serializable)",
+            },
+            "query_params": {
+                "type": "object",
+                "description": "URL query parameters",
+            },
+        },
+        "required": ["connection", "method", "path"],
+    },
+}
+
+
 async def _tools_list(principal: Principal, _: dict[str, Any]) -> dict[str, Any]:
     async with db.pool().acquire() as conn:
         found = await catalogue(conn, principal)
-    return {
-        "tools": [
-            _tool_json(name, repo, ws, manifest)
-            for name, (repo, ws, manifest) in found.items()
-        ]
-    }
+    tools = [
+        _tool_json(name, repo, ws, manifest)
+        for name, (repo, ws, manifest) in found.items()
+    ]
+    tools.append(PROXY_TOOL)
+    return {"tools": tools}
+
+
+async def _proxy_call(principal: Principal, args: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch a proxy_request tool call."""
+    connection = args.get("connection")
+    if not isinstance(connection, str):
+        raise RpcError(INVALID_PARAMS, "connection is required")
+    method = args.get("method")
+    if not isinstance(method, str):
+        raise RpcError(INVALID_PARAMS, "method is required")
+    path = args.get("path", "")
+    try:
+        return await proxy.proxy_request(
+            principal=principal,
+            connection_name=connection,
+            method=method,
+            path=path,
+            headers=args.get("headers"),
+            body=args.get("body"),
+            query_params=args.get("query_params"),
+        )
+    except ApiError as exc:
+        return {
+            "content": [{"type": "text", "text": f"{exc.code}: {exc.message}"}],
+            "isError": True,
+        }
 
 
 async def _tools_call(principal: Principal, params: dict[str, Any]) -> dict[str, Any]:
@@ -233,6 +299,10 @@ async def _tools_call(principal: Principal, params: dict[str, Any]) -> dict[str,
     arguments = params.get("arguments") or {}
     if not isinstance(arguments, dict):
         raise RpcError(INVALID_PARAMS, "arguments must be an object")
+
+    # Static tools — not workspace-derived.
+    if name == "proxy_request":
+        return await _proxy_call(principal, arguments)
 
     async with db.pool().acquire() as conn:
         found = await catalogue(conn, principal)
