@@ -29,7 +29,7 @@ NAV = [
     ('automations',    'Automations',             'flow-arrow',             ['lightning', 'tree-structure']),
     ('notifications',  'Notifications',           'bell',                   ['bell-ringing', 'megaphone']),
     ('streams',        'Streams',                 'waveform',               ['broadcast', 'wave-sine']),
-    ('data-virt',      'Data Virtualization',     'database',               ['stack', 'hard-drives']),
+    ('data-virt',      'API endpoints',           'database',               ['stack', 'hard-drives']),
     ('mcp',            'MCP Servers',             'plugs-connected',        ['plug', 'circuitry']),
     ('apps',           'Apps',                    'app-window',             ['squares-four', 'browsers']),
     ('schedules',      'Schedules',               'calendar-dots',          ['calendar-blank', 'clock-clockwise']),

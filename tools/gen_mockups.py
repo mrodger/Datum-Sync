@@ -41,7 +41,7 @@ def ico(name, size=17, cls=''):
 NAV = [
     ('dashboard', 'Dashboard'), ('repositories', 'Repositories'),
     ('automations', 'Automations'), ('notifications', 'Notifications'),
-    ('streams', 'Streams'), ('data-virt', 'Data Virtualization'),
+    ('streams', 'Streams'), ('data-virt', 'API endpoints'),
     ('mcp', 'MCP Servers'), ('apps', 'Apps'),
     ('schedules', 'Schedules'), ('jobs', 'Jobs'),
     ('workspaces', 'Workspaces'), ('projects', 'Projects'),

@@ -275,7 +275,7 @@ const SECTIONS = [
     { id: 'automations',    label: 'Automations' },
     { id: 'notifications',  label: 'Notifications',       stub: true },
     { id: 'streams',        label: 'Streams',             stub: true },
-    { id: 'data-virt',      label: 'Data Virtualization', stub: true },
+    { id: 'data-virt',      label: 'API endpoints',       stub: true },
     { id: 'mcp',            label: 'MCP Servers',         stub: true },
     { id: 'apps',           label: 'Apps',                stub: true },
     { id: 'schedules',      label: 'Schedules' },
@@ -341,7 +341,7 @@ const SCREENS = {
     // stub sections — visible in the nav, no backend
     notifications:    [(v) => stubScreen(v, 'Notifications')],
     streams:          [(v) => stubScreen(v, 'Streams')],
-    'data-virt':      [(v) => stubScreen(v, 'Data Virtualization')],
+    'data-virt':      [(v) => stubScreen(v, 'API endpoints')],
     mcp:              [(v) => stubScreen(v, 'MCP Servers')],
     apps:             [(v) => stubScreen(v, 'Apps')],
     workspaces:       [(v) => stubScreen(v, 'Workspaces')],
