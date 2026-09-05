@@ -94,8 +94,8 @@ def validate(
         raise ConnectionStoreError(f"unknown scope {scope!r}; expected one of {', '.join(SCOPES)}")
     if access not in ACCESS:
         raise ConnectionStoreError(f"unknown access {access!r}; expected one of {', '.join(ACCESS)}")
-    if not 1 <= tier <= 4:
-        raise ConnectionStoreError(f"tier must be 1-4, got {tier}")
+    if not 1 <= tier <= 5:
+        raise ConnectionStoreError(f"tier must be 1-5, got {tier}")
 
     # Mirrors connections_scope_targets, so the caller gets a message rather
     # than a constraint violation.

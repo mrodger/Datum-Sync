@@ -213,7 +213,7 @@ def main() -> int:
         help="repository this account may reach, e.g. 'SCIMAC' or 'SCIMAC/*'; "
         "repeatable. Omit for every repository.",
     )
-    p.add_argument("--max-tier", type=int, default=1, choices=(1, 2, 3, 4))
+    p.add_argument("--max-tier", type=int, default=1, choices=(1, 2, 3, 4, 5))
     p.add_argument("--admin", action="store_true")
     p.add_argument("--description")
     p.add_argument(

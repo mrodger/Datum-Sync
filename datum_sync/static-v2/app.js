@@ -2507,7 +2507,7 @@ function connectionForm(c) {
         type: 'text', id: 'conn-name', required: true, placeholder: 'scimac-postgres' });
     const type = el('select', { id: 'conn-type' }, CONNECTION_TYPES.map((t) =>
         el('option', { value: t, selected: !fresh && c.type === t }, t)));
-    const tier = el('select', { id: 'conn-tier' }, [1, 2, 3, 4].map((t) =>
+    const tier = el('select', { id: 'conn-tier' }, [1, 2, 3, 4, 5].map((t) =>
         el('option', { value: t, selected: !fresh && c.tier === t }, 'Tier ' + t)));
     const scope = el('select', { id: 'conn-scope' }, ['global', 'repository', 'workspace']
         .map((s) => el('option', { value: s, selected: !fresh && c.scope === s }, s)));
@@ -3009,13 +3009,27 @@ async function screenAccount(view, accountName) {
             },
         }, 'Mint token');
 
-        const delBtn = el('button', { type: 'button', class: 'danger',
+        const revokeBtn = el('button', { type: 'button', class: 'secondary',
             onclick: async () => {
-                if (!window.confirm(`Delete agent ${a.name}?`)) return;
+                if (!window.confirm(`Revoke agent ${a.name}?\n\nAccess is disabled but the agent can be restored.`)) return;
+                revokeBtn.disabled = true;
+                try {
+                    await api(agentPath, { method: 'PATCH', json: { disabled: true } });
+                    route();
+                } catch (err) {
+                    failure.append(banner(err));
+                    revokeBtn.disabled = false;
+                }
+            },
+        }, a.disabled ? 'Restore' : 'Revoke');
+
+        const delBtn = el('button', { type: 'button', class: 'danger-fill',
+            onclick: async () => {
+                if (!window.confirm(`Permanently delete agent ${a.name}?`)) return;
                 delBtn.disabled = true;
                 try {
                     await api(agentPath, { method: 'DELETE' });
-                    route();
+                    row.remove();
                 } catch (err) {
                     failure.append(banner(err));
                     delBtn.disabled = false;
@@ -3023,7 +3037,7 @@ async function screenAccount(view, accountName) {
             },
         }, 'Delete');
 
-        return el('tr', {},
+        const row = el('tr', {},
             el('td', {}, cellName('avatar', el('span', {}, a.name),
                 a.disabled ? 'disabled' : null)),
             el('td', {}, a.proxy_grants && a.proxy_grants.length
@@ -3031,14 +3045,16 @@ async function screenAccount(view, accountName) {
                 : el('span', { class: 'hint' }, '\u2014')),
             el('td', {}, when(a.last_used_at)),
             el('td', {}, mintBtn),
+            el('td', {}, revokeBtn),
             el('td', {}, delBtn));
+        return row;
     }
 
     const agentsPanel = el('div', { class: 'panel' },
         el('h2', {}, 'Agents'));
     if (agentList.length) {
         agentsPanel.append(table(
-            ['Agent', 'Proxy grants', 'Last used', '', ''],
+            ['Agent', 'Proxy grants', 'Last used', '', '', ''],
             agentList.map(agentRow)));
     } else {
         agentsPanel.append(el('p', { class: 'hint' }, 'No agents yet.'));
@@ -3140,29 +3156,34 @@ async function screenAdmin(view) {
         // naming the action twice.
         '',
     ], items.map((a) => {
+        const tierCell = el('td', {}, 'Tier ' + a.max_tier);
+        const canRevoke = a.max_tier > 1;
         const revoke = el('button', {
-            type: 'button', class: 'danger',
-            disabled: !a.sessions && !a.grants,
+            type: 'button', class: canRevoke ? 'secondary' : 'danger-fill',
             onclick: async () => {
-                // Named, and counted. "Revoke grants?" over a list this size is
-                // a question about a row the reader has to remember choosing.
-                if (!window.confirm(
-                    `Sign ${a.name} out everywhere?\n\n`
-                    + `${a.sessions} session(s) and ${a.grants} grant(s) end `
-                    + 'immediately. The account keeps its password and token.')) return;
-                revoke.disabled = true;
-                await api('/accounts/' + encodeURIComponent(a.name) + '/grants',
-                    { method: 'DELETE' });
-                // Revoking your own ends this session too, by design: an admin
-                // who thinks their session is compromised needs to be able to
-                // end it, and an exemption would be a hole exactly there. The
-                // next api() call would 401 into a bare sign-in screen, so say
-                // why first.
-                if (a.name === me.name) return showSignin('Signed out: grants revoked.');
-                route();
+                if (a.max_tier > 1) {
+                    if (!window.confirm(
+                        `Revoke ${a.name}?\n\nAccess drops to Tier 1 (read-only). Can be restored.`
+                    )) return;
+                    revoke.disabled = true;
+                    await api('/accounts/' + encodeURIComponent(a.name), {
+                        method: 'PATCH', json: { max_tier: 1 },
+                    });
+                    a.max_tier = 1;
+                    tierCell.textContent = 'Tier 1';
+                    revoke.textContent = 'Delete';
+                    revoke.className = 'danger-fill';
+                    revoke.disabled = false;
+                } else {
+                    if (!window.confirm(`Permanently delete ${a.name}?`)) return;
+                    revoke.disabled = true;
+                    await api('/accounts/' + encodeURIComponent(a.name), { method: 'DELETE' });
+                    if (a.name === me.name) return showSignin('Signed out: account deleted.');
+                    accountRow.remove();
+                }
             },
-        }, 'Revoke');
-        return el('tr', {},
+        }, canRevoke ? 'Revoke' : 'Delete');
+        const accountRow = el('tr', {},
             // `avatar`, not the section glyph every other list passes. On those
             // the section glyph is a picture of what is in the row -- a folder
             // for a repository, a calendar for a schedule -- and admin's is a
@@ -3176,7 +3197,7 @@ async function screenAdmin(view) {
                 [a.is_admin ? 'administrator' : null,
                  a.disabled ? 'disabled' : null].filter(Boolean).join(' \u00b7 ')
                 || null)),
-            el('td', {}, 'Tier ' + a.max_tier),
+            tierCell,
             // null repo_scope is "every repository", which is the widest value
             // this column takes -- so it is spelled out rather than left blank,
             // where an empty cell would read as the narrowest.
@@ -3195,6 +3216,7 @@ async function screenAdmin(view) {
             el('td', {}, a.grants),
             el('td', {}, when(a.last_used_at)),
             el('td', {}, revoke));
+        return accountRow;
     })));
 
     view.append(pagerBar(items.length));

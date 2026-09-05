@@ -815,6 +815,61 @@ async def get_account(name: str, caller: Principal = Caller) -> dict[str, Any]:
     }
 
 
+@app.patch("/rest/v1/accounts/{name}")
+async def update_account(name: str, body: dict = Body(), caller: Principal = Caller) -> dict[str, Any]:
+    """Update account tier or disabled state."""
+    auth.require_admin(caller)
+    disabled = body.get("disabled")
+    max_tier = body.get("max_tier")
+
+    if disabled is None and max_tier is None:
+        raise ApiError(400, "INVALID_PARAMETER", "disabled or max_tier is required")
+    if disabled is not None and not isinstance(disabled, bool):
+        raise ApiError(400, "INVALID_PARAMETER", "disabled must be a boolean")
+    if max_tier is not None and (not isinstance(max_tier, int) or max_tier < 1 or max_tier > 5):
+        raise ApiError(400, "INVALID_PARAMETER", "max_tier must be an integer 1–5")
+
+    sets, args = [], [name]
+    if disabled is not None:
+        args.append(disabled);  sets.append(f"disabled = ${len(args)}")
+    if max_tier is not None:
+        args.append(max_tier);  sets.append(f"max_tier = ${len(args)}")
+
+    async with db.pool().acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE service_accounts SET {', '.join(sets)} WHERE name = $1 RETURNING name, disabled, max_tier",
+            *args,
+        )
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+    return {"account": row["name"], "disabled": row["disabled"], "max_tier": row["max_tier"]}
+
+
+@app.delete("/rest/v1/accounts/{name}")
+async def delete_account(name: str, caller: Principal = Caller) -> dict[str, Any]:
+    """Permanently delete an account. Blocked if the account has active sessions or grants."""
+    auth.require_admin(caller)
+    if name == caller.name:
+        raise ApiError(400, "INVALID_PARAMETER", "cannot delete your own account")
+    async with db.pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id,
+                   (SELECT count(*) FROM oauth_tokens WHERE account_id = sa.id AND revoked_at IS NULL) AS sessions,
+                   (SELECT count(*) FROM oauth_grants  WHERE account_id = sa.id) AS grants
+              FROM service_accounts sa WHERE name = $1
+            """,
+            name,
+        )
+        if row is None:
+            raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+        if row["sessions"] or row["grants"]:
+            raise ApiError(409, "HAS_ACTIVE_ACCESS",
+                           "revoke sessions and grants before deleting")
+        await conn.execute("DELETE FROM service_accounts WHERE id = $1", row["id"])
+    return {"account": name, "deleted": True}
+
+
 @app.delete("/rest/v1/accounts/{name}/grants")
 async def revoke_grants(name: str, caller: Principal = Caller) -> dict[str, Any]:
     """Revoke every OAuth token and session for an account. Sign out everywhere.
@@ -914,16 +969,26 @@ async def update_agent(
 ) -> dict:
     auth.require_admin(caller)
     proxy_grants = body.get("proxy_grants")
-    if proxy_grants is None:
-        raise ApiError(400, "INVALID_PARAMETER", "proxy_grants is required")
-    if not isinstance(proxy_grants, list):
+    disabled = body.get("disabled")
+
+    if proxy_grants is None and disabled is None:
+        raise ApiError(400, "INVALID_PARAMETER", "proxy_grants or disabled is required")
+    if proxy_grants is not None and not isinstance(proxy_grants, list):
         raise ApiError(400, "INVALID_PARAMETER", "proxy_grants must be a list")
+    if disabled is not None and not isinstance(disabled, bool):
+        raise ApiError(400, "INVALID_PARAMETER", "disabled must be a boolean")
 
     async with db.pool().acquire() as conn:
         await _account_id_or_404(conn, account_name)
-        row = await agents.update_grants(conn, agent_name, proxy_grants)
-    if row is None:
-        raise ApiError(404, "NOT_FOUND", f"no agent named {agent_name!r}")
+        if proxy_grants is not None:
+            row = await agents.update_grants(conn, agent_name, proxy_grants)
+        else:
+            row = await agents.get(conn, agent_name)
+        if row is None:
+            raise ApiError(404, "NOT_FOUND", f"no agent named {agent_name!r}")
+        if disabled is not None:
+            await agents.disable(conn, agent_name, disabled)
+            row = await agents.get(conn, agent_name)
     return agents.public(row)
 
 

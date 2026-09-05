@@ -481,8 +481,10 @@ button.secondary:hover:not(:disabled) { background: rgba(200, 150, 50, .08); }
 
 /* Square icon button — the column chooser that ends every Flow action bar. */
 button.icon { width: var(--control); padding: 0; flex: none; }
-button.danger    { background: transparent; color: var(--failed); border-color: var(--failed); }
+button.danger      { background: transparent; color: var(--failed); border-color: var(--failed); }
 button.danger:hover:not(:disabled) { background: rgba(194,86,75,.06); }
+button.danger-fill { background: var(--failed); color: #fff; border-color: var(--failed); }
+button.danger-fill:hover:not(:disabled) { filter: brightness(1.1); }
 
 /* Grey is stated explicitly rather than left to opacity, so the disabled state
  * carries its own meaning instead of being a faded copy of whatever it was.
