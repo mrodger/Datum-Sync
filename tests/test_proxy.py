@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from datum_sync import connections as conn_mod, crypto, db as db_module
+from datum_sync import audit, connections as conn_mod, crypto, db as db_module
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 from datum_sync.proxy import (
@@ -280,7 +280,9 @@ async def test_proxy_rejects_non_http_connection(db, pool):
     try:
         p = _principal(proxy_grants=["_proxy_db_test"])
         with pytest.raises(ApiError) as exc:
-            await proxy.proxy_request(p, "_proxy_db_test", "GET", "/test")
+            await proxy.proxy_request(
+                p, "_proxy_db_test", "GET", "/test", audit.Trace.mint(None)
+            )
         assert exc.value.code == "WRONG_CONNECTION_TYPE"
     finally:
         await db.execute("DELETE FROM connections WHERE name = '_proxy_db_test'")
@@ -293,7 +295,7 @@ async def test_proxy_rejects_invalid_method():
     from datum_sync import proxy
     p = _principal(proxy_grants=["conn"])
     with pytest.raises(ApiError) as exc:
-        await proxy.proxy_request(p, "conn", "TRACE", "/path")
+        await proxy.proxy_request(p, "conn", "TRACE", "/path", audit.Trace.mint(None))
     assert exc.value.code == "INVALID_METHOD"
 
 
@@ -301,11 +303,19 @@ async def test_proxy_rejects_invalid_method():
 
 
 async def test_audit_log_written(db):
-    """_audit_log writes a row to proxy_log."""
+    """_audit_log writes a row to proxy_log AND one to audit_log.
+
+    Both are asserted. Checking only proxy_log would keep passing against a
+    version that had stopped writing the trace-carrying row altogether, which
+    is the row the rest of B2 depends on.
+
+    Guard: PROXY-006.
+    """
     from datum_sync.proxy import _audit_log
 
     p = _principal(agent_name="audit-agent")
-    await _audit_log(db, p, "test-conn", "GET", "/api/test", 200)
+    trace = audit.Trace.mint("client-supplied")
+    await _audit_log(db, p, "test-conn", "GET", "/api/test", 200, trace)
 
     row = await db.fetchrow(
         "SELECT * FROM proxy_log WHERE agent_name = 'audit-agent' ORDER BY id DESC LIMIT 1"
@@ -314,6 +324,18 @@ async def test_audit_log_written(db):
     assert row["connection_name"] == "test-conn"
     assert row["method"] == "GET"
     assert row["upstream_status"] == 200
+
+    audited = await db.fetchrow(
+        "SELECT * FROM audit_log WHERE trace_id = $1", trace.id
+    )
+    assert audited is not None
+    assert audited["verb"] == "proxy.request"
+    assert audited["actor_kind"] == "agent"
+    assert audited["actor_name"] == "audit-agent"
+    assert audited["outcome"] == "ok"
+    # The client string is kept, and kept apart from the id we minted.
+    assert audited["client_trace_id"] == "client-supplied"
+    assert str(audited["trace_id"]) != audited["client_trace_id"]
     assert row["account_name"] == "test-account"
 
     await db.execute("DELETE FROM proxy_log WHERE agent_name = 'audit-agent'")

@@ -38,7 +38,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.datastructures import UploadFile
 
 from datum_sync import (
-    agents, auth, automations, config, connections, crypto, db, errors, events,
+    agents, audit, auth, automations, config, connections, crypto, db, errors, events,
     execute, jobs, mcp, oauth, schedules, services, ui, uploads,
 )
 from datum_sync.auth import Principal
@@ -268,7 +268,18 @@ async def health() -> dict[str, Any]:
         raise ApiError(
             503, "SERVICE_UNAVAILABLE", f"database unreachable: {e}"
         ) from None
-    return {"status": "ok", "database": "ok", "worker": "running" if worker else "down"}
+    # audit_dropped is here because audit.write() swallows its exceptions, as
+    # every writer beside it does: a logging failure must not fail the call it
+    # was recording. But a swallowed audit write is a hole in an audit trail,
+    # and an audit gap that nobody can observe is the one kind of failure this
+    # table cannot tolerate. Non-zero means rows are missing, not that the
+    # service is unhealthy -- so it is a field, not a status.
+    return {
+        "status": "ok",
+        "database": "ok",
+        "worker": "running" if worker else "down",
+        "audit_dropped": audit.dropped(),
+    }
 
 
 @app.get("/rest/v1/whoami")

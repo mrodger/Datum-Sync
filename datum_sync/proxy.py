@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from datum_sync import connections, crypto, db
+from datum_sync import audit, connections, crypto, db
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 
@@ -176,11 +176,20 @@ async def proxy_request(
     connection_name: str,
     method: str,
     path: str,
+    trace: audit.Trace,
     headers: dict[str, str] | None = None,
     body: Any = None,
     query_params: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute a proxied HTTP request. Returns an MCP result dict."""
+    """Execute a proxied HTTP request. Returns an MCP result dict.
+
+    `trace` carries the server-minted id of the inbound MCP request that caused
+    this call, and is what joins the `audit_log` row written here to the one
+    the MCP endpoint writes for the same request. It is positional and has no
+    default on purpose: a default would let a future caller omit it and get a
+    row that inserts cleanly, reads plausibly, and joins to nothing -- which is
+    the exact failure this change exists to remove.
+    """
     method = method.upper()
     if method not in ALLOWED_METHODS:
         raise ApiError(
@@ -268,7 +277,7 @@ async def proxy_request(
         # 8. Audit log.
         await _audit_log(
             conn, principal, connection_name, method, path,
-            response.status_code,
+            response.status_code, trace,
         )
 
     # 9. Build MCP result.
@@ -311,8 +320,15 @@ async def _audit_log(
     method: str,
     path: str,
     upstream_status: int,
+    trace: audit.Trace,
 ) -> None:
-    """Write one row to proxy_log. Never raises."""
+    """Write one row to proxy_log and one to audit_log. Never raises.
+
+    Both, not one: `proxy_log` keeps being written unchanged so that this
+    change cannot lose a record that something already reads, and `audit_log`
+    is the copy that carries the trace. Retiring `proxy_log` is a later
+    migration, once the new row has been shown to answer what the old one does.
+    """
     try:
         await conn.execute(
             """
@@ -331,3 +347,20 @@ async def _audit_log(
         )
     except Exception:
         pass
+
+    await audit.write(
+        conn,
+        trace=trace,
+        principal=principal,
+        via="mcp",
+        verb="proxy.request",
+        target_kind="connection",
+        # Same shape as mcp_call_log.target for a proxy call, so the pair of
+        # rows for one request are recognisably about the same thing.
+        target=f"{connection_name}:{method}:{path}"[:2000],
+        # The proxy has never measured its own duration and this change does
+        # not start: an invented number would be worse than an absent one.
+        outcome="ok" if upstream_status < 400 else "error",
+        error_code=upstream_status if upstream_status >= 400 else None,
+        detail={"upstream_status": upstream_status},
+    )

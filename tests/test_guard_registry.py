@@ -95,6 +95,31 @@ def test_every_case_names_a_test_that_exists():
     assert not missing, "cases naming a test that does not exist:\n  " + "\n  ".join(missing)
 
 
+def test_every_case_anchor_still_matches_exactly_once():
+    """A case whose `old` string has moved cannot break anything.
+
+    The harness needs to find `old` exactly once to remove it. Zero matches and
+    it removes nothing, so the test passes and the case is reported ERROR -- but
+    only during the half-hour run, which is not what anyone does after editing a
+    function. More than one match and it removes several things at once, so the
+    failure it observes need not come from the guard it names.
+
+    This is the drift that actually happens here, and it happens through
+    ordinary feature work rather than through anyone touching a guard: adding an
+    argument to a signature, reindenting a block, renaming a local. The file
+    being edited is a source file, the case lives in the tests, and nothing
+    connects them at edit time. Checking it costs a string count.
+    """
+    broken = []
+    for gid, label, relpath, old, _new, _test in harness.CASES:
+        found = (ROOT / relpath).read_text().count(old)
+        if found != 1:
+            broken.append(f"{gid} ({label}): anchor matches {found}x in {relpath}")
+    assert not broken, (
+        "break cases whose anchor no longer matches exactly once:\n  "
+        + "\n  ".join(broken))
+
+
 def test_every_case_is_cited_by_the_test_it_names():
     """Registry -> test."""
     uncited = []

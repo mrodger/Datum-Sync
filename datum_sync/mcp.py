@@ -32,7 +32,7 @@ import asyncpg
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
-from datum_sync import auth, config, db, execute, proxy, vault_fs
+from datum_sync import audit, auth, config, db, execute, proxy, vault_fs
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 from datum_sync.manifest import Manifest, ParameterType
@@ -102,6 +102,35 @@ def _call_target(method: str, tool_name: str | None, params: dict[str, Any]) -> 
     return tool_name
 
 
+def _target_kind(method: str, tool_name: str | None) -> str | None:
+    """What sort of thing `_call_target` just returned.
+
+    Branches deliberately in lockstep with `_call_target` above, over the same
+    constants. They are two functions rather than one returning a pair because
+    `_call_target` is a tested, guard-anchored signature and splitting its
+    return type to add a label is a bigger change than repeating four lines.
+    `test_target_kind_agrees_with_call_target` is what stops them drifting.
+    """
+    if method != "tools/call" or tool_name is None:
+        return None
+    if tool_name in _VAULT_TOOL_NAMES:
+        return "vault_path"
+    if tool_name == "proxy_request":
+        return "connection"
+    return "tool"
+
+
+def _verb(method: str) -> str:
+    """The audit verb for a JSON-RPC method: `mcp.tools.call`, `mcp.ping`, ...
+
+    Vocabulary in spec/datum-gate/14-audit.md §3. Derived rather than looked
+    up in a table, so a method added to METHODS cannot start writing rows with
+    no verb -- a NOT NULL column would drop the row, and dropping it is the
+    one failure a log cannot report.
+    """
+    return "mcp." + method.replace("/", ".")
+
+
 async def _log_call(
     principal: Principal,
     method: str,
@@ -110,9 +139,22 @@ async def _log_call(
     outcome: str,
     error_code: int | None,
     duration_ms: int,
-    client_trace_id: str | None,
+    trace: audit.Trace,
 ) -> None:
-    """Write one row to mcp_call_log. Never raises — logging must not break calls."""
+    """Write one row to mcp_call_log and one to audit_log. Never raises.
+
+    Both, not one. `mcp_call_log` keeps its exact existing behaviour so that
+    the two tables should agree row for row -- and that agreement is how the
+    new table gets checked before anything is retired. In particular the
+    `outcome` written here is the old classification, warts and all: a tool
+    call refused by an access check returns an `isError` result rather than
+    raising RpcError, so it is recorded as 'ok' in *both* tables. Correcting
+    that is a separate change; doing it here would mean any disagreement
+    between the tables had two possible causes instead of one.
+
+    One connection, two inserts. Acquiring twice would double this path's
+    hold on the pool for no gain.
+    """
     try:
         async with db.pool().acquire() as conn:
             await conn.execute(
@@ -131,7 +173,21 @@ async def _log_call(
                 outcome,
                 error_code,
                 duration_ms,
-                client_trace_id,
+                trace.client_id,
+            )
+            await audit.write(
+                conn,
+                trace=trace,
+                principal=principal,
+                via="mcp",
+                verb=_verb(method),
+                target_kind=_target_kind(method, tool_name_val),
+                target=target,
+                outcome=outcome,
+                error_code=error_code,
+                duration_ms=duration_ms,
+                governance=_is_governance(target),
+                detail={"tool": tool_name_val} if tool_name_val else None,
             )
     except Exception:
         pass  # logging failure must never surface to the caller
@@ -280,7 +336,9 @@ def _content_blocks(row: asyncpg.Record) -> list[dict[str, Any]]:
 # -- methods ---------------------------------------------------------------
 
 
-async def _initialize(_: Principal, params: dict[str, Any]) -> dict[str, Any]:
+async def _initialize(
+    _: Principal, params: dict[str, Any], __: audit.Trace
+) -> dict[str, Any]:
     # The client's requested protocolVersion is echoed only if we speak it;
     # otherwise we answer with ours and let the client decide, which is what
     # the transport asks for.
@@ -396,7 +454,9 @@ VAULT_LIST_TOOL = {
 VAULT_TOOLS = [VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_LIST_TOOL]
 
 
-async def _tools_list(principal: Principal, _: dict[str, Any]) -> dict[str, Any]:
+async def _tools_list(
+    principal: Principal, _: dict[str, Any], __: audit.Trace
+) -> dict[str, Any]:
     async with db.pool().acquire() as conn:
         found = await catalogue(conn, principal)
     tools = [
@@ -412,7 +472,11 @@ async def _tools_list(principal: Principal, _: dict[str, Any]) -> dict[str, Any]
     return {"tools": tools}
 
 
-async def _proxy_call(principal: Principal, args: dict[str, Any]) -> dict[str, Any]:
+async def _proxy_call(
+    principal: Principal,
+    args: dict[str, Any],
+    trace: audit.Trace,
+) -> dict[str, Any]:
     """Dispatch a proxy_request tool call."""
     connection = args.get("connection")
     if not isinstance(connection, str):
@@ -427,6 +491,7 @@ async def _proxy_call(principal: Principal, args: dict[str, Any]) -> dict[str, A
             connection_name=connection,
             method=method,
             path=path,
+            trace=trace,
             headers=args.get("headers"),
             body=args.get("body"),
             query_params=args.get("query_params"),
@@ -464,7 +529,9 @@ async def _vault_call(principal: Principal, name: str, args: dict[str, Any]) -> 
 _VAULT_TOOL_NAMES = frozenset({"vault_read", "vault_write", "vault_list"})
 
 
-async def _tools_call(principal: Principal, params: dict[str, Any]) -> dict[str, Any]:
+async def _tools_call(
+    principal: Principal, params: dict[str, Any], trace: audit.Trace
+) -> dict[str, Any]:
     name = params.get("name")
     if not isinstance(name, str):
         raise RpcError(INVALID_PARAMS, "name is required")
@@ -474,7 +541,7 @@ async def _tools_call(principal: Principal, params: dict[str, Any]) -> dict[str,
 
     # Static tools — not workspace-derived.
     if name == "proxy_request":
-        return await _proxy_call(principal, arguments)
+        return await _proxy_call(principal, arguments, trace)
     if name in _VAULT_TOOL_NAMES:
         return await _vault_call(principal, name, arguments)
 
@@ -515,7 +582,9 @@ def _as_param(value: Any) -> str:
     return json.dumps(value)
 
 
-async def _ping(_: Principal, __: dict[str, Any]) -> dict[str, Any]:
+async def _ping(
+    _: Principal, __: dict[str, Any], ___: audit.Trace
+) -> dict[str, Any]:
     return {}
 
 
@@ -543,7 +612,10 @@ def _rpc_error(request_id: Any, code: int, message: str, data: Any = None) -> JS
 @router.post("/mcp")
 async def endpoint(request: Request) -> Response:
     principal = await auth.require_auth(request)
-    client_trace_id = request.headers.get("X-Trace-Id") or None
+    # Minted once, here, and passed down. The header goes into the same object
+    # but only as `client_id`: a caller supplies that string, so honouring it
+    # as the join key would let one agent merge its calls into another's trace.
+    trace = audit.Trace.mint(request.headers.get("X-Trace-Id") or None)
 
     try:
         body = json.loads(await request.body())
@@ -581,19 +653,19 @@ async def endpoint(request: Request) -> Response:
     t0 = time.monotonic()
 
     try:
-        result = await handler(principal, params)
+        result = await handler(principal, params, trace)
     except RpcError as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
         await _log_call(
             principal, method, tool_name_val, target,
-            "error", exc.code, duration_ms, client_trace_id,
+            "error", exc.code, duration_ms, trace,
         )
         return _rpc_error(request_id, exc.code, exc.message, exc.data)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
     await _log_call(
         principal, method, tool_name_val, target,
-        "ok", None, duration_ms, client_trace_id,
+        "ok", None, duration_ms, trace,
     )
     return JSONResponse(
         content={"jsonrpc": "2.0", "id": request_id, "result": result},

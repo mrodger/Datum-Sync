@@ -25,13 +25,13 @@ invalidates an existing row.
 needs a reversible migration, because a wrong `intersect()` or a wrong key byte
 locks the tier-4 credentials out of the only process that can read them.
 
-| | Item | Touches | Reversible | Depends on |
-|---|---|---|---|---|
-| B1 | Guard registry with stable IDs | tests only | yes | — |
-| B2 | One `audit_log` + server-minted trace id | +1 table | yes | B1 |
-| B5 | Multiple labelled tokens per principal | +1 table | yes | B1 |
-| B4 | Multi-key secrets (key-id byte) | `connections.secret` bytes | yes, with both keys | B1 |
-| B3 | Single grant document | 4 columns → 1 | needs a down path | B1, B2 |
+| | Item | Touches | Reversible | Depends on | Status |
+|---|---|---|---|---|---|
+| B1 | Guard registry with stable IDs | tests only | yes | — | **done** |
+| B2 | One `audit_log` + server-minted trace id | +1 table | yes | B1 | **done** |
+| B5 | Multiple labelled tokens per principal | +1 table | yes | B1 | |
+| B4 | Multi-key secrets (key-id byte) | `connections.secret` bytes | yes, with both keys | B1 | |
+| B3 | Single grant document | 4 columns → 1 | needs a down path | B1, B2 | |
 
 ---
 
@@ -177,6 +177,65 @@ Issue one MCP tool call that provokes a proxy request; assert exactly one trace 
 covers both rows. Then send a request with a forged `X-Trace-Id` equal to another
 request's server trace and assert the two are still distinguishable — the point of
 minting is that a client cannot merge or split someone else's trace.
+
+### What was built — DONE
+
+`migrations/011_audit_log.sql`, `datum_sync/audit.py`, wired into `mcp.py`, `proxy.py`
+and `api.py`. 18 tests in `tests/test_audit_trace.py`; 9 new guards (`AUDIT-001..009`,
+`PROXY-006`), each break-tested. Suite 565 → 584.
+
+The plan's claims above were checked against source before any code was written, since
+B1's were not all correct. This time they held: `grep` confirms `proxy_request` has
+exactly one production caller (`mcp.py`), so every `proxy_log` row does have a sibling
+`mcp_call_log` row and nothing joins them.
+
+Decisions worth recording, because each closed off a cheaper option:
+
+- **The trace is threaded explicitly, with no default**, rather than carried in a
+  `ContextVar`. A `ContextVar` that is not set yields a row that inserts cleanly and
+  joins to nothing — an invisible failure in the one table whose job is to be
+  complete. A required parameter turns the same mistake into a `TypeError` at the call
+  site. It did: wiring it broke three call sites loudly and immediately. Same reasoning
+  as `Principal.vault_scope`, which documents it.
+- **`Trace` is a frozen dataclass**, not two adjacent `str` parameters. The trusted id
+  and the caller-supplied string threaded side by side through six functions are
+  trivially swappable, and a swap would promote the forgeable value to the join key
+  while every "the rows share a trace" test kept passing.
+- **The trace is not on `Principal`.** That object answers "who is calling and what may
+  they reach"; a request id is not identity.
+- **`outcome` permits only `'ok'` and `'error'`, not `'denied'`.** Nothing in the
+  codebase can currently produce a distinguishable denial — an access check raises
+  `ApiError`, which becomes an `isError` result inside a *successful* JSON-RPC
+  response, recorded as `ok`. Permitting a value nothing writes advertises a
+  distinction the data does not carry. Fixing the classification is a separate change.
+- **Phase 1 reproduces the old classification deliberately**, warts included, so that
+  `audit_log` and `mcp_call_log` must agree row for row. That agreement is the check on
+  the new table before anything is retired; improving the classification here would
+  give any disagreement two possible causes instead of one.
+- **`audit_dropped` is reported on `/health`.** `audit.write` swallows its exceptions
+  like every writer beside it, which is right for a log and wrong for an audit trail.
+- **Not built:** the spec's bounded queue, background drain, retention sweeper and
+  export CLI. A queue changes failure and ordering behaviour, and doing that in the
+  same change that adds the table would mean two candidate causes for any surprise.
+
+Two things worth carrying forward, both found by a check rather than by reading:
+
+- **The `/health` guard was initially unfalsifiable.** `audit_dropped == audit.dropped()`
+  on a clean process compares zero to zero and passes just as happily against a
+  hardcoded `0`. Confirmed by measurement, not assumed: the weak version reports
+  `PASSED` (i.e. UNPROVEN) under the break. It now forces a drop first.
+- **B2's own edits silently disarmed `MCPLOG-003` and `MCPLOG-004`** — both anchored on
+  a `client_trace_id` local that the `Trace` refactor deleted, so their anchors matched
+  zero times and their breaks would have removed nothing. The full suite passed at 584
+  without noticing. This is the failure mode B1 predicted and did not check for, so
+  `test_guard_registry.py` gained `test_every_case_anchor_still_matches_exactly_once`:
+  a string count, milliseconds, and the only thing standing between ordinary feature
+  work and a guard that has quietly stopped guarding. Both cases were re-anchored and
+  re-proven.
+
+`AUDIT-007` (no audit row carries the proxy's injected secret) is registered
+`UNPROVABLE`: it holds by construction, so the change that would falsify it is an
+addition, and the harness proves a guard by deleting one.
 
 ---
 

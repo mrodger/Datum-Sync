@@ -1437,6 +1437,108 @@ CASES = [
         "        if False:",
         "tests/test_proxy.py::test_proxy_rejects_non_http_connection",
     ),
+    (
+        "PROXY-006",
+        "the proxy still writes proxy_log alongside the new audit_log",
+        "datum_sync/proxy.py",
+        "            INSERT INTO proxy_log\n",
+        "            INSERT INTO proxy_log_retired\n",
+        "tests/test_proxy.py::test_audit_log_written",
+    ),
+
+    # -- audit spine guards -----------------------------------------------------
+    #
+    # PROXY-006's break points the insert at a table that does not exist. It is
+    # wrapped in `try/except: pass`, so nothing is raised and nothing is written
+    # -- which is precisely why its test asserts on the proxy_log row as well as
+    # the audit_log one. Adding the second writer is exactly the kind of change
+    # that quietly costs you the first.
+
+    (
+        "AUDIT-001",
+        "every dispatchable method maps to a dotted audit verb",
+        "datum_sync/mcp.py",
+        "    return \"mcp.\" + method.replace(\"/\", \".\")",
+        "    return \"mcp.\" + method",
+        "tests/test_audit_trace.py::test_verb_covers_every_dispatchable_method",
+    ),
+    (
+        "AUDIT-002",
+        "each mint is a fresh id, not a function of the client's header",
+        "datum_sync/audit.py",
+        "        return cls(id=str(uuid.uuid4()), client_id=client_id)",
+        "        return cls(id=client_id or str(uuid.uuid4()), client_id=client_id)",
+        "tests/test_audit_trace.py::test_minting_gives_a_different_id_every_time",
+    ),
+    (
+        "AUDIT-003",
+        "the proxy row carries the trace of the request that caused it",
+        "datum_sync/proxy.py",
+        "    await audit.write(\n        conn,\n        trace=trace,",
+        "    await audit.write(\n        conn,\n        trace=audit.Trace.mint(None),",
+        "tests/test_audit_trace.py::"
+        "test_one_trace_covers_the_mcp_row_and_the_proxy_row",
+    ),
+    (
+        "AUDIT-004",
+        "a repeated X-Trace-Id does not merge two requests into one trace",
+        "datum_sync/mcp.py",
+        "    trace = audit.Trace.mint(request.headers.get(\"X-Trace-Id\") or None)",
+        # Derives the trace from the client's header while still producing a
+        # real UUID, so the insert succeeds and the test fails on the grouping.
+        # A break that made the id un-insertable would fail the same test for
+        # the wrong reason, proving nothing about whether the header is
+        # authoritative -- the failure has to be the merge itself.
+        "    _ct = request.headers.get(\"X-Trace-Id\") or None\n"
+        "    _uu = __import__(\"uuid\")\n"
+        "    trace = audit.Trace(\n"
+        "        id=str(_uu.uuid5(_uu.NAMESPACE_OID, _ct)) if _ct else str(_uu.uuid4()),\n"
+        "        client_id=_ct,\n"
+        "    )",
+        "tests/test_audit_trace.py::"
+        "test_a_repeated_client_trace_does_not_merge_two_requests",
+    ),
+    (
+        "AUDIT-005",
+        "a forged X-Trace-Id cannot splice a caller into another's trace",
+        "datum_sync/mcp.py",
+        "    trace = audit.Trace.mint(request.headers.get(\"X-Trace-Id\") or None)",
+        # The direct forgery: honour the header verbatim as the trace id. The
+        # value that test sends is a real server-minted trace id, so this
+        # inserts cleanly and the attacker's rows land in the victim's trace.
+        "    _ct = request.headers.get(\"X-Trace-Id\") or None\n"
+        "    trace = audit.Trace(\n"
+        "        id=_ct or str(__import__(\"uuid\").uuid4()), client_id=_ct,\n"
+        "    )",
+        "tests/test_audit_trace.py::"
+        "test_a_client_cannot_splice_itself_into_another_trace",
+    ),
+    (
+        "AUDIT-006",
+        "the audit row mirrors the mcp_call_log row it is written beside",
+        "datum_sync/mcp.py",
+        "                duration_ms=duration_ms,\n"
+        "                governance=_is_governance(target),",
+        "                duration_ms=None,\n"
+        "                governance=_is_governance(target),",
+        "tests/test_audit_trace.py::test_the_audit_row_agrees_with_the_mcp_call_log_row",
+    ),
+    (
+        "AUDIT-008",
+        "/health reports the audit drop count from the real counter",
+        "datum_sync/api.py",
+        "\"audit_dropped\": audit.dropped()",
+        "\"audit_dropped\": 0",
+        "tests/test_audit_trace.py::test_health_reports_the_audit_drop_count",
+    ),
+    (
+        "AUDIT-009",
+        "a failed audit write is counted, not silently swallowed",
+        "datum_sync/audit.py",
+        "    except Exception:\n        _dropped += 1",
+        "    except Exception:\n        pass",
+        "tests/test_audit_trace.py::test_a_failed_audit_write_is_counted_not_hidden",
+    ),
 
     # -- vault_scope validation guards ------------------------------------------
 
@@ -1562,8 +1664,12 @@ CASES = [
         "MCPLOG-003",
         "X-Trace-Id stored as client_trace_id",
         "datum_sync/mcp.py",
-        '    client_trace_id = request.headers.get("X-Trace-Id") or None',
-        '    client_trace_id = None',
+        # Re-anchored when the trace refactor replaced the `client_trace_id`
+        # local with `Trace.client_id`. The anchor is the column write rather
+        # than the header read: that is what the guard is actually about, and
+        # the header read now also anchors AUDIT-004 and AUDIT-005.
+        "                trace.client_id,",
+        "                None,",
         "tests/test_mcp_call_log.py::test_log_trace_id",
     ),
     (
@@ -1572,7 +1678,7 @@ CASES = [
         "datum_sync/mcp.py",
         '        await _log_call(\n'
         '            principal, method, tool_name_val, target,\n'
-        '            "error", exc.code, duration_ms, client_trace_id,\n'
+        '            "error", exc.code, duration_ms, trace,\n'
         '        )',
         '        pass  # log removed',
         "tests/test_mcp_call_log.py::test_log_error_outcome",
@@ -1598,6 +1704,15 @@ UNPROVABLE = {
         "Breaking it means altering a database, not a source file, so there is no "
         "`old` string to remove. Its own test also skips when no database is "
         "reachable -- see the SKIPPED handling in main()."
+    ),
+    "AUDIT-007": (
+        "The guard is that no audit row carries the proxy's injected secret. It "
+        "holds because nothing in a row is derived from a header or a body, so "
+        "there is no line to delete -- the change that would make it false is an "
+        "addition (putting a response into `detail`). Deleting something and "
+        "watching the test still pass would report it as not load-bearing, which "
+        "is true of every property that holds by construction and says nothing "
+        "about whether the property is worth asserting."
     ),
 }
 
