@@ -63,7 +63,14 @@ async def test_no_read_path_returns_the_secret(conns):
     listed = await connections.listing(conns)
     patched = await connections.update(conns, f"{PREFIX}-db", {"description": "x"})
 
-    for label, r in [("get", row), ("list", listed[0]), ("patch", patched)]:
+    # Found by name, not `listed[0]`. `listing()` returns every connection in the
+    # database ordered by name, and the fixture deletes only its own PREFIX rows,
+    # so index 0 is whatever else happens to be registered. A real
+    # `hermes-researcher` connection with no secret sorted first and failed the
+    # has_secret assertion -- a leak-shaped failure caused by another row entirely.
+    from_list = next(r for r in listed if r["name"] == f"{PREFIX}-db")
+
+    for label, r in [("get", row), ("list", from_list), ("patch", patched)]:
         assert "secret" not in r.keys(), label
         assert "hunter2" not in json.dumps(connections.public(r), default=str), label
         assert r["has_secret"] is True, label

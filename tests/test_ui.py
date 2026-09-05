@@ -747,10 +747,21 @@ def test_the_v2_disabled_button_rule_outranks_every_button_variant():
     # rindex on both sides: the hazard is a variant rule written ANYWHERE below
     # the disabled one, and a new `.danger` appended at the foot of the file
     # would beat a check that only looked at the first occurrence.
-    disabled = css.rindex("button:disabled, .button:disabled {")
-    for variant in ("button.secondary {", "button.danger    {"):
-        assert css.rindex(variant) < disabled, (
-            f"`{variant.strip(' {')}` is written after the disabled rule at "
+    # Matched by regex, not by literal: the first version of this test looked for
+    # `"button.danger    {"` with the exact run of spaces the file happened to
+    # have, and a later realignment to six spaces made `str.rindex` raise
+    # ValueError. The test then failed on every run for a reason that had nothing
+    # to do with rule order -- and a test that cannot pass is no better at
+    # protecting the property than one that cannot fail.
+    def last(pattern: str) -> int:
+        found = [m.start() for m in re.finditer(pattern, css)]
+        assert found, f"no rule matching /{pattern}/ in style.css"
+        return found[-1]
+
+    disabled = last(r"button:disabled,\s*\.button:disabled\s*\{")
+    for variant in ("button.secondary", "button.danger"):
+        assert last(re.escape(variant) + r"\s*\{") < disabled, (
+            f"`{variant}` is written after the disabled rule at "
             "equal specificity, so it wins and its disabled state renders in "
             "the live colour")
 

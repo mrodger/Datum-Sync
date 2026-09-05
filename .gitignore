@@ -44,3 +44,6 @@ repositories/*/*/runs/
 
 # Hosted service builds
 serve/
+
+# Per-tenant vault content written by the vault MCP tools at runtime
+vault/

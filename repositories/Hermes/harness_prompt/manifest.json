@@ -1,0 +1,35 @@
+{
+  "name": "harness_prompt",
+  "description": "Drives one prompt through a Hermes governance test harness over /api/ws and returns the transcript.",
+  "version": "0.1.0",
+  "parameters": [
+    {
+      "name": "PROMPT",
+      "type": "STRING",
+      "required": true,
+      "description": "The prompt to send to the harness agent",
+      "group": "Input"
+    },
+    {
+      "name": "TIMEOUT_SECONDS",
+      "type": "INTEGER",
+      "default": 120,
+      "description": "Give up if the turn has not completed in this long",
+      "group": "Input"
+    },
+    {
+      "name": "RESUME_SESSION",
+      "type": "STRING",
+      "description": "Existing harness session id to continue; blank starts a new one",
+      "group": "Input"
+    }
+  ],
+  "outputs": [
+    {"name": "transcript", "type": "text/plain", "primary": true},
+    {"name": "turn", "type": "application/json"}
+  ],
+  "services": ["job_submitter", "data_streaming", "data_download"],
+  "connections": [{"name": "hermes-researcher", "access": "read"}],
+  "smoke_test": true,
+  "timeout_seconds": 180
+}
