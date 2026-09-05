@@ -170,6 +170,7 @@ async def test_log_tools_list(log_setup):
 
 # vault_read is logged with path as target
 async def test_log_vault_read(log_setup):
+    # Guard: MCPLOG-002.
     s = log_setup
     await s["client"].post(
         "/mcp",
@@ -186,6 +187,7 @@ async def test_log_vault_read(log_setup):
 
 # vault_write to a governance path sets is_governance
 async def test_log_governance_skill_write(log_setup):
+    # Guard: MCPLOG-001.
     s = log_setup
     await s["client"].post(
         "/mcp",
@@ -204,6 +206,7 @@ async def test_log_governance_skill_write(log_setup):
 
 # X-Trace-Id is captured as client_trace_id
 async def test_log_trace_id(log_setup):
+    # Guard: MCPLOG-003.
     s = log_setup
     await s["client"].post(
         "/mcp",
@@ -231,6 +234,7 @@ async def test_log_no_trace_id_is_null(log_setup):
 
 # Failed calls (unknown tool) are logged as error
 async def test_log_error_outcome(log_setup):
+    # Guard: MCPLOG-004.
     s = log_setup
     resp = await s["client"].post(
         "/mcp",

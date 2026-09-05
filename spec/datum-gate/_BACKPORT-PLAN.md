@@ -58,9 +58,42 @@ us something:
    database is unavailable. Under the current harness that skip is silently
    equivalent to "the guard held".
 
+> **Correction, 2026-09-05 — points 1 and 3 above are wrong, and were wrong when
+> written.** They were reasoned from the corpus's account of a harness like ours
+> rather than from `break_the_guard.py`, which is the same mistake this document
+> warns about two paragraphs from the top. Read before implementing:
+>
+> - **Point 1 is false.** `break_the_guard.py:1519-1524` already refuses a case
+>   whose anchor does not match exactly once, prints `SKIP`, and `:1550` returns 1.
+>   It is loud. An audit of all 130 cases found **0 dead anchors** — but **1
+>   ambiguous** one (`SERVICE-013`, whose anchor came to match a second, identical
+>   filter in the published-workspace listing), which had the harness exiting 1.
+> - **Point 3 is false, and backwards.** A skipped test exits 0, which the old
+>   `run()` read as `passed=True`, which `main()` reported as **UNPROVEN**. Skips
+>   already landed on the conservative side.
+> - **The real hole, not mentioned above.** `run()` collapsed every non-zero exit
+>   into "the guard broke its test". pytest exits **4** for a test id that does not
+>   exist and **2** for a collection error, so a case whose test was renamed or
+>   deleted printed `ok` — a guard counted as proven by a run in which nothing
+>   executed. Measured, not assumed. All 121 distinct test ids collect today, so
+>   this was latent rather than actively lying.
+>
+> Net effect on the work: the ID/cross-reference half stands unchanged; "skip ⇒
+> UNPROVEN" and "anchor must match once ⇒ error" are existing behaviour to be
+> preserved, not built; and outcome classification — which this document did not
+> ask for — is the item that actually closes a silent pass.
+
 ### The change
 
-Adopt doc `17`'s registry format — `guards.yaml`, one entry per guard:
+**As built (2026-09-05), the registry is Python, not YAML.** The 130 anchors are
+whitespace-exact multi-line strings; re-encoding them as YAML block scalars is 130
+chances to alter a string and buys no functional difference, since the runner
+reads them back into the same `str`. The id was inserted as a sixth tuple field
+using AST source positions, so no anchor byte was rewritten — verified by parsing
+the pre- and post-edit files and diffing the case data, which found exactly one
+changed case: `SERVICE-013`, the ambiguous anchor, changed on purpose.
+
+The format doc `17` specifies, retained for the record:
 
 ```yaml
 - id: SECRET-004
@@ -70,29 +103,39 @@ Adopt doc `17`'s registry format — `guards.yaml`, one entry per guard:
   replace: "    (secret IS NOT NULL) AS has_secret, secret\n"
 ```
 
-and three rules in the runner:
+and the rules in the runner:
 
-- `remove` must occur **exactly once** in `file`, or the case is an ERROR, not a pass.
-- A test that **skips** is reported UNPROVEN, never PASS. This is the clause worth
-  the whole exercise; it closes a failure mode this project has hit before.
+- `remove` must occur **exactly once** in `file`, or the case is an ERROR, not a
+  pass. *(Existed; the SKIP was promoted to ERROR wording and `SERVICE-013` fixed.)*
+- A test that **skips** is reported UNPROVEN, never PASS. *(Existed.)*
+- **The named test must actually run.** Its outcome is read from a junit report
+  rather than inferred from the exit code, so NOTFOUND and collection ERROR are
+  errors instead of proofs. *(New — this is the one that closed a silent pass.)*
 - Every entry's `id` must be referenced by a `Guard: <ID>` line in the named test,
   and every `Guard:` line in `tests/` must have an entry. Both directions, so
-  neither a registry entry nor a test can drift away alone.
+  neither a registry entry nor a test can drift away alone. *(New.)*
+- A guard that **cannot** be proven by a source edit is registered in `UNPROVABLE`
+  with a stated reason, printed on every run, and must still be cited by a test.
+  Otherwise "no break case" becomes the next silent pass. *(New — `SCHEMA-001`,
+  whose guard is broken by altering a database, not a file.)*
 
-`test_schema_drift.py` already carries `Guard: SCHEMA-001`; it is the only one.
+The cross-reference checks live in `tests/test_guard_registry.py` so they run in the
+ordinary suite, not only in the half-hour harness — including an AST existence check
+for every named test, which catches a rename in milliseconds rather than in 30
+minutes.
 
-### How it is proven
+### How it was proven
 
-Delete a `Guard:` line from a test → the cross-reference check fails. Edit an
-anchored source line so `remove` no longer matches → ERROR, not PASS. Point a case
-at a test that skips → UNPROVEN. All three must be demonstrated before the registry
-is trusted, because the whole claim of this item is that the harness now notices
-things it used to swallow.
+Seven mutations, each reverted, each confirmed to fail the intended check:
+delete a `Guard:` line; rename a named test; cite an unregistered id; remove the
+only citation of `SCHEMA-001`; break an anchor (→ ERROR); point a case at a
+skipping test (→ UNPROVEN); point a case at a missing test (→ ERROR/NOTFOUND,
+where the old runner printed `ok`).
 
 ### Cost and risk
 
-Test-only. No runtime change. The 1557-line CASES list has to be transcribed, which
-is the bulk of the work and is mechanical.
+Test-only. No runtime change. No transcription: the ids were inserted in place by
+AST position, so the 1557-line list never had to be retyped.
 
 ---
 

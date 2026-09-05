@@ -34,6 +34,8 @@ def test_a_daily_cron_holds_its_local_hour_across_a_dst_change():
     year. This is the reason `next_after` converts into the schedule's zone
     before asking croniter, and it is not visible in any test that runs inside
     one season.
+
+    Guard: SCHED-002.
     """
     # New Zealand DST begins on the last Sunday of September 2026 (the 27th).
     winter = schedules.next_after(
@@ -73,6 +75,8 @@ def test_a_definition_the_worker_could_not_run_is_refused(cron, interval, zone):
 
     Without this the row is accepted, sits enabled, and never fires -- the
     failure mode with no symptom.
+
+    Guard: SCHED-001.
     """
     with pytest.raises(schedules.ScheduleError):
         schedules.validate(cron, interval, zone)
@@ -85,6 +89,8 @@ def test_five_missed_days_are_one_run_and_not_five():
     would fire immediately and then again on the next poll, once per day it
     owed, which for anything that emails or writes to a client folder is the
     kind of catch-up that has to be apologised for.
+
+    Guard: SCHED-003.
     """
     zone = schedules._zone("Pacific/Auckland")
     missed = dt.datetime(2026, 3, 1, 7, 0, tzinfo=zone).astimezone(UTC)
@@ -107,6 +113,8 @@ def test_a_missed_interval_keeps_its_phase():
     phase is written in the expression -- so a cron test of this passes against
     both versions and proves nothing, which is what the first one here did.
     Only an interval carries its phase in the timestamp.
+
+    Guard: SCHED-004.
     """
     anchored = dt.datetime(2026, 3, 1, 9, 0, tzinfo=UTC)
     row = {"next_run": anchored, "cron": None, "interval_s": 3600,
@@ -131,6 +139,8 @@ def test_a_pathologically_overdue_interval_gives_up_walking():
     second anyway -- so the first version of this test passed with the cap
     raised to a hundred million. Giving up re-times from `moment`, which lands
     off the schedule's own phase, and that is a fact no timer is needed to see.
+
+    Guard: SCHED-005.
     """
     moment = dt.datetime(2026, 3, 8, 12, 0, 30, tzinfo=UTC)
     behind = moment - dt.timedelta(days=7, seconds=3)
@@ -199,6 +209,8 @@ async def test_a_schedule_pointing_at_nothing_records_it_and_still_advances(
     Advancing anyway is the point: without it the row stays due and the worker
     retries it on every poll, turning one broken schedule into a hot loop that
     also floods the log.
+
+    Guard: SCHED-006.
     """
     await db.execute(
         "UPDATE schedules SET workspace = 'gone', "
@@ -220,6 +232,8 @@ async def test_re_enabling_does_not_replay_the_runs_it_missed(db, schedule):
 
     Re-enabling it must not mean "fire immediately, then catch up" -- that turns
     a paused nightly job into a burst the moment someone switches it back on.
+
+    Guard: SCHED-007.
     """
     await db.execute(
         "UPDATE schedules SET enabled = false, "
@@ -244,6 +258,8 @@ async def test_pausing_a_schedule_does_not_eat_its_parameters(db, schedule):
     bug actually looked like in the wild -- each pause wrapping the last -- and
     a test that only proves the first hop would pass against a fix that decodes
     but does not re-encode symmetrically.
+
+    Guard: SCHED-008.
     """
     for enabled in (False, True):
         row = await schedules.update(db, schedule["id"], {"enabled": enabled})
@@ -329,6 +345,8 @@ async def test_a_scoped_caller_cannot_schedule_another_repository(
     `jobs.submit` performs no scope check -- that has always been the API's
     job -- so a missing check here is a way to have the server run a workspace
     the caller could not run themselves.
+
+    Guard: SCHED-010.
     """
     repo, ws = workspace
     # Establish the precondition rather than assume it. `break_the_guard.py`
@@ -352,6 +370,7 @@ async def test_a_scoped_caller_cannot_schedule_another_repository(
 async def test_a_scoped_caller_does_not_see_other_repositories_schedules(
     client, schedule, scoped_token
 ):
+    # Guard: SCHED-011.
     mine = await client.get("/rest/v1/schedules")
     assert any(s["name"] == "_pytest-schedule" for s in mine.json()["items"])
 
@@ -369,6 +388,8 @@ async def test_a_schedule_cannot_be_repointed_at_another_workspace(client, sched
 
     A schedule that could be repointed is a scope check that happened once, on
     a row that no longer says what it said when it happened.
+
+    Guard: SCHED-009.
     """
     r = await client.patch(f"/rest/v1/schedules/{schedule['id']}",
                            json={"repository": "Elsewhere"})

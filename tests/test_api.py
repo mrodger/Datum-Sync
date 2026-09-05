@@ -416,6 +416,8 @@ async def test_every_status_frame_carries_the_same_fields(db, workspace):
     Looking for the `running` frame turned up the larger half: there was no
     such frame. `claim` set the status and started_at and announced neither, so
     a watcher saw QUEUED for the whole run and then COMPLETE.
+
+    Guard: API-001, API-002.
     """
     repo, ws = workspace
     job_id = await jobs.submit(db, repo, ws, {"WHO": "shape"})
@@ -608,6 +610,8 @@ async def test_a_scoped_caller_is_not_told_how_busy_the_others_are(
     confined to one repository must not learn the queue depth of the ones it
     cannot see -- and the job list already refuses to tell them, so an
     unfiltered summary next to it would be a hole with a filter beside it.
+
+    Guard: API-003.
     """
     repo, ws = workspace
     await client.post(

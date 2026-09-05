@@ -154,7 +154,9 @@ async def test_the_static_mount_does_not_escape_its_directory(anon):
 async def test_the_v2_shell_is_served_without_a_credential(anon):
     """v2 is a second shell beside v1, not a replacement, so the two can be
     opened side by side while the port runs. It is public for the same reason
-    v1 is: it contains no data and draws a sign-in form off a 401."""
+    v1 is: it contains no data and draws a sign-in form off a 401.
+    Guard: UI-006.
+"""
     r = await anon.get("/ui/v2")
     assert r.status_code == 200
     assert "signin-form" in r.text
@@ -180,6 +182,8 @@ async def test_every_asset_the_v2_shell_names_is_served(anon):
     the markup -- while being the harsher failure of the two: a 404 on an
     import aborts the entire module, so the page renders nothing at all rather
     than rendering without icons. The import specifiers are collected too.
+
+    Guard: UI-005, UI-008.
     """
     shell = (STATIC_V2_DIR / "index.html").read_text()
     named = re.findall(r'(?:src|href)="(/v2/[^"]+)"', shell)
@@ -204,6 +208,8 @@ async def test_the_v2_shell_loads_app_js_as_a_module():
     page is then blank with both panes hidden -- indistinguishable from the
     pre-chunk-1 state where there was no app.js at all, which is exactly the
     symptom this project has already spent a session chasing once.
+
+    Guard: UI-007.
     """
     shell = (STATIC_V2_DIR / "index.html").read_text()
     tag = re.search(r'<script[^>]*/v2/app\.js"[^>]*>', shell)
@@ -221,6 +227,8 @@ async def test_every_v2_icon_is_a_single_path():
     An icon with a second element would have it dropped and still render --
     slightly wrong, never an error, and nowhere near the code that caused it.
     So the shape is asserted over the file rather than trusted at the call.
+
+    Guard: UI-009.
     """
     src = (STATIC_V2_DIR / "icons.js").read_text()
     entries = re.findall(r'^\s*"([\w-]+)":\s*"(.*)",$', src, re.M)
@@ -253,6 +261,8 @@ async def test_every_v2_icon_app_js_asks_for_exists():
     sources above. Still not total -- the dashboard's create tiles pass a glyph
     through a table of literals, and are covered only because each name they
     use happens to be a section id as well.
+
+    Guard: UI-012, UI-014.
     """
     code = (STATIC_V2_DIR / "app.js").read_text()
     icons_src = (STATIC_V2_DIR / "icons.js").read_text()
@@ -292,6 +302,8 @@ async def test_every_v2_hash_link_names_a_screen_that_exists():
 
     Only the section is checked. What follows it is an id, a `new`, or a query
     the screen parses for itself.
+
+    Guard: UI-013.
     """
     code = (STATIC_V2_DIR / "app.js").read_text()
     screens = re.search(r"const SCREENS = \{(.*?)\n\};", code, re.S)
@@ -324,6 +336,8 @@ async def test_no_v2_toolbar_button_is_woken_up_with_nothing_behind_it():
     means there is nothing, therefore it must not carry `needs` -- and action()
     drops the handler on that path too, so a later edit that adds one without
     removing `off` fails here instead of silently doing nothing.
+
+    Guard: UI-015, UI-016.
     """
     code = (STATIC_V2_DIR / "app.js").read_text()
     calls = re.findall(r"\baction\(\s*'([^']+)',\s*([^,]+?),\s*\{([^}]*)\}\)", code)
@@ -353,6 +367,8 @@ async def test_every_v2_submit_handler_stops_the_browser_submitting():
     Chunk 4 is the first v2 screen with a form; the schedule and connection
     forms in chunks 6 and 8 are the same shape. There is one form-level rule,
     so it is checked once, over every submit listener in the file.
+
+    Guard: UI-017.
     """
     code = (STATIC_V2_DIR / "app.js").read_text()
     # Each handler body, from the listener up to the closing `});` at column 0
@@ -406,6 +422,8 @@ async def test_no_v2_list_repolls_itself_out_from_under_a_selection():
     not subject to it and are not listed here -- the dashboard's five-row table
     is deliberately never passed to mountTable(), so it has no selection to
     lose and repolls freely.
+
+    Guard: UI-018.
     """
     code = (STATIC_V2_DIR / "app.js").read_text()
 
@@ -464,6 +482,8 @@ def test_v2_invents_no_css_classes():
     `class: o.primary ? null : 'secondary'` are expressions, and this does not
     evaluate them; the string half of the latter is still caught, since it is
     matched as a literal wherever one appears.
+
+    Guard: UI-019.
     """
     app = (STATIC_V2_DIR / "app.js").read_text()
 
@@ -553,6 +573,8 @@ def test_v2_never_appends_a_child_that_can_be_nothing():
     So the rule is about the receiver, not the value: a dotted `.append(` is the
     DOM's and must be handed nodes and strings only; the bare `append(node, [])`
     is ours and is where a conditional child belongs.
+
+    Guard: UI-020.
     """
     src = (STATIC_V2_DIR / "app.js").read_text()
 
@@ -586,6 +608,8 @@ def test_v2_labels_every_automation_action():
     keeps the fallback from being the answer for a type we could have named
     properly, and it fails in both directions -- a label left behind after a
     type is removed is drift too, pointing at an action that cannot happen.
+
+    Guard: UI-021.
     """
     from datum_sync import automations
 
@@ -622,6 +646,8 @@ def test_every_v2_form_label_names_its_control():
     the page. Only the control tags are read for ids -- `id:` also appears in
     SECTIONS and in the two tab tables, where it names a route rather than an
     element, and letting those count would let a label point at one.
+
+    Guard: UI-022, UI-023.
     """
     src = (STATIC_V2_DIR / "app.js").read_text()
 
@@ -666,6 +692,8 @@ def test_every_v2_new_window_link_disowns_its_opener():
     The rule is cheap and absolute -- there is no link for which handing over
     the opener is the point -- so it is asserted on the attribute rather than
     on a list of trusted destinations.
+
+    Guard: UI-024.
     """
     src = (STATIC_V2_DIR / "app.js").read_text()
 
@@ -704,6 +732,8 @@ def test_the_v2_admin_group_is_refused_by_the_router_not_just_hidden():
     This does not stand in for the API's own `require_admin`. That is the
     check that matters and it is tested in test_auth; this one is so the
     refusal reads as a closed door rather than a screen that broke.
+
+    Guard: UI-025, UI-026.
     """
     src = (STATIC_V2_DIR / "app.js").read_text()
 
@@ -741,6 +771,8 @@ def test_the_v2_disabled_button_rule_outranks_every_button_variant():
     Ordering, not specificity, because the fix is ordering: raising the
     disabled rule with `!important` or an extra class would beat this test and
     reintroduce the class of bug elsewhere.
+
+    Guard: UI-027.
     """
     css = (STATIC_V2_DIR / "style.css").read_text()
 
@@ -804,6 +836,8 @@ async def test_the_ui_never_assigns_markup():
     naming a sink still fails. That is the right trade: prose about the rule
     belongs in a block comment, and a full JS parser to allow otherwise would
     be more machinery than the property is worth.
+
+    Guard: UI-001.
     """
     sinks = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
     code = "\n".join(
@@ -829,6 +863,8 @@ async def test_the_v2_ui_never_assigns_markup():
 
     icons.js itself is not scanned: it is vendored, generated, and never sees
     API data. This asserts the property over the file that renders it.
+
+    Guard: UI-010.
     """
     sinks = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
     code = "\n".join(
@@ -849,6 +885,8 @@ async def test_the_v2_ui_leaves_the_nav_toggle_to_nav_collapse_js():
     well gives a button that reads the collapsed state, flips it, and flips it
     straight back -- so the nav does not move, no error is raised, and the
     symptom is indistinguishable from a handler that was never attached.
+
+    Guard: UI-011.
     """
     code = (STATIC_V2_DIR / "app.js").read_text()
     assert "nav-toggle" not in code.replace("// No handler for #nav-toggle", "")
@@ -943,7 +981,9 @@ async def test_an_upload_returns_an_id_that_resolves_to_the_bytes(client):
 @pytest.mark.asyncio
 async def test_an_upload_id_is_not_a_path(client):
     """The whole reason FILE parameters carry an id: what comes back must not
-    be somewhere the caller could have chosen."""
+    be somewhere the caller could have chosen.
+    Guard: UI-002.
+"""
     body = (await client.post(
         "/rest/v1/uploads", files={"file": ("../../etc/passwd", b"x", "text/plain")}
     )).json()
@@ -962,7 +1002,9 @@ async def test_an_upload_id_is_not_a_path(client):
 async def test_an_upload_needs_exactly_one_file(client):
     """Zero and two are both refused. Two is the interesting one: silently
     keeping the first would store a file the caller believed they had sent
-    under a different parameter."""
+    under a different parameter.
+    Guard: UI-003.
+"""
     empty = await client.post("/rest/v1/uploads", data={"not": "a file"})
     assert empty.status_code == 400
     assert empty.json()["code"] == "INVALID_PARAMETER"
@@ -992,6 +1034,8 @@ async def test_the_job_listing_filters_by_workspace(client, db, workspace):
     result of a limited query instead would show nothing whenever ten other
     jobs ran more recently -- the same mistake as the scope filter, with a
     milder consequence.
+
+    Guard: UI-004.
     """
     repo, ws = workspace
     mine = (await client.post(

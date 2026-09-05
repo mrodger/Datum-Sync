@@ -186,6 +186,7 @@ def test_valid_scope_passes():
 
 
 def test_write_implies_read():
+    # Guard: VAULT-001.
     with pytest.raises(VaultScopeError, match="write-implies-read"):
         validate_scope({
             "read": ["dev/**"],
@@ -202,6 +203,7 @@ def test_write_implies_read_passes_when_subset():
 
 
 def test_deny_contradicts_allow():
+    # Guard: VAULT-002.
     with pytest.raises(VaultScopeError, match="contradictory"):
         validate_scope({
             "read": ["dev/**"],
@@ -227,6 +229,7 @@ def test_deny_different_pattern_is_fine():
 
 
 def test_traversal_in_pattern_rejected():
+    # Guard: VAULT-003.
     with pytest.raises(VaultScopeError, match="traversal"):
         validate_scope({"read": ["dev/../etc/passwd"]})
 
@@ -237,6 +240,7 @@ def test_dot_segment_in_pattern_rejected():
 
 
 def test_partial_wildcard_rejected():
+    # Guard: VAULT-004.
     with pytest.raises(VaultScopeError, match="partial wildcard"):
         validate_scope({"read": ["dev/*.md"]})
 

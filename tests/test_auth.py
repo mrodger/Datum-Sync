@@ -78,6 +78,8 @@ async def test_an_anonymous_request_is_refused_with_a_discovery_challenge(client
 
     A fresh MCP client has never seen this server and has nothing to go on but
     this header. Without it the connection fails with no route to recovery.
+
+    Guard: AUTH-008.
     """
     r = await client.get("/rest/v1/repositories", headers={"authorization": ""})
     assert r.status_code == 401
@@ -103,6 +105,7 @@ async def test_the_challenge_survives_the_middleware(client):
 
 @pytest.mark.asyncio
 async def test_an_unknown_token_is_refused(client):
+    # Guard: AUTH-009.
     r = await client.get("/rest/v1/repositories", headers=bearer(auth.new_token()))
     assert r.status_code == 401
     assert r.json()["code"] == "UNAUTHENTICATED"
@@ -223,6 +226,7 @@ async def test_a_repository_outside_scope_is_refused(client, db, workspace):
 
 @pytest.mark.asyncio
 async def test_scope_is_enforced_on_submit_not_only_on_reads(client, db, workspace):
+    # Guard: AUTH-007.
     repo, ws = workspace
     await set_scope(db, ["SOMETHING_ELSE"])
     r = await client.post(
@@ -241,6 +245,7 @@ async def test_scope_is_enforced_on_submit_not_only_on_reads(client, db, workspa
 
 @pytest.mark.asyncio
 async def test_a_listing_hides_repositories_outside_scope(client, db, workspace):
+    # Guard: AUTH-010.
     repo, _ = workspace
     await set_scope(db, None)
     body = (await client.get("/rest/v1/repositories")).json()
@@ -279,6 +284,7 @@ async def test_the_flat_catalogue_hides_workspaces_outside_scope(client, db, wor
 
 @pytest.mark.asyncio
 async def test_a_job_in_another_repository_is_not_readable(client, db, workspace):
+    # Guard: AUTH-011.
     repo, ws = workspace
     r = await client.post(
         f"/rest/v1/transformations/submit/{repo}/{ws}",
@@ -429,6 +435,8 @@ async def test_an_unregistered_redirect_uri_is_not_redirected_to(client, account
     If the requested callback is not one we know, it is not a place to send an
     error either -- an attacker would receive the code. The person at the
     browser is the only safe audience.
+
+    Guard: AUTH-004.
     """
     client_id = await register_client(client)
     _, challenge = pkce()
@@ -492,6 +500,7 @@ async def test_the_full_flow_mints_a_token_that_works(client, account_password):
 
 @pytest.mark.asyncio
 async def test_a_wrong_pkce_verifier_is_refused(client, account_password):
+    # Guard: AUTH-005.
     client_id = await register_client(client)
     verifier, challenge = pkce()
     code = await get_code(client, client_id, challenge, account_password)
@@ -524,6 +533,8 @@ async def test_replaying_an_authorization_code_revokes_the_whole_family(
     This is also the regression test for revoking inside the transaction that
     is about to roll back: the revocation would be undone on the way out and
     this assertion would find the access token still working.
+
+    Guard: AUTH-001, AUTH-002.
     """
     client_id = await register_client(client)
     verifier, challenge = pkce()
@@ -554,6 +565,7 @@ async def test_replaying_an_authorization_code_revokes_the_whole_family(
 
 @pytest.mark.asyncio
 async def test_a_rotated_refresh_token_cannot_be_replayed(client, account_password):
+    # Guard: AUTH-006.
     client_id = await register_client(client)
     verifier, challenge = pkce()
     code = await get_code(client, client_id, challenge, account_password)
@@ -636,6 +648,8 @@ async def test_a_token_for_another_audience_is_refused(client, db, account_passw
     The token is valid, unexpired and belongs to a live account -- it was just
     minted for somewhere else. Without this check, a compromised downstream
     server replays its tokens against this one.
+
+    Guard: AUTH-003.
     """
     client_id = await register_client(client)
     verifier, challenge = pkce()
@@ -867,6 +881,8 @@ async def test_tools_list_hides_a_workspace_that_could_only_fail(client, db, wor
 
     Advertising it would trade a missing tool for one that always fails, which
     is worse: the model would keep trying.
+
+    Guard: AUTH-012.
     """
     repo, _ = workspace
     await set_scope(db, None)
@@ -890,6 +906,7 @@ async def test_tools_list_hides_a_workspace_that_could_only_fail(client, db, wor
 
 @pytest.mark.asyncio
 async def test_tools_list_respects_repository_scope(client, db, workspace):
+    # Guard: AUTH-013.
     repo, _ = workspace
     await publish(db, repo, "streamer", STREAMING)
 
@@ -995,6 +1012,8 @@ async def test_repeated_wrong_passwords_lock_the_account_out(client, account_pas
     A test that only counts 401s cannot tell a lockout from a form that was
     always going to reject. The tell is that the same request which succeeds in
     `test_a_login_below_the_limit_is_not_refused` returns 429 here.
+
+    Guard: AUTH-014.
     """
     client_id = await register_client(client)
     for i in range(config.PASSWORD_MAX_ATTEMPTS):
@@ -1037,7 +1056,10 @@ async def test_a_login_below_the_limit_is_not_refused(client, account_password):
 
 @pytest.mark.asyncio
 async def test_a_successful_login_clears_the_counter(client, account_password):
-    """Otherwise failures accumulate across weeks and lock out a real user."""
+    """Otherwise failures accumulate across weeks and lock out a real user.
+
+    Guard: AUTH-016.
+    """
     client_id = await register_client(client)
     for _ in range(config.PASSWORD_MAX_ATTEMPTS - 1):
         assert (await wrong_login(client, client_id)).status_code == 401
@@ -1061,6 +1083,8 @@ async def test_the_lockout_does_not_reveal_whether_an_account_exists(
     A limiter that only counted real accounts would answer 429 for a name that
     exists and 401 for one that does not -- turning a defence into account
     enumeration.
+
+    Guard: AUTH-017.
     """
     client_id = await register_client(client)
     unknown = f"no-such-account-{uuid.uuid4().hex[:8]}"
@@ -1100,7 +1124,10 @@ async def test_the_lockout_does_not_reveal_whether_an_account_exists(
 
 @pytest.mark.asyncio
 async def test_the_lockout_expires(client, account_password, monkeypatch):
-    """A lockout that never lifts is a denial of service on the real user."""
+    """A lockout that never lifts is a denial of service on the real user.
+
+    Guard: AUTH-015.
+    """
     client_id = await register_client(client)
     for _ in range(config.PASSWORD_MAX_ATTEMPTS):
         await wrong_login(client, client_id)
@@ -1123,6 +1150,8 @@ def test_an_unset_public_url_refuses_to_start(monkeypatch):
     A guessed default serves discovery happily and mints tokens no client can
     use, so the failure appears at the client as an opaque authorization error
     with nothing in the log pointing back here. Better to refuse at startup.
+
+    Guard: AUTH-018.
     """
     monkeypatch.setattr(config, "PUBLIC_URL_CONFIGURED", False)
     with pytest.raises(RuntimeError, match="PUBLIC_URL is not set"):
@@ -1214,6 +1243,8 @@ async def test_the_session_cookie_is_refused_on_the_service_paths(
 
     The bearer half proves the route is reachable at all: without it a 401 from
     a misspelled path would pass just as well.
+
+    Guard: AUTH-019.
     """
     repo, ws = workspace
     assert (await sign_in(browser, account_password)).status_code == 200
@@ -1233,6 +1264,8 @@ async def test_a_session_is_not_usable_as_a_bearer_token(browser, account_passwo
     Presenting the cookie's value in an Authorization header is what an attacker
     who has read it out of a proxy log would try first, and it would sidestep
     the service-path restriction above.
+
+    Guard: AUTH-020.
     """
     assert (await sign_in(browser, account_password)).status_code == 200
     raw = browser.cookies.get(auth.SESSION_COOKIE)
@@ -1246,7 +1279,9 @@ async def test_signing_out_revokes_the_session_and_not_only_the_cookie(
     browser, account_password
 ):
     """Clearing the cookie is cosmetic: a session captured before sign-out has
-    to stop working, so the test re-presents the raw value by hand."""
+    to stop working, so the test re-presents the raw value by hand.
+    Guard: AUTH-021.
+"""
     assert (await sign_in(browser, account_password)).status_code == 200
     raw = browser.cookies.get(auth.SESSION_COOKIE)
 
@@ -1271,7 +1306,10 @@ async def test_signing_out_revokes_the_session_and_not_only_the_cookie(
 async def test_disabling_an_account_kills_a_session_already_in_flight(
     browser, db, account_password
 ):
-    """Otherwise the control does nothing for up to SESSION_TTL_SECONDS."""
+    """Otherwise the control does nothing for up to SESSION_TTL_SECONDS.
+
+    Guard: AUTH-022.
+    """
     assert (await sign_in(browser, account_password)).status_code == 200
     assert (await browser.get("/rest/v1/whoami")).status_code == 200
 
@@ -1285,6 +1323,7 @@ async def test_disabling_an_account_kills_a_session_already_in_flight(
 
 @pytest.mark.asyncio
 async def test_an_expired_session_is_refused(browser, db, account_password):
+    # Guard: AUTH-023.
     assert (await sign_in(browser, account_password)).status_code == 200
     await db.execute(
         """
@@ -1320,6 +1359,8 @@ async def test_the_job_listing_hides_jobs_outside_scope(client, db, workspace):
     return for an empty allowed set, which leaves the filter untested -- that
     is what the first version of this test did, and break_the_guard caught it:
     the filter could be replaced by `OR true` and this still passed.
+
+    Guard: AUTH-024.
     """
     repo, ws = workspace
     submit = await client.post(
@@ -1362,6 +1403,8 @@ async def test_the_job_listing_applies_scope_before_the_limit(client, db, worksp
     busy queue elsewhere hides their jobs entirely and the row count leaks how
     much is going on outside their scope. limit=1 makes that difference
     observable -- with the filter in SQL the one row returned is theirs.
+
+    Guard: AUTH-025.
     """
     repo, ws = workspace
     mine = (
@@ -1394,6 +1437,8 @@ async def test_the_accounts_listing_requires_admin(client, db):
     `token` is admin by default, so the refusal has to be created rather than
     assumed. Not restored afterwards because it does not need to be: `token`
     drops and recreates the account for every test.
+
+    Guard: AUTH-026.
     """
     assert (await client.get("/rest/v1/accounts")).status_code == 200
 
@@ -1470,7 +1515,9 @@ def test_authentication_is_on_unless_the_environment_says_otherwise():
 def test_anything_but_the_word_off_leaves_authentication_on(raw):
     """`false`, `0` and `no` are the trap: under a truthiness test each of them
     would turn authentication *off*, which is the reverse of what anyone typing
-    them means. `of` and `offf` are the typos, and a typo must fail safe."""
+    them means. `of` and `offf` are the typos, and a typo must fail safe.
+    Guard: AUTH-030.
+"""
     assert config._auth_disabled(raw) is False
 
 
@@ -1487,6 +1534,7 @@ def test_the_word_off_disables_authentication(raw):
 def test_a_reachable_server_refuses_to_start_without_authentication(
     monkeypatch, host
 ):
+    # Guard: AUTH-027.
     monkeypatch.setattr(config, "AUTH_DISABLED", True)
     monkeypatch.setattr(config, "HOST", host)
     with pytest.raises(RuntimeError, match="DATUM_SYNC_AUTH=off"):
@@ -1575,7 +1623,9 @@ def test_a_local_peer_is_recognised_however_it_is_spelled(host):
 @pytest.mark.parametrize("host", ["192.168.88.102", "10.0.0.5", "::ffff:8.8.8.8"])
 def test_a_remote_peer_is_not_local(host):
     """The half that matters. `::ffff:8.8.8.8` is the one to get wrong: strip
-    the prefix carelessly and a mapped *public* address reads as loopback."""
+    the prefix carelessly and a mapped *public* address reads as loopback.
+    Guard: AUTH-029.
+"""
     assert config.is_loopback_client(Address(host, 54321)) is False
 
 
@@ -1593,7 +1643,9 @@ async def test_a_remote_caller_is_refused_even_with_auth_off(monkeypatch, client
     `require_safe_auth()` reads config.HOST, and `uvicorn --host 0.0.0.0` never
     consults it -- so an auth-off server *can* end up bound to the network. This
     runs on the socket's own peer address, per request, and no start-up flag or
-    forged header reaches it."""
+    forged header reaches it.
+    Guard: AUTH-028.
+"""
     monkeypatch.setattr(config, "AUTH_DISABLED", True)
     bare = {"Authorization": ""}
 

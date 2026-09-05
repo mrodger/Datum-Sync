@@ -59,6 +59,7 @@ def _conn_row(tier=1, type_="http"):
 
 
 def test_ssrf_rejects_loopback():
+    # Guard: PROXY-004.
     with pytest.raises(ApiError) as exc:
         validate_upstream_url("http://127.0.0.1/evil")
     assert exc.value.code == "BLOCKED_ADDRESS"
@@ -98,7 +99,10 @@ def test_ssrf_rejects_no_host():
 
 
 def test_bare_account_token_denied():
-    """Account tokens (no agent_id) cannot proxy."""
+    """Account tokens (no agent_id) cannot proxy.
+
+    Guard: PROXY-001.
+    """
     p = Principal(
         account_id=1, name="acct", max_tier=4, repo_scope=None,
         connection_grants=None, is_admin=True, vault_scope=None,
@@ -110,6 +114,7 @@ def test_bare_account_token_denied():
 
 
 def test_agent_without_grant_denied():
+    # Guard: PROXY-002.
     p = _principal(proxy_grants=["tavily"])
     with pytest.raises(ApiError) as exc:
         check_proxy_access(p, _conn_row(), "openrouter")
@@ -131,6 +136,7 @@ def test_empty_grants_denied():
 
 
 def test_tier_denied():
+    # Guard: PROXY-003.
     p = _principal(proxy_grants=["secret-conn"], max_tier=2)
     with pytest.raises(ApiError) as exc:
         check_proxy_access(p, _conn_row(tier=3), "secret-conn")
@@ -250,7 +256,10 @@ def test_auth_inject_validation_accepts_valid():
 
 
 async def test_proxy_rejects_non_http_connection(db, pool):
-    """proxy_request refuses database connections."""
+    """proxy_request refuses database connections.
+
+    Guard: PROXY-005.
+    """
     from datum_sync import proxy
 
     # Create a database connection

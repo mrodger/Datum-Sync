@@ -57,6 +57,8 @@ async def test_no_read_path_returns_the_secret(conns):
 
     Asserted over each read path rather than once, because the guarantee is
     structural only for as long as nobody writes a sixth query with SELECT *.
+
+    Guard: CONN-001.
     """
     await _make(conns)
     row = await connections.get(conns, f"{PREFIX}-db")
@@ -78,7 +80,10 @@ async def test_no_read_path_returns_the_secret(conns):
 
 @pytest.mark.asyncio
 async def test_a_credential_in_config_is_refused(conns):
-    """`config` is rendered in the UI, so a password there is a password on screen."""
+    """`config` is rendered in the UI, so a password there is a password on screen.
+
+    Guard: CONN-003.
+    """
     with pytest.raises(connections.ConnectionStoreError, match="belongs in `secret`"):
         await connections.create(
             conns, f"{PREFIX}-leak", "http",
@@ -107,6 +112,8 @@ async def test_a_secret_sealed_for_one_connection_will_not_open_for_another(conn
     hands the second connection the first one's credentials, and every read
     still succeeds -- there is nothing in the ciphertext that says which row it
     came from.
+
+    Guard: CONN-002.
     """
     await _make(conns, name=f"{PREFIX}-a")
     await _make(conns, name=f"{PREFIX}-b", secret={"password": "different"})
@@ -162,6 +169,7 @@ async def test_a_connection_with_no_secret_is_allowed(conns):
 async def test_scope_decides_who_can_resolve(
     conns, scope, targets, repo, ws, expected
 ):
+    # Guard: CONN-004.
     await _make(conns, scope=scope, scope_targets=targets)
     if expected:
         got = await connections.resolve(conns, repo, ws, [f"{PREFIX}-db"])
@@ -208,6 +216,8 @@ async def test_a_patch_that_does_not_mention_config_leaves_it_an_object(conns):
 
     The same trap that bit schedules.update in step 7, where pausing a schedule
     turned its params into a string and 251 tests could not see it.
+
+    Guard: CONN-005.
     """
     await _make(conns)
     await connections.update(conns, f"{PREFIX}-db", {"description": "one"})
@@ -326,6 +336,7 @@ async def test_the_route_round_trips_without_the_secret(client, conns):
 
 @pytest.mark.asyncio
 async def test_writes_are_admin_only_and_reads_are_not(client, conns, plain_token):
+    # Guard: CONN-006, CONN-007.
     await client.post("/rest/v1/connections", json=BODY)
     headers = {"authorization": f"Bearer {plain_token}"}
 

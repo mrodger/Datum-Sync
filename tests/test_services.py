@@ -113,6 +113,8 @@ async def test_a_service_output_returning_a_file_fails(tmp_path):
     A `service/static` output that is a single file would register a served root
     that is not a directory, so every request to it 404s -- discovered by a
     visitor rather than by the job that caused it.
+
+    Guard: SERVICE-008.
     """
     result, _ = await run_ws(tmp_path, """
 async def run(params, emit, connections):
@@ -130,6 +132,8 @@ async def test_a_directory_under_a_non_service_output_fails(tmp_path):
     Allowed through, it stores fine and fails later, in `FileResponse`, as a 500
     on the download -- a job that reported success and an artifact that cannot
     be fetched.
+
+    Guard: SERVICE-009.
     """
     result, _ = await run_ws(tmp_path, """
 import tempfile
@@ -209,6 +213,8 @@ def test_resolve_refuses_a_sibling_that_shares_a_prefix(tmp_path):
     /data/app and /data/app-secrets share a prefix as strings and share no
     directory as paths. A served root next to a similarly-named directory is
     exactly what a per-workspace layout produces.
+
+    Guard: SERVICE-001.
     """
     root = site(tmp_path, "app")
     (tmp_path / "app-secrets").mkdir()
@@ -240,6 +246,8 @@ def test_resolve_refuses_a_supervised_service(tmp_path):
     Kept because this function decides what to open, and "the gate checked" is
     not a property it can see. A registered supervised row can only exist if the
     gate was bypassed, which is precisely when this needs to hold.
+
+    Guard: SERVICE-003.
     """
     root = site(tmp_path)
     with pytest.raises(services.ServiceError, match="not run by this server"):
@@ -338,6 +346,8 @@ async def test_another_workspace_cannot_take_the_url(db, clean_services):
     Without the raise this is worse than a failure: the job reports success, the
     URL keeps serving the first workspace's site, and nothing anywhere says the
     second workspace's output went nowhere.
+
+    Guard: SERVICE-006, SERVICE-007.
     """
     name = PREFIX + "-contested"
     first = await a_job(db)
@@ -356,6 +366,8 @@ async def test_register_refuses_a_name_that_escapes_the_job(db, clean_services):
     Checked again because the value written here is the root every later request
     is resolved against: a containment bug at write time is a containment bug on
     every read, and this is the last point where there is a job to blame.
+
+    Guard: SERVICE-004.
     """
     job_id = await a_job(db)
     bad = artifact(PREFIX + "-escape") | {"file": "../../../etc"}
@@ -364,6 +376,7 @@ async def test_register_refuses_a_name_that_escapes_the_job(db, clean_services):
 
 
 async def test_register_refuses_a_file(db, clean_services):
+    # Guard: SERVICE-005.
     job_id = await a_job(db)
     (config.job_dir(job_id) / "flat").write_text("x")
     bad = artifact(PREFIX + "-flat") | {"file": "flat"}
@@ -414,6 +427,8 @@ async def test_gate_refuses_a_supervised_output(db):
 
     Accepted, it registers a URL that answers nothing, and the workspace author
     is told so by a visitor. Refused, the author is told by `sync`.
+
+    Guard: SERVICE-010.
     """
     with pytest.raises(publish.PublishError, match="not run by this server"):
         await publish.check_services(db, manifest_with("service/notebook"), "_pytest")
@@ -430,6 +445,8 @@ async def test_gate_refuses_a_name_another_workspace_serves(db, clean_services):
     Caught at publish because that is the only moment where refusing is
     actionable: at job completion, the choice is between silently changing an
     owner and failing a run that did its work.
+
+    Guard: SERVICE-011.
     """
     name = PREFIX + "-taken"
     job_id = await a_job(db)
@@ -504,6 +521,8 @@ async def test_serve_refuses_traversal(client, served):
 
     The error code is asserted as well as the status, because 404 is what an
     unknown service name returns too, and that would pass with the guard gone.
+
+    Guard: SERVICE-002.
     """
     escape = "%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd"
     r = await client.get(f"/serve/{served}/{escape}")
@@ -523,6 +542,8 @@ async def test_serve_needs_a_credential(client, served):
 
     Making the whole namespace world-readable because static files feel harmless
     would publish whatever the last job happened to write.
+
+    Guard: SERVICE-014.
     """
     r = await client.get(f"/serve/{served}/", headers={"authorization": ""})
     assert r.status_code == 401
@@ -533,6 +554,8 @@ async def test_serve_checks_the_owning_repositorys_scope(client, db, served):
 
     Otherwise a caller confined to one repository reads another's site through a
     name that gives no hint of where it came from.
+
+    Guard: SERVICE-012.
     """
     await db.execute(
         "UPDATE service_accounts SET repo_scope = $2 WHERE name = $1",
@@ -549,6 +572,8 @@ async def test_listing_is_filtered_by_scope(client, db, served):
     run the site fixture keeps a row for it. Asserting the whole list made this
     test pass only on a machine where the feature had never been used, and it
     duly failed the first time the end-to-end check was run before the suite.
+
+    Guard: SERVICE-013.
     """
     async def visible() -> list[str]:
         r = await client.get("/rest/v1/services")
@@ -568,6 +593,8 @@ async def test_a_service_artifact_is_not_downloadable(client, db, served):
 
     409 with the URL, rather than 404: the artifact exists and is reachable, just
     not through a route whose contract is a single file.
+
+    Guard: SERVICE-015.
     """
     job_id = await db.fetchval(
         "SELECT source_job FROM hosted_services WHERE name = $1", served)

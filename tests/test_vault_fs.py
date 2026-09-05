@@ -49,6 +49,7 @@ async def test_read_file(tmp_path, monkeypatch):
 
 
 async def test_read_outside_scope_is_403(tmp_path, monkeypatch):
+    # Guard: VAULTFS-001.
     monkeypatch.setattr(config, "VAULT_PATH", tmp_path)
     (tmp_path / "private").mkdir()
     (tmp_path / "private" / "diary.md").write_text("secret")
@@ -109,6 +110,7 @@ async def test_write_creates_parents(tmp_path, monkeypatch):
 
 
 async def test_write_outside_scope_is_403(tmp_path, monkeypatch):
+    # Guard: VAULTFS-002.
     monkeypatch.setattr(config, "VAULT_PATH", tmp_path)
     with pytest.raises(ApiError) as exc:
         await vault_fs.write(_principal(), "shared/x.md", "nope")
@@ -167,6 +169,7 @@ async def test_list_nonexistent_is_404(tmp_path, monkeypatch):
 
 
 async def test_list_outside_scope_is_403(tmp_path, monkeypatch):
+    # Guard: VAULTFS-003.
     monkeypatch.setattr(config, "VAULT_PATH", tmp_path)
     (tmp_path / "private").mkdir()
     with pytest.raises(ApiError) as exc:
@@ -320,7 +323,10 @@ async def test_mcp_vault_list(vault_setup):
 
 
 async def test_mcp_vault_tools_hidden_without_scope(vault_setup):
-    """An account with no vault_scope should not see vault tools."""
+    """An account with no vault_scope should not see vault tools.
+
+    Guard: VAULTFS-004.
+    """
     s = vault_setup
     # Create a second account with no vault_scope
     no_scope_name = "_vault_e2e_noscope"

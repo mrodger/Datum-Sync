@@ -42,6 +42,8 @@ def test_a_python_object_tag_is_not_constructed():
     remote code execution. The test asserts the refusal rather than the absence
     of a side effect, because a side effect that did happen would not fail any
     assertion -- it would just have happened.
+
+    Guard: AUTO-001.
     """
     with pytest.raises(automations.AutomationError) as caught:
         automations.parse(
@@ -82,6 +84,8 @@ def test_a_placeholder_naming_nothing_is_refused_where_it_was_typed():
 
     Caught at authoring time because the alternative is a webhook that has been
     posting an empty field for three weeks and a body nobody reads closely.
+
+    Guard: AUTO-003.
     """
     with pytest.raises(automations.AutomationError) as caught:
         automations.parse(
@@ -108,6 +112,7 @@ def test_a_template_cannot_walk_out_of_its_namespace():
 
 
 def test_an_automation_that_triggers_on_what_it_runs_is_refused():
+    # Guard: AUTO-002.
     with pytest.raises(automations.AutomationError) as caught:
         automations.parse(
             "name: x\n"
@@ -175,6 +180,7 @@ def test_a_parameter_this_job_did_not_carry_becomes_empty_not_an_error():
     "::1",
 ])
 async def test_the_server_refuses_to_fetch_its_own_network(host):
+    # Guard: AUTO-004.
     with pytest.raises(automations.AutomationError):
         await automations._resolve_public(host, 80)
 
@@ -193,6 +199,8 @@ async def test_every_redirect_hop_is_checked_not_just_the_first(monkeypatch):
     the redirect is never followed, so the test would pass just as well against
     a `_fetch` that checks nothing after the first URL. Allowing hop one is
     what makes hop two the thing under test.
+
+    Guard: AUTO-005.
     """
     asked: list[str] = []
     real = automations._resolve_public
@@ -315,6 +323,8 @@ async def test_considering_is_recorded_so_the_next_poll_does_not_redeliver(
     through `run_pending` would pass just as well with the claim moved out into
     that caller's WHERE clause -- which is where it started, and which leaves
     any future second caller free to deliver everything twice.
+
+    Guard: AUTO-008.
     """
     job_id = await _finished(db)
 
@@ -334,6 +344,8 @@ async def test_a_job_this_automation_caused_does_not_re_fire_it(db, automation):
 
     Without it, an automation whose trigger has no workspace filter runs
     forever: its own job completes, matches, and submits the next one.
+
+    Guard: AUTO-007.
     """
     job_id = await _finished(db, triggered_by="automation:_pytest-auto")
     assert await automations.consider(db, job_id) == []
@@ -349,6 +361,8 @@ async def test_a_job_that_finished_before_the_automation_existed_is_not_delivere
     Comparing two now()-derived values inside one transaction compares two
     identical values, so `created_at <= completed_at` is trivially true and the
     test proves nothing -- which is exactly what my first version of it did.
+
+    Guard: AUTO-006.
     """
     job_id = await _finished(db, completed="now() - interval '1 hour'")
     assert await automations.consider(db, job_id) == []
@@ -488,6 +502,8 @@ async def test_a_scoped_caller_cannot_automate_another_repository(
     The delete establishes the precondition rather than assuming it:
     `break_the_guard.py` runs this test with the check deleted, and that run
     really does store the automation.
+
+    Guard: AUTO-009.
     """
     await db.execute("DELETE FROM automations WHERE name = '_pytest-auto'")
     r = await client.post(
@@ -515,6 +531,8 @@ async def test_a_scoped_caller_cannot_watch_every_repository(
 
     Asserting nothing was written is also a stronger claim than the 403 alone:
     a refusal that stores the row anyway is a bug the status code cannot see.
+
+    Guard: AUTO-010.
     """
     await db.execute("DELETE FROM automations WHERE name = '_pytest-watch'")
     try:
@@ -541,6 +559,8 @@ async def test_scope_is_checked_against_the_new_document_not_only_the_old(
 
     The automation created here is within the scoped caller's reach; the edit
     is not, and the edit is where the privilege would be gained.
+
+    Guard: AUTO-011.
     """
     await db.execute("DELETE FROM automations WHERE name = '_pytest-elsewhere'")
     mine = await automations.create(db, """

@@ -85,6 +85,8 @@ def test_the_five_headings_with_nothing_under_them_do_not_pass(tmp_path):
 
     Someone told to add MANIFEST.md adds MANIFEST.md. If presence is the bar,
     the file that satisfies it is this one, and the check has bought a filename.
+
+    Guard: PUBLISH-004.
     """
     doc = "\n".join(f"## {s}\n" for s in publish.REQUIRED_SECTIONS)
     ws = make_ws(tmp_path, doc=doc)
@@ -179,6 +181,8 @@ async def test_a_connection_out_of_scope_is_refused_at_publish_not_at_run(conns)
     The gate has every fact needed to know this workspace can never resolve
     that connection. Letting it through means the failure arrives as a runtime
     error in front of whoever submitted the job, who did not choose either.
+
+    Guard: PUBLISH-002.
     """
     await _make(conns, scope="repository", scope_targets=["SCIMAC"])
     m = _manifest(connections=[{"name": f"{PREFIX}-db"}])
@@ -200,6 +204,7 @@ async def test_the_near_miss_workspace_scope_is_refused(conns):
 
 @pytest.mark.asyncio
 async def test_declaring_write_on_a_read_only_connection_is_refused(conns):
+    # Guard: PUBLISH-003.
     await _make(conns, access="read")
     m = _manifest(connections=[{"name": f"{PREFIX}-db", "access": "write"}])
     with pytest.raises(publish.PublishError, match="stored as read-only"):
@@ -228,6 +233,8 @@ async def test_the_publisher_tier_decides(conns, tier, max_tier, allowed):
     Checked against the publisher rather than the job's caller because the
     workspace runs with its own authority: whoever publishes it is the person
     choosing to hand that credential to everyone who can submit.
+
+    Guard: PUBLISH-001.
     """
     await _make(conns, tier=tier)
     m = _manifest(connections=[{"name": f"{PREFIX}-db"}])
@@ -304,6 +311,8 @@ async def test_the_smoke_test_only_runs_when_the_manifest_asks(conns, tmp_path):
     It runs its normal path with an argument it ignores and exits 0, so an
     always-on check would report "the smoke test passed" for a workspace that
     has none -- while having really run it, side effects and all.
+
+    Guard: PUBLISH-005.
     """
     ws = make_ws(tmp_path, main="import sys; sys.exit(1)")
 
@@ -332,6 +341,8 @@ async def test_the_cheap_checks_run_before_the_expensive_one(conns, tmp_path):
     """A workspace with no MANIFEST.md must not cost a process launch.
 
     Asserted by making the smoke test destructive: if it ran, the file exists.
+
+    Guard: PUBLISH-006.
     """
     ws = make_ws(tmp_path, doc=None, main=textwrap.dedent("""
         import pathlib
@@ -354,6 +365,8 @@ async def test_failing_the_gate_leaves_the_published_version_alone(db, tmp_path)
     `_upsert` writes only what is in `report.loaded`, so dropping the failure
     from that list is what makes the previously published row survive. Without
     it a typo in MANIFEST.md deregisters a workspace people are calling.
+
+    Guard: PUBLISH-007.
     """
     repo_id = await db.fetchval(
         "INSERT INTO repositories (name, path) VALUES ($1, $2) RETURNING id",
@@ -393,6 +406,8 @@ async def test_a_workspace_that_fails_the_gate_is_not_stale(db, tmp_path):
     The repository is not named `_pytest` here, and cannot be: `_visible_dirs`
     skips names beginning with '_', so a directory called that is invisible to
     the very function under test. It is cleaned up by hand instead.
+
+    Guard: PUBLISH-008.
     """
     name = "pytestpub"
     repo = tmp_path / name

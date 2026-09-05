@@ -148,6 +148,8 @@ async def test_agent_token_resolves_to_principal(db):
     The parent account is deliberately admin so the ``is_admin is False``
     assertion below proves that agents are NEVER admin regardless of their
     parent's status.
+
+    Guard: AGENT-001.
     """
     # Create an admin account — agents must still resolve as non-admin.
     account_id = await db.fetchval(

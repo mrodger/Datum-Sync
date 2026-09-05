@@ -21,15 +21,24 @@ import importlib.util
 import pathlib
 import subprocess
 import sys
+import tempfile
+from xml.etree import ElementTree
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from datum_sync import db  # noqa: E402  -- after the path insert, necessarily
 
-# (label, file, old, new, test that must break)
+# (id, label, file, old, new, test that must break)
+#
+# The id is the durable name of the guard. It is written here and repeated in a
+# `Guard: <ID>` line in the named test, and tests/test_guard_registry.py checks
+# both directions -- so a test cannot quietly stop being the thing that proves a
+# guard, and a case cannot outlive the test it names. Ids are frozen once
+# assigned: a new case appends within its domain, it does not renumber the rest.
 CASES = [
     (
+        "AUTH-001",
         "reuse detection: revoke the family",
         "datum_sync/oauth.py",
         "    except _Reuse as reuse:\n"
@@ -44,6 +53,7 @@ CASES = [
         "tests/test_auth.py::test_replaying_an_authorization_code_revokes_the_whole_family",
     ),
     (
+        "AUTH-002",
         "reuse detection: revoking OUTSIDE the rolled-back transaction",
         "datum_sync/oauth.py",
         # The bug as originally written: revoke in place, inside the very
@@ -62,6 +72,7 @@ CASES = [
         "tests/test_auth.py::test_replaying_an_authorization_code_revokes_the_whole_family",
     ),
     (
+        "AUTH-003",
         "RFC 8707 audience binding",
         "datum_sync/auth.py",
         "        if row[\"resource\"] is not None and canonical_resource(\n"
@@ -71,6 +82,7 @@ CASES = [
         "tests/test_auth.py::test_a_token_for_another_audience_is_refused",
     ),
     (
+        "AUTH-004",
         "redirect_uri exact match (open redirector)",
         "datum_sync/oauth.py",
         "    if requested not in registered:",
@@ -78,6 +90,7 @@ CASES = [
         "tests/test_auth.py::test_an_unregistered_redirect_uri_is_not_redirected_to",
     ),
     (
+        "AUTH-005",
         "PKCE verification",
         "datum_sync/oauth.py",
         "        if not _pkce_ok(code_verifier, row[\"code_challenge\"]):",
@@ -85,6 +98,7 @@ CASES = [
         "tests/test_auth.py::test_a_wrong_pkce_verifier_is_refused",
     ),
     (
+        "AUTH-006",
         "refresh rotation replay",
         "datum_sync/oauth.py",
         "        if row[\"rotated_to\"] is not None:",
@@ -92,6 +106,7 @@ CASES = [
         "tests/test_auth.py::test_a_rotated_refresh_token_cannot_be_replayed",
     ),
     (
+        "AUTH-007",
         "repo scope on submit",
         "datum_sync/api.py",
         "    auth.require_repo(caller, repo)\n"
@@ -100,6 +115,7 @@ CASES = [
         "tests/test_auth.py::test_scope_is_enforced_on_submit_not_only_on_reads",
     ),
     (
+        "AUTH-008",
         "the WWW-Authenticate challenge survives the middleware",
         "datum_sync/api.py",
         "        return errors.envelope(\n"
@@ -109,6 +125,7 @@ CASES = [
         "tests/test_auth.py::test_an_anonymous_request_is_refused_with_a_discovery_challenge",
     ),
     (
+        "AUTH-009",
         "the bearer guard itself (allowlist everything)",
         "datum_sync/api.py",
         "    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):",
@@ -116,6 +133,7 @@ CASES = [
         "tests/test_auth.py::test_an_unknown_token_is_refused",
     ),
     (
+        "AUTH-010",
         "scope filter on the repository listing",
         "datum_sync/api.py",
         "return {\"items\": [dict(r) for r in rows if caller.allows_repo(r[\"name\"])]}",
@@ -123,6 +141,7 @@ CASES = [
         "tests/test_auth.py::test_a_listing_hides_repositories_outside_scope",
     ),
     (
+        "AUTH-011",
         "scope check on a job's own repository",
         "datum_sync/api.py",
         "    row = await execute.job_row(conn, job_id)\n"
@@ -131,6 +150,7 @@ CASES = [
         "tests/test_auth.py::test_a_job_in_another_repository_is_not_readable",
     ),
     (
+        "AUTH-012",
         "MCP hides a workspace with a required FILE parameter",
         "datum_sync/mcp.py",
         "    return not any(\n"
@@ -140,6 +160,7 @@ CASES = [
         "tests/test_auth.py::test_tools_list_hides_a_workspace_that_could_only_fail",
     ),
     (
+        "AUTH-013",
         "MCP scope filter",
         "datum_sync/mcp.py",
         "        if not principal.allows_repo(repo):\n            continue",
@@ -147,6 +168,7 @@ CASES = [
         "tests/test_auth.py::test_tools_list_respects_repository_scope",
     ),
     (
+        "AUTH-014",
         "the login lockout",
         "datum_sync/auth.py",
         "    if retry_after:\n        raise TooManyAttempts(retry_after)",
@@ -154,6 +176,7 @@ CASES = [
         "tests/test_auth.py::test_repeated_wrong_passwords_lock_the_account_out",
     ),
     (
+        "AUTH-015",
         "the lockout's window (a lockout that never lifts)",
         "datum_sync/auth.py",
         "    recent = [t for t in _attempts.get(name, []) if now - t < window]",
@@ -161,6 +184,7 @@ CASES = [
         "tests/test_auth.py::test_the_lockout_expires",
     ),
     (
+        "AUTH-016",
         "clearing the counter on a successful login",
         "datum_sync/auth.py",
         "    _attempts.pop(name, None)\n    return row",
@@ -168,6 +192,7 @@ CASES = [
         "tests/test_auth.py::test_a_successful_login_clears_the_counter",
     ),
     (
+        "AUTH-017",
         "counting failures for names that do not exist (enumeration)",
         "datum_sync/auth.py",
         # The plausible version of this bug: only bother counting attempts
@@ -178,6 +203,7 @@ CASES = [
         "tests/test_auth.py::test_the_lockout_does_not_reveal_whether_an_account_exists",
     ),
     (
+        "AUTH-018",
         "PUBLIC_URL must be configured, not guessed",
         "datum_sync/config.py",
         "    if not PUBLIC_URL_CONFIGURED:",
@@ -185,6 +211,7 @@ CASES = [
         "tests/test_auth.py::test_an_unset_public_url_refuses_to_start",
     ),
     (
+        "AUTH-019",
         "the session cookie is not accepted on the service paths (CSRF)",
         "datum_sync/api.py",
         # The plausible mistake: the UI wants to link to a download, so someone
@@ -195,6 +222,7 @@ CASES = [
         "tests/test_auth.py::test_the_session_cookie_is_refused_on_the_service_paths",
     ),
     (
+        "AUTH-020",
         "a session is not a bearer token (the two kinds must not cross)",
         "datum_sync/auth.py",
         "         WHERE t.token_hash = $1 AND t.kind = 'access'",
@@ -202,6 +230,7 @@ CASES = [
         "tests/test_auth.py::test_a_session_is_not_usable_as_a_bearer_token",
     ),
     (
+        "AUTH-021",
         "sign-out revokes server-side, not only in the browser",
         "datum_sync/ui.py",
         "    raw = request.cookies.get(auth.SESSION_COOKIE)\n"
@@ -213,6 +242,7 @@ CASES = [
         "tests/test_auth.py::test_signing_out_revokes_the_session_and_not_only_the_cookie",
     ),
     (
+        "AUTH-022",
         "a disabled account is rejected on every request, not just at sign-in",
         "datum_sync/auth.py",
         "    # Checked on every request, not only at sign-in: disabling an account has to\n"
@@ -224,6 +254,7 @@ CASES = [
         "tests/test_auth.py::test_disabling_an_account_kills_a_session_already_in_flight",
     ),
     (
+        "AUTH-023",
         "session expiry",
         "datum_sync/auth.py",
         "    if row[\"expires_at\"] is not None and row[\"expires_at\"] < _now():\n"
@@ -232,6 +263,7 @@ CASES = [
         "tests/test_auth.py::test_an_expired_session_is_refused",
     ),
     (
+        "AUTH-024",
         "scope on the job listing",
         "datum_sync/api.py",
         "               AND ($2::text[] IS NULL OR repository = ANY($2))",
@@ -239,6 +271,7 @@ CASES = [
         "tests/test_auth.py::test_the_job_listing_hides_jobs_outside_scope",
     ),
     (
+        "AUTH-025",
         "scope applied before LIMIT, not after",
         "datum_sync/api.py",
         # Filter the result instead of the query. This still hides the rows --
@@ -271,6 +304,7 @@ CASES = [
         "tests/test_auth.py::test_the_job_listing_applies_scope_before_the_limit",
     ),
     (
+        "AUTH-026",
         "admin gate on the accounts listing",
         "datum_sync/api.py",
         "    auth.require_admin(caller)\n"
@@ -289,6 +323,7 @@ CASES = [
         # particular use is harmless. It is also how most people spell it, and
         # once one line in the file assigns markup the next one is no longer
         # conspicuous. The test greps, so the guard is the absence itself.
+        "UI-001",
         "the UI never assigns markup (innerHTML ban)",
         "datum_sync/static/app.js",
         "    node.replaceChildren();",
@@ -301,6 +336,7 @@ CASES = [
         # comes back is `_.._etc_passwd`, and the assertion that notices is the
         # one about `..`. Removing both guards at once would prove only that
         # one of them works.
+        "UI-002",
         "an upload's stored name is taken from the basename",
         "datum_sync/uploads.py",
         '    name = _SAFE.sub("_", Path(filename or "").name).lstrip(".-")',
@@ -312,6 +348,7 @@ CASES = [
         # That is the version worth breaking: the caller believes they sent a
         # file under a parameter name the server never looked at, and gets a
         # 201 saying so.
+        "UI-003",
         "an upload carries exactly one file, not at least one",
         "datum_sync/api.py",
         "        if len(files) != 1:",
@@ -323,6 +360,7 @@ CASES = [
         # instead of the query and LIMIT is applied first. Milder consequence
         # -- a workspace's recent runs vanish whenever the queue is busy rather
         # than a caller being paged out of their own jobs -- and no less wrong.
+        "UI-004",
         "the workspace filter is applied in SQL, before LIMIT",
         "datum_sync/api.py",
         "               AND ($3::text IS NULL OR repository = $3)\n"
@@ -355,6 +393,7 @@ CASES = [
         # place that keeps a claim honest, and this one was silently false for
         # five build steps: a subscriber watched a job sit at QUEUED for its
         # whole run.
+        "API-001",
         "the queued -> running transition is announced",
         "datum_sync/jobs.py",
         '        await notify(conn, claimed["id"], event="status", status="running")\n',
@@ -362,6 +401,7 @@ CASES = [
         "tests/test_api.py::test_every_status_frame_carries_the_same_fields",
     ),
     (
+        "API-002",
         "a status frame is built from the row, not the notification",
         "datum_sync/events.py",
         "                current = await jobs.get(conn, job_id)\n"
@@ -385,6 +425,7 @@ CASES = [
         # The CHECK constraint cannot parse a cron expression, so without this
         # the row is accepted and sits enabled and never fires. A schedule with
         # no symptom is the worst thing this feature can produce.
+        "SCHED-001",
         "a cron expression is parsed before the schedule is stored",
         "datum_sync/schedules.py",
         "    if cron is not None and not croniter.is_valid(cron):",
@@ -395,6 +436,7 @@ CASES = [
         # Evaluate the cron in UTC and the UTC hour is held while the local one
         # moves, so "every weekday at 07:00" becomes 08:00 for half the year.
         # Nothing looks wrong: the schedule fires, daily, at a time.
+        "SCHED-002",
         "cron is evaluated in the schedule's own timezone",
         "datum_sync/schedules.py",
         "    zone = _zone(timezone)\n"
@@ -410,6 +452,7 @@ CASES = [
         # Return the missed time instead of walking past it. It still fires --
         # immediately -- and then again on the next poll, once for every period
         # it owed.
+        "SCHED-003",
         "a missed schedule is walked forward, not replayed",
         "datum_sync/schedules.py",
         "        if upcoming > moment:\n            return upcoming",
@@ -420,6 +463,7 @@ CASES = [
         # Advance from now rather than from the missed time. Identical for a
         # cron schedule, which is why this needs an interval to notice: the
         # hourly job quietly moves to :15 and stays there.
+        "SCHED-004",
         "a missed interval keeps its phase",
         "datum_sync/schedules.py",
         "    upcoming = row[\"next_run\"]\n"
@@ -431,6 +475,7 @@ CASES = [
     (
         # A worker spinning through 86,400 steps of catch-up stops claiming
         # jobs, so one badly-configured schedule takes the whole queue down.
+        "SCHED-005",
         "the catch-up walk is bounded",
         "datum_sync/schedules.py",
         "_MAX_CATCHUP_STEPS = 1000",
@@ -441,6 +486,7 @@ CASES = [
         # Advance only on success and a schedule pointing at an unpublished
         # workspace stays due forever: the worker retries it every poll, which
         # is a hot loop that also floods the log.
+        "SCHED-006",
         "a schedule that failed to submit still advances",
         "datum_sync/schedules.py",
         "        upcoming = _advance(row, moment)\n"
@@ -454,6 +500,7 @@ CASES = [
     (
         # Re-enabling a schedule paused for a week must not mean "fire now,
         # then catch up". The next_run is a week in the past.
+        "SCHED-007",
         "re-enabling re-times instead of replaying",
         "datum_sync/schedules.py",
         "    enabling = changes.get(\"enabled\") and not current[\"enabled\"]",
@@ -466,6 +513,7 @@ CASES = [
         # only flips `enabled` stores a JSON string where an object was -- and
         # the next patch wraps it again. Silent, and invisible to every test
         # that patches params, because those overwrite the corrupted value.
+        "SCHED-008",
         "params are decoded before being merged and re-encoded",
         "datum_sync/schedules.py",
         "    merged[\"params\"] = json.loads(current[\"params\"])",
@@ -475,6 +523,7 @@ CASES = [
     (
         # A schedule that can be repointed is a scope check that happened once,
         # on a row that no longer says what it said when it happened.
+        "SCHED-009",
         "repository and workspace are not patchable",
         "datum_sync/schedules.py",
         "_PATCHABLE = (\"params\", \"cron\", \"interval_s\", \"timezone\", \"enabled\")",
@@ -485,6 +534,7 @@ CASES = [
     (
         # The schedule submits jobs later with nobody present to check scope,
         # and jobs.submit performs no check of its own.
+        "SCHED-010",
         "repo scope on creating a schedule",
         "datum_sync/api.py",
         "    auth.require_repo(caller, body[\"repository\"])\n"
@@ -498,6 +548,7 @@ CASES = [
         "tests/test_schedules.py::test_a_scoped_caller_cannot_schedule_another_repository",
     ),
     (
+        "SCHED-011",
         "scope filter on the schedules listing",
         "datum_sync/api.py",
         "    where, args = _scope_sql(caller, \"repository\", 1)",
@@ -511,6 +562,7 @@ CASES = [
         # arbitrary Python from tags, in a field a user types YAML into.
         # The payload run here is `true`, deliberately: the break has to
         # actually execute for the case to prove anything.
+        "AUTO-001",
         "YAML is parsed with safe_load, never load",
         "datum_sync/automations.py",
         "        doc = yaml.safe_load(text)",
@@ -521,6 +573,7 @@ CASES = [
         # Not deleting the function -- moving it back out of `parse` to where
         # it started, as a step each writer had to remember. `create` no longer
         # calls it, so an automation that submits jobs forever is stored.
+        "AUTO-002",
         "the self-trigger check is inside parse, not beside it",
         "datum_sync/automations.py",
         "    _reject_self_trigger(config)\n    return config",
@@ -530,6 +583,7 @@ CASES = [
     (
         # A template naming something outside the namespace would otherwise
         # render as the empty string, forever, silently.
+        "AUTO-003",
         "a placeholder is checked when the automation is written",
         "datum_sync/automations.py",
         "        if name.startswith(\"job.\") and name[4:] in _JOB_FIELDS:\n"
@@ -539,6 +593,7 @@ CASES = [
         "tests/test_automations.py::test_a_placeholder_naming_nothing_is_refused_where_it_was_typed",
     ),
     (
+        "AUTO-004",
         "the server refuses to fetch its own network",
         "datum_sync/automations.py",
         "        if not address.is_global or address.is_multicast:",
@@ -549,6 +604,7 @@ CASES = [
         # The plausible version, and the one everybody writes: let httpx follow
         # the redirects. Only the first URL was ever validated, so a webhook
         # that 302s to 169.254.169.254 walks straight through.
+        "AUTO-005",
         "every redirect hop is checked, not just the first",
         "datum_sync/automations.py",
         "    async with httpx.AsyncClient(follow_redirects=False,",
@@ -559,6 +615,7 @@ CASES = [
         # Deploying an automation would deliver every run in the job history:
         # webhooks posted and jobs submitted for work that finished weeks ago.
         # This is not hypothetical -- it is what the first end-to-end run did.
+        "AUTO-006",
         "an automation does not fire on jobs older than itself",
         "datum_sync/automations.py",
         "        \"WHERE enabled AND created_at <= $1\",\n        job[\"completed_at\"],",
@@ -568,6 +625,7 @@ CASES = [
     (
         # The runtime half of the loop guard. Without it an automation whose
         # trigger names no workspace runs forever.
+        "AUTO-007",
         "a job an automation caused does not re-fire it",
         "datum_sync/automations.py",
         "    return job[\"triggered_by\"] == f\"automation:{name}\"",
@@ -578,6 +636,7 @@ CASES = [
         # The claim moved out of `consider` and back into the caller's WHERE
         # clause -- where it started. `run_pending` still filters, so the
         # worker still behaves; only a direct second caller double-delivers.
+        "AUTO-008",
         "consider claims the job itself",
         "datum_sync/automations.py",
         "        \"WHERE id = $1 AND automations_at IS NULL RETURNING id\",",
@@ -585,6 +644,7 @@ CASES = [
         "tests/test_automations.py::test_considering_is_recorded_so_the_next_poll_does_not_redeliver",
     ),
     (
+        "AUTO-009",
         "repo scope on writing an automation",
         "datum_sync/api.py",
         "            _require_automation_scope(caller, automations.parse(text))\n"
@@ -595,6 +655,7 @@ CASES = [
     (
         # Naming no repository in a trigger is not "no repository", it is all
         # of them -- every job in the system, including its parameters.
+        "AUTO-010",
         "an unfiltered trigger requires unfiltered scope",
         "datum_sync/api.py",
         "    if caller.repo_scope is not None and not caller.is_admin:",
@@ -604,6 +665,7 @@ CASES = [
     (
         # Check only the stored document and the check is bypassed by writing
         # something harmless and then editing it into something privileged.
+        "AUTO-011",
         "an edit is checked against the new document too",
         "datum_sync/api.py",
         "            _require_automation_scope(caller, automations.parse(text))\n"
@@ -616,6 +678,7 @@ CASES = [
         # The dashboard counts jobs, and the count of jobs you may not see is
         # still a fact about them. Anchored on the summary's own early return,
         # so it cannot match the identical-looking block in the job list.
+        "API-003",
         "repo scope on the dashboard's job counts",
         "datum_sync/api.py",
         "        if caller.repo_scope is not None:\n"
@@ -634,6 +697,7 @@ CASES = [
         # `config`: no read path can emit it, because no read path selects it.
         # Put it back in _COLUMNS and every response carries the ciphertext --
         # not the plaintext, but the thing an offline attack is run against.
+        "CONN-001",
         "the secret column is outside every read path",
         "datum_sync/connections.py",
         "    (secret IS NOT NULL) AS has_secret",
@@ -645,6 +709,7 @@ CASES = [
         # UPDATE moves a tier-4 production password onto a connection anyone
         # can resolve, and every read still succeeds. GCM authenticates the
         # ciphertext, not where it was stored.
+        "CONN-002",
         "a sealed secret is bound to its connection name",
         "datum_sync/crypto.py",
         "    return name.encode()",
@@ -655,6 +720,7 @@ CASES = [
         # `config` is returned by the API and rendered in the UI. A password
         # accepted there is a password on screen, and no amount of care in the
         # secret path undoes it.
+        "CONN-003",
         "a credential in the readable half is refused",
         "datum_sync/connections.py",
         "    leaked = sorted(set(config) & _FORBIDDEN_IN_CONFIG)",
@@ -665,6 +731,7 @@ CASES = [
         # Scope is the only thing standing between a workspace and every
         # credential in the system. Resolution runs in the worker, which is
         # already past authentication -- there is no second check behind this.
+        "CONN-004",
         "scope is enforced at resolution, not only at display",
         "datum_sync/connections.py",
         "        if not matches_scope(row, repository, workspace):",
@@ -676,6 +743,7 @@ CASES = [
         # and a patch that only touches `description` stores a JSON string
         # where the config object was -- silently, until something reads it.
         # This is the step-7 schedules bug, which 251 tests could not see.
+        "CONN-005",
         "jsonb is decoded before it is merged and rewritten",
         "datum_sync/connections.py",
         "    merged[\"config\"] = json.loads(current[\"config\"])",
@@ -686,6 +754,7 @@ CASES = [
         # Reads are open on purpose -- `config` is what a workspace author needs
         # to declare a connection. Writes are not: creating one is handing the
         # server a credential to hold and deciding who may reach it.
+        "CONN-006",
         "creating a connection is admin-only",
         "datum_sync/api.py",
         "async def create_connection(\n"
@@ -701,6 +770,7 @@ CASES = [
         # Test is read-shaped but makes the server dial out to whatever host the
         # config names, with the stored credential, on request. That is a probe
         # anyone authenticated could aim, so it sits with the writes.
+        "CONN-007",
         "testing a connection is admin-only",
         "datum_sync/api.py",
         "    auth.require_admin(caller)\n"
@@ -718,6 +788,7 @@ CASES = [
         # Without the loopback requirement, DATUM_SYNC_AUTH=off in a copied .env
         # publishes the admin API and the connection store to the whole network,
         # and nothing anywhere says so except a line in the log.
+        "AUTH-027",
         "an unauthenticated server must be unreachable from other machines",
         "datum_sync/config.py",
         "    if HOST not in _LOOPBACK_HOSTS:",
@@ -729,6 +800,7 @@ CASES = [
         # `uvicorn --host 0.0.0.0` never consults; this runs on the socket's own
         # peer address, so remove it and an auth-off server answers the network
         # even though it refused to start on one.
+        "AUTH-028",
         "an auth-off server answers nobody but its own machine",
         "datum_sync/api.py",
         "        if not config.is_loopback_client(request.client):",
@@ -738,6 +810,7 @@ CASES = [
     (
         # Strip the IPv4-mapped prefix without re-checking and ::ffff:8.8.8.8
         # reads as loopback.
+        "AUTH-029",
         "a mapped public address is not loopback",
         "datum_sync/config.py",
         "    return host in _LOOPBACK_HOSTS or host.startswith(\"127.\")",
@@ -747,6 +820,7 @@ CASES = [
     (
         # Read as a general truthiness test, DATUM_SYNC_AUTH=false disables
         # authentication. The strictness is the guard.
+        "AUTH-030",
         "only the word off disables authentication",
         "datum_sync/config.py",
         "    return (raw or \"\").strip().lower() == \"off\"",
@@ -758,6 +832,7 @@ CASES = [
     (
         # The step-8 deferral. Without it any account that can publish can hand
         # a tier-4 credential to everyone who can submit a job.
+        "PUBLISH-001",
         "the publisher's max_tier bounds what it can publish",
         "datum_sync/publish.py",
         "        if row[\"tier\"] > publisher.max_tier:",
@@ -765,6 +840,7 @@ CASES = [
         "tests/test_publish.py::test_the_publisher_tier_decides",
     ),
     (
+        "PUBLISH-002",
         "a workspace cannot publish against a connection scoped elsewhere",
         "datum_sync/publish.py",
         "        if not connections.matches_scope(row, repository, manifest.name):",
@@ -773,6 +849,7 @@ CASES = [
         "test_a_connection_out_of_scope_is_refused_at_publish_not_at_run",
     ),
     (
+        "PUBLISH-003",
         "declared write access must match what is stored",
         "datum_sync/publish.py",
         "        if ref.access == \"write\" and row[\"access\"] != \"write\":",
@@ -783,6 +860,7 @@ CASES = [
     (
         # Presence-only: the file exists, the headings are there, nothing is
         # under them. Exactly what a required-file rule produces.
+        "PUBLISH-004",
         "a section with no content is not a documented section",
         "datum_sync/publish.py",
         "    blank = [s for s in REQUIRED_SECTIONS if _is_empty(lowered[s.lower()])]",
@@ -793,6 +871,7 @@ CASES = [
     (
         # Always-on, and "the smoke test passed" starts meaning "the workspace
         # ran for real" for every workspace that has no --smoke handler.
+        "PUBLISH-005",
         "the smoke test runs only when the manifest opts in",
         "datum_sync/publish.py",
         "    if smoke and manifest.smoke_test:",
@@ -802,6 +881,7 @@ CASES = [
     (
         # Reordered, a workspace with no MANIFEST.md still costs a process
         # launch -- and runs arbitrary code before anything has vouched for it.
+        "PUBLISH-006",
         "the free checks run before the one that spawns a process",
         "datum_sync/publish.py",
         "    check_docs(ws_path)\n"
@@ -819,6 +899,7 @@ CASES = [
     (
         # Report the failure but keep the workspace in `loaded`, and _upsert
         # writes it anyway: the gate becomes a warning.
+        "PUBLISH-007",
         "failing the gate drops the workspace from what gets written",
         "datum_sync/repository.py",
         "    report.loaded = passed",
@@ -829,6 +910,7 @@ CASES = [
     (
         # Stale computed from what loaded rather than what is on disk. A
         # manifest typo plus --prune then deregisters a working workspace.
+        "PUBLISH-008",
         "stale means removed from disk, not failed to load",
         "datum_sync/repository.py",
         "    on_disk = _on_disk(root)",
@@ -841,6 +923,7 @@ CASES = [
     (
         # The classic. /data/app and /data/app-secrets share a prefix as
         # strings and share no directory as paths.
+        "SERVICE-001",
         "served root containment uses is_relative_to, not startswith",
         "datum_sync/services.py",
         "    return target == root or target.is_relative_to(root)",
@@ -848,6 +931,7 @@ CASES = [
         "tests/test_services.py::test_resolve_refuses_a_sibling_that_shares_a_prefix",
     ),
     (
+        "SERVICE-002",
         "/serve/ refuses a path that escapes the service root",
         "datum_sync/services.py",
         "    if not _within(root, target):\n"
@@ -858,6 +942,7 @@ CASES = [
     (
         # A registered supervised row can only exist if the publish gate was
         # bypassed -- which is exactly when this has to hold.
+        "SERVICE-003",
         "resolve() refuses a service type this server does not run",
         "datum_sync/services.py",
         "    if row[\"type\"] in SUPERVISED:",
@@ -866,6 +951,7 @@ CASES = [
     ),
     (
         # A containment bug at write time is a containment bug on every read.
+        "SERVICE-004",
         "registration refuses a served root outside the job's artifacts",
         "datum_sync/services.py",
         "    if root not in path.parents:\n"
@@ -874,6 +960,7 @@ CASES = [
         "tests/test_services.py::test_register_refuses_a_name_that_escapes_the_job",
     ),
     (
+        "SERVICE-005",
         "registration refuses a served root that is not a directory",
         "datum_sync/services.py",
         "    if not path.is_dir():\n"
@@ -884,6 +971,7 @@ CASES = [
     (
         # Without the WHERE, the later job simply takes the URL: the first
         # workspace's site is replaced by the second's and nothing says so.
+        "SERVICE-006",
         "one workspace cannot upsert over another's service name",
         "datum_sync/services.py",
         "            WHERE hosted_services.repository = EXCLUDED.repository\n"
@@ -894,6 +982,7 @@ CASES = [
     (
         # The WHERE still holds, so the URL is not stolen -- but the job
         # reports success while its service went nowhere, and nothing says so.
+        "SERVICE-007",
         "a refused service registration is raised, not passed over quietly",
         "datum_sync/services.py",
         "        if claimed is None:",
@@ -901,6 +990,7 @@ CASES = [
         "tests/test_services.py::test_another_workspace_cannot_take_the_url",
     ),
     (
+        "SERVICE-008",
         "a service/* output must be a directory",
         "datum_sync/runner.py",
         "            if is_service and not is_dir:",
@@ -910,6 +1000,7 @@ CASES = [
     (
         # Allowed through, this is a 500 on the download of a job that
         # reported success.
+        "SERVICE-009",
         "a directory under an ordinary output is refused at the run",
         "datum_sync/runner.py",
         "            if is_dir and not is_service:",
@@ -917,6 +1008,7 @@ CASES = [
         "tests/test_services.py::test_a_directory_under_a_non_service_output_fails",
     ),
     (
+        "SERVICE-010",
         "the gate refuses a service type this server cannot run",
         "datum_sync/publish.py",
         "        if out.type in services.SUPERVISED:",
@@ -924,6 +1016,7 @@ CASES = [
         "tests/test_services.py::test_gate_refuses_a_supervised_output",
     ),
     (
+        "SERVICE-011",
         "the gate refuses a service name another workspace already serves",
         "datum_sync/publish.py",
         "        owner = await conn.fetchrow(\n"
@@ -936,6 +1029,7 @@ CASES = [
     (
         # The URL carries no repository, so without this a scoped caller reads
         # another repository's site through a name that gives no hint of it.
+        "SERVICE-012",
         "/serve/ checks the scope of the repository that owns the service",
         "datum_sync/api.py",
         # Anchored on the line above it: `require_repo(caller, row["repository"])`
@@ -947,16 +1041,29 @@ CASES = [
         "tests/test_services.py::test_serve_checks_the_owning_repositorys_scope",
     ),
     (
+        "SERVICE-013",
         "the service listing is filtered by repository scope",
         "datum_sync/api.py",
+        # Anchored on the two lines above the comprehension, not on the filter
+        # alone. The published-workspace listing applies a character-identical
+        # filter, so the short anchor came to match twice once that listing was
+        # added -- and a case matching twice is refused, which had this harness
+        # exiting 1 on a case that was never wrong about anything.
+        "                \"source_job\": str(r[\"source_job\"]) if r[\"source_job\"] else None,\n"
+        "                \"updated_at\": r[\"updated_at\"].isoformat(),\n"
+        "            }\n"
         "            for r in rows\n"
         "            if caller.allows_repo(r[\"repository\"])",
+        "                \"source_job\": str(r[\"source_job\"]) if r[\"source_job\"] else None,\n"
+        "                \"updated_at\": r[\"updated_at\"].isoformat(),\n"
+        "            }\n"
         "            for r in rows",
         "tests/test_services.py::test_listing_is_filtered_by_scope",
     ),
     (
         # A built site is built from a repository's data. Public because static
         # files feel harmless publishes whatever the last job wrote.
+        "SERVICE-014",
         "/serve/ is not public",
         "datum_sync/api.py",
         "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\")",
@@ -967,6 +1074,7 @@ CASES = [
         # FileResponse on a directory is a 500 at the transport layer, and
         # artifact_path's 404 is true but useless to someone looking at a job
         # that plainly produced the thing.
+        "SERVICE-015",
         "a service artifact is refused by the file-download route",
         "datum_sync/api.py",
         "    if services.is_service(artifact[\"type\"]):",
@@ -977,6 +1085,7 @@ CASES = [
         # Not a leak -- the opposite. The v2 assets are fetched by a page
         # nobody has signed in to yet, so gating them means an unstyled,
         # inert sign-in form, and the only symptom is in the console.
+        "UI-005",
         "the v2 assets are public",
         "datum_sync/api.py",
         "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\")",
@@ -984,6 +1093,7 @@ CASES = [
         "tests/test_ui.py::test_every_asset_the_v2_shell_names_is_served",
     ),
     (
+        "UI-006",
         "the v2 shell is public",
         "datum_sync/api.py",
         "        \"/ui/v2\",\n",
@@ -1000,6 +1110,7 @@ CASES = [
         # Without type="module" the browser parses app.js as a classic script,
         # throws on the import before executing a line, and leaves both panes
         # hidden -- the same blank page as having no app.js at all.
+        "UI-007",
         "the v2 shell loads app.js as a module",
         "datum_sync/static-v2/index.html",
         "<script type=\"module\" src=\"/v2/app.js\"></script>",
@@ -1009,6 +1120,7 @@ CASES = [
     (
         # A 404 on a module import aborts the whole module. The shell's script
         # tags do not name icons.js, so a scan of the markup cannot see it.
+        "UI-008",
         "every asset the v2 shell reaches for is served, imports included",
         "datum_sync/static-v2/app.js",
         "from '/v2/icons.js'",
@@ -1018,6 +1130,7 @@ CASES = [
     (
         # app.js lifts the `d` out of each icon. A second element would be
         # dropped and the icon would still render, slightly wrong, forever.
+        "UI-009",
         "every v2 icon is a single path",
         "datum_sync/static-v2/icons.js",
         "\"columns\": \"<path d=",
@@ -1027,6 +1140,7 @@ CASES = [
     (
         # icons.js exports an icon() that assigns svg.innerHTML. Reaching for
         # it is a one-line change that reads as the obvious thing to do.
+        "UI-010",
         "the v2 UI never assigns markup",
         "datum_sync/static-v2/app.js",
         "        svg.append(path);",
@@ -1036,6 +1150,7 @@ CASES = [
     (
         # nav-collapse.js already binds #nav-toggle. A second handler makes the
         # button flip the state and flip it back: a nav that does not move.
+        "UI-011",
         "the v2 UI leaves the nav toggle to nav-collapse.js",
         "datum_sync/static-v2/app.js",
         "// No handler for #nav-toggle here.",
@@ -1047,6 +1162,7 @@ CASES = [
     # both of these leave a working page with something quietly absent from it.
     (
         # A glyph name no icon answers to draws a correctly sized, empty <svg>.
+        "UI-012",
         "every v2 icon app.js asks for exists",
         "datum_sync/static-v2/app.js",
         "    complete: 'ok',",
@@ -1057,6 +1173,7 @@ CASES = [
         # The dashboard mockup's first create tile points at #/run, which is
         # not a section. Copied faithfully it is a dead link on the first
         # screen anybody sees, and it looks live until it is pressed.
+        "UI-013",
         "every v2 hash link names a screen that exists",
         "datum_sync/static-v2/app.js",
         "['Run Workspace', 'repositories', '#/repositories'],",
@@ -1067,6 +1184,7 @@ CASES = [
         # Same empty <svg> as above, reached the other way: this glyph is an
         # argument to cellName(), so it names no icon() call site and the four
         # sources the guard read before chunk 3 all miss it.
+        "UI-014",
         "a list row's glyph is checked too",
         "datum_sync/static-v2/app.js",
         "cellName('repositories',",
@@ -1077,6 +1195,7 @@ CASES = [
         # table.js assigns disabled from the selection count over the whole
         # action bar, so data-needs on a button with no handler is a control
         # that greys correctly, wakes on the first tick, and does nothing.
+        "UI-015",
         "no v2 toolbar button is woken up with nothing behind it",
         "datum_sync/static-v2/app.js",
         "action('Edit', null, { off: true,",
@@ -1087,6 +1206,7 @@ CASES = [
         # The other direction: action() drops the handler on the `off` path,
         # so wiring one up without clearing the flag is a button that looks
         # deliberate and is silently inert.
+        "UI-016",
         "an off button that was handed a handler",
         "datum_sync/static-v2/app.js",
         "action('Upload', null, { off: true,",
@@ -1111,6 +1231,7 @@ CASES = [
         # forms: the harness then skipped this case for matching three times,
         # so ordinary feature work disarmed a guard nobody had touched. The
         # following line names the submit button, which differs per form.
+        "UI-017",
         "a v2 submit handler that lets the browser navigate",
         "datum_sync/static-v2/app.js",
         "        event.preventDefault();\n        run.disabled = true;\n",
@@ -1125,6 +1246,7 @@ CASES = [
         # exactly v1's line, which is why it is worth testing: it is not a typo
         # anyone would write, it is the code that was correct until the screen
         # around it changed.
+        "UI-018",
         "a live list that repolls over a selection",
         "datum_sync/static-v2/app.js",
         "            if (handle && handle.selection().length) {\n"
@@ -1140,6 +1262,7 @@ CASES = [
         # verbatim. `.form-actions` sounds like a class this design system
         # would own, renders without error, and leaves the footer unstyled --
         # which reads as a deliberately plain div rather than a mistake.
+        "UI-019",
         "a form footer styled by a class that does not exist",
         "datum_sync/static-v2/app.js",
         "        el('div', { class: 'action-bar' },\n"
@@ -1156,6 +1279,7 @@ CASES = [
         # the screenshot of it printed a blue "null" under the automation's
         # title. The suite, and the browser script's twelve assertions about
         # that same screen, all passed.
+        "UI-020",
         "a conditional child handed to the DOM's append rather than ours",
         "datum_sync/static-v2/app.js",
         "    append(view, [\n"
@@ -1165,6 +1289,7 @@ CASES = [
         "tests/test_ui.py::test_v2_never_appends_a_child_that_can_be_nothing",
     ),
     (
+        "UI-021",
         "the label for one of the server's action types",
         "datum_sync/static-v2/app.js",
         "    http_request: 'webhook',\n",
@@ -1181,6 +1306,7 @@ CASES = [
         # nobody else's. The label line alone is not unique: chunk 6 has two
         # fieldOf helpers of its own, and an anchor matching three call sites
         # would weaken all three and prove none.
+        "UI-022",
         "the `for` on a v2 form label",
         "datum_sync/static-v2/app.js",
         "        el('label', { for: id }, label), input,\n"
@@ -1194,6 +1320,7 @@ CASES = [
         # the call site is not. The `for` is still there, still looks right in
         # the source, and points at nothing -- so the field behaves exactly as
         # if the attribute had been deleted.
+        "UI-023",
         "the agreement between a control's id and the label pointing at it",
         "datum_sync/static-v2/app.js",
         "class: 'yaml', id: 'conn-secret', spellcheck: 'false', rows: 5,",
@@ -1205,6 +1332,7 @@ CASES = [
         # port done faithfully rather than a mistake somebody would have to
         # make. It opens correctly either way, in every browser in use today --
         # which is the whole reason it needs a test and not a review.
+        "UI-024",
         "the noopener on the link out to a hosted service",
         "datum_sync/static-v2/app.js",
         "href: s.url, target: '_blank', rel: 'noopener',",
@@ -1214,6 +1342,7 @@ CASES = [
     (
         # The state this was in for nine chunks, with a comment in buildNav
         # asserting the opposite.
+        "UI-025",
         "the router's refusal of the admin sections",
         "datum_sync/static-v2/app.js",
         "const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);",
@@ -1225,6 +1354,7 @@ CASES = [
         # Refusing the right section for the wrong reason: this stops the one
         # screen anybody thinks of and leaves the four stubs beside it open,
         # which is the version that would survive a review.
+        "UI-026",
         "reading the admin sections off SECTIONS rather than naming one",
         "datum_sync/static-v2/app.js",
         "const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);",
@@ -1237,6 +1367,7 @@ CASES = [
         # back into it: one more .danger rule at the foot of the file, which is
         # where a variant gets added when the block it belongs in is 400 lines
         # up. Same cascade, same invisible result.
+        "UI-027",
         "the disabled rule outranking the button variants",
         "datum_sync/static-v2/style.css",
         "    filter: none;\n}\n",
@@ -1249,6 +1380,7 @@ CASES = [
     # -- credential proxy guards ------------------------------------------------
 
     (
+        "PROXY-001",
         "the proxy requires an agent token, not an account token",
         "datum_sync/proxy.py",
         "    if principal.agent_id is None:\n"
@@ -1264,6 +1396,7 @@ CASES = [
         "tests/test_proxy.py::test_bare_account_token_denied",
     ),
     (
+        "PROXY-002",
         "the proxy checks the agent's grant list",
         "datum_sync/proxy.py",
         "    if conn_name not in (principal.proxy_grants or []):",
@@ -1271,6 +1404,7 @@ CASES = [
         "tests/test_proxy.py::test_agent_without_grant_denied",
     ),
     (
+        "PROXY-003",
         "the proxy enforces the account's tier ceiling",
         "datum_sync/proxy.py",
         "    if principal.max_tier < conn_row[\"tier\"]:",
@@ -1278,6 +1412,7 @@ CASES = [
         "tests/test_proxy.py::test_tier_denied",
     ),
     (
+        "PROXY-004",
         "the SSRF guard blocks private and loopback addresses",
         "datum_sync/proxy.py",
         "        addr.is_private\n"
@@ -1287,6 +1422,7 @@ CASES = [
         "tests/test_proxy.py::test_ssrf_rejects_loopback",
     ),
     (
+        "AGENT-001",
         "agents are never admin regardless of account",
         "datum_sync/auth.py",
         "            is_admin=False,  # agents are never admin",
@@ -1294,6 +1430,7 @@ CASES = [
         "tests/test_agents.py::test_agent_token_resolves_to_principal",
     ),
     (
+        "PROXY-005",
         "the proxy refuses non-http connection types",
         "datum_sync/proxy.py",
         "        if row[\"type\"] != \"http\":",
@@ -1304,6 +1441,7 @@ CASES = [
     # -- vault_scope validation guards ------------------------------------------
 
     (
+        "VAULT-001",
         "write-implies-read on vault_scope",
         "datum_sync/vault.py",
         "    missing = write_set - read_set\n"
@@ -1313,6 +1451,7 @@ CASES = [
         "tests/test_vault.py::test_write_implies_read",
     ),
     (
+        "VAULT-002",
         "deny-disjoint-from-allow on vault_scope",
         "datum_sync/vault.py",
         "        overlap = deny_set & set(all_patterns.get(action, []))\n"
@@ -1322,6 +1461,7 @@ CASES = [
         "tests/test_vault.py::test_deny_contradicts_allow",
     ),
     (
+        "VAULT-003",
         "traversal in vault_scope patterns",
         "datum_sync/vault.py",
         "        if seg == \"..\":\n"
@@ -1335,6 +1475,7 @@ CASES = [
         "tests/test_vault.py::test_traversal_in_pattern_rejected",
     ),
     (
+        "VAULT-004",
         "star-confinement in vault_scope patterns",
         "datum_sync/vault.py",
         "        if \"*\" in seg and seg not in (\"*\", \"**\"):",
@@ -1345,6 +1486,7 @@ CASES = [
     # -- vault filesystem guards -----------------------------------------------
 
     (
+        "VAULTFS-001",
         "vault_read enforces scope via vault.check",
         "datum_sync/vault.py",
         "    if not permits(scope, action, normalised):\n"
@@ -1358,6 +1500,7 @@ CASES = [
         "tests/test_vault_fs.py::test_read_outside_scope_is_403",
     ),
     (
+        "VAULTFS-002",
         "vault_write enforces scope via vault.check",
         "datum_sync/vault.py",
         "    if not permits(scope, action, normalised):\n"
@@ -1371,6 +1514,7 @@ CASES = [
         "tests/test_vault_fs.py::test_write_outside_scope_is_403",
     ),
     (
+        "VAULTFS-003",
         "vault_list checks scope covers directory",
         "datum_sync/vault_fs.py",
         "    if not _scope_covers_dir(principal.vault_scope, normalised):\n"
@@ -1383,6 +1527,7 @@ CASES = [
         "tests/test_vault_fs.py::test_list_outside_scope_is_403",
     ),
     (
+        "VAULTFS-004",
         "vault tools hidden from accounts without vault_scope",
         "datum_sync/mcp.py",
         "    if principal.vault_scope:\n"
@@ -1394,6 +1539,7 @@ CASES = [
     # -- mcp_call_log guards ---------------------------------------------------
 
     (
+        "MCPLOG-001",
         "governance flag set for skills/** writes",
         "datum_sync/mcp.py",
         '    return target in _GOVERNANCE_PATHS or any(\n'
@@ -1403,6 +1549,7 @@ CASES = [
         "tests/test_mcp_call_log.py::test_log_governance_skill_write",
     ),
     (
+        "MCPLOG-002",
         "vault_read target logged as vault path not None",
         "datum_sync/mcp.py",
         '    if tool_name in _VAULT_TOOL_NAMES:\n'
@@ -1412,6 +1559,7 @@ CASES = [
         "tests/test_mcp_call_log.py::test_log_vault_read",
     ),
     (
+        "MCPLOG-003",
         "X-Trace-Id stored as client_trace_id",
         "datum_sync/mcp.py",
         '    client_trace_id = request.headers.get("X-Trace-Id") or None',
@@ -1419,6 +1567,7 @@ CASES = [
         "tests/test_mcp_call_log.py::test_log_trace_id",
     ),
     (
+        "MCPLOG-004",
         "error outcome logged on RpcError",
         "datum_sync/mcp.py",
         '        await _log_call(\n'
@@ -1437,16 +1586,82 @@ CASES = [
 # reasoning in `auth.authenticate_password` rather than a test that would only
 # look like proof.
 
+# Guards that are real, are named by a test, and cannot be proven by editing the
+# source -- mapped to the reason, which is the point of the dict. A guard with no
+# break case is never proven, and the failure mode this whole file exists to
+# prevent is exactly that going unsaid. These are printed in their own section on
+# every run, so "no case" stays a visible claim someone has to keep making rather
+# than an absence nobody sees.
+UNPROVABLE = {
+    "SCHEMA-001": (
+        "The guard is that the live database equals the one migrations/ build. "
+        "Breaking it means altering a database, not a source file, so there is no "
+        "`old` string to remove. Its own test also skips when no database is "
+        "reachable -- see the SKIPPED handling in main()."
+    ),
+}
 
-def run(test: str) -> bool:
-    """True if the test passed."""
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", test, "-q", "--no-header", "-p", "no:cacheprovider"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-    return proc.returncode == 0
+# pytest's exit code is not an outcome. It is 0 for a pass AND for a skip, and
+# non-zero for a failure AND for a test id that does not exist (4) AND for a
+# collection error (2). The old `returncode == 0` test therefore read a deleted
+# or renamed test as "the guard broke its test" and printed `ok` -- a guard
+# reported as proven by a run in which nothing executed. Every case's test id
+# collects today, so this was latent rather than actively lying, but it is the
+# one silent-pass path in the harness. The junit report gives the per-test
+# outcome directly instead of inferring it.
+FAILED, PASSED, SKIPPED, ERRORED, NOTFOUND = (
+    "FAILED", "PASSED", "SKIPPED", "ERRORED", "NOTFOUND")
+
+
+def run(test: str) -> str:
+    """The outcome of `test`: one of the five constants above.
+
+    FAILED is the only one that proves anything. PASSED means the guard was not
+    load-bearing. The other three mean the case did not get to ask the question.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        report = pathlib.Path(tmp) / "report.xml"
+        subprocess.run(
+            [sys.executable, "-m", "pytest", test, "-q", "--no-header",
+             "-p", "no:cacheprovider", f"--junit-xml={report}"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        if not report.exists():
+            # pytest exits 4 without writing a report when the id is unresolvable.
+            return NOTFOUND
+        cases = ElementTree.parse(report).getroot().iter("testcase")
+        outcomes = set()
+        for case in cases:
+            kinds = {child.tag for child in case}
+            if "failure" in kinds:
+                outcomes.add(FAILED)
+            elif "error" in kinds:
+                outcomes.add(ERRORED)
+            elif "skipped" in kinds:
+                outcomes.add(SKIPPED)
+            else:
+                outcomes.add(PASSED)
+    if not outcomes:
+        return NOTFOUND
+    # A single id selects every parametrisation of the test, and they need not
+    # agree. The question this harness asks is "does removing the guard turn the
+    # suite red", so ONE failing parametrisation is a proof, and the ones that
+    # still pass alongside it are not evidence against it.
+    #
+    # Ranking PASSED above FAILED here reported AUTH-030 -- 5 of whose 8
+    # parameters fail without the guard -- as UNPROVEN, along with three others.
+    # The mistake looked exactly like a discovery: four guards apparently not
+    # load-bearing, surfaced by a run whose whole purpose is to find such things.
+    # It was caught only by re-running those four against HEAD, where they were
+    # proven, which is the check worth keeping in mind here -- a plausible
+    # finding from a just-changed measurement is a claim about the measurement.
+    #
+    # NOTFOUND and ERRORED still outrank FAILED: both mean the run itself was
+    # unsound, and a failure recorded during an unsound run is not a proof.
+    # SKIPPED and PASSED both mean "not proven" and rank below.
+    for kind in (NOTFOUND, ERRORED, FAILED, SKIPPED, PASSED):
+        if kind in outcomes:
+            return kind
 
 
 async def _sweep() -> None:
@@ -1511,43 +1726,62 @@ def drop_bytecode(path: pathlib.Path) -> None:
 
 def main() -> int:
     unproven: list[str] = []
-    skipped: list[str] = []
+    errors: list[str] = []
 
-    for label, relpath, old, new, test in CASES:
+    for gid, label, relpath, old, new, test in CASES:
         path = ROOT / relpath
         original = path.read_text()
         if original.count(old) != 1:
-            # The source moved. Loudly, because a break case that no longer
-            # applies is a case that silently stops proving anything.
-            skipped.append(f"{label}: pattern matches {original.count(old)} times")
-            print(f"  SKIP  {label} (pattern not found exactly once)")
+            # The source moved. An error, not a skip: a break case that no longer
+            # applies has silently stopped proving anything.
+            errors.append(
+                f"{gid} {label}: anchor matches {original.count(old)} times in "
+                f"{relpath}, must match exactly once")
+            print(f"  ERROR     {gid}  anchor not found exactly once")
             continue
 
         path.write_text(original.replace(old, new))
         drop_bytecode(path)
         try:
-            passed = run(test)
+            outcome = run(test)
         finally:
             path.write_text(original)
             assert path.read_text() == original, f"failed to restore {relpath}"
             drop_bytecode(path)
             sweep()
 
-        if passed:
-            unproven.append(label)
-            print(f"  UNPROVEN  {label}\n            {test} still passes without it")
+        if outcome == FAILED:
+            print(f"  ok        {gid}  {label}")
+        elif outcome == PASSED:
+            unproven.append(f"{gid} {label}: {test} still passes without it")
+            print(f"  UNPROVEN  {gid}  {label}\n            {test} still passes without it")
+        elif outcome == SKIPPED:
+            # Not a pass. The test declined to run, so it said nothing about the
+            # guard, and counting that as proof is the failure this file exists
+            # to prevent.
+            unproven.append(f"{gid} {label}: {test} SKIPPED, so it proved nothing")
+            print(f"  UNPROVEN  {gid}  {label}\n            {test} skipped -- it never ran")
         else:
-            print(f"  ok        {label}")
+            errors.append(
+                f"{gid} {label}: {test} {outcome} -- the test did not run, so the "
+                f"non-zero exit says nothing about the guard")
+            print(f"  ERROR     {gid}  {test} {outcome}")
 
     print()
-    if skipped:
-        print(f"{len(skipped)} case(s) skipped:")
-        for s in skipped:
-            print(f"  - {s}")
+    if UNPROVABLE:
+        print(f"{len(UNPROVABLE)} guard(s) registered with no break case:")
+        for gid, why in sorted(UNPROVABLE.items()):
+            print(f"  - {gid}: {why}")
+        print()
+    if errors:
+        print(f"{len(errors)} case(s) could not be evaluated:")
+        for e in errors:
+            print(f"  - {e}")
     if unproven:
-        print(f"{len(unproven)} guard(s) NOT proven by any test.")
-        return 1
-    if skipped:
+        print(f"{len(unproven)} guard(s) NOT proven by any test:")
+        for u in unproven:
+            print(f"  - {u}")
+    if errors or unproven:
         return 1
     print(f"All {len(CASES)} guards proven: removing each one breaks its test.")
     return 0
