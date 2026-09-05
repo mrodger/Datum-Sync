@@ -1,27 +1,43 @@
 # Datum-Sync
 
-Deterministic agent gateway and workspace runner. Every agent (Datum, OpenClaw, Hermes, research drones) connects here for vault access, job execution, tool discovery, credential management, and hosted service proxying.
+Multi-tenant agent gateway. Human operators and AI agents authenticate the same way, get tiered access to workspaces, credentials, and vault paths, and execute jobs through a single orchestration layer.
 
 **Datum-Sync contains no LLM and calls no model.** It runs subprocesses (FME, Python, shell), enforces auth via bearer tokens and glob-matched vault scopes, and logs everything. The intelligence is in the agents. The gateway enforces rules.
 
 ## Status
 
-**Built — 10 implementation steps complete, 406 tests passing, 112 guards.** Deployed to VM112 at `:8200` but not yet running in production.
+**Built — 10 implementation steps complete, 406+ tests, 112 guards.** Running on VM112 at `:8200`.
 
-Phase 3 planning (multi-agent vault scoping) is in [`PROPOSAL.md`](PROPOSAL.md). Holonic architecture analysis in [`spec/holonic-shacl-analysis.md`](spec/holonic-shacl-analysis.md).
+Three registered principals: `Marcus` (tier 4 admin), `superuser` (tier 5), `harness-researcher` (tier 2 agent). Agents register the same way humans do — just a different tier of auth.
 
 ## What it does
 
 Datum-Sync publishes Python workspaces as MCP-callable tools — accessible via REST API, MCP Streamable HTTP, or a web UI. Workspaces declare their inputs, outputs, and connection requirements in a manifest. The platform handles auth, scheduling, automation, delivery, and hosted service proxying.
 
+## Auth model
+
+Five tiers control what a principal (human or agent) can access:
+
+| Tier | Role | Access |
+|------|------|--------|
+| 1 | Read-only | Can authenticate, read public state |
+| 2 | Internal | Read internal connections and vault paths |
+| 3 | Read/write | Execute workspaces, write to scoped vault paths |
+| 4 | Admin | Manage accounts, connections, automations |
+| 5 | Superuser | Full platform access, no scope restrictions |
+
+Accounts and agents are managed via the Admin panel or REST API. Revoke drops a principal to tier 1 (reversible); Delete removes permanently.
+
 ## Key concepts
 
 - **Workspaces** — Python modules with a typed parameter interface and structured output
-- **Connections** — scoped, tiered credential store (database, HTTP, email, file) with AES-GCM encryption
+- **Connections** — scoped, tiered credential store (database, HTTP, email, file) with AES-GCM encryption bound to connection name as AAD
 - **Automations** — YAML-configured triggers and actions (schedule, webhook, email)
-- **Hosted services** — publish a workspace output as a persistent web service
+- **Hosted services** — publish a workspace output as a persistent web service at `/serve/{name}/`
 - **MCP endpoint** — expose workspaces as tools callable from any MCP-compatible AI client
-- **Vault gate** — path-scoped NFS vault access with full audit log (Phase 1, next)
+- **Vault gate** — path-scoped NFS vault access with full audit log, pySHACL coherence validation
+- **MCP call log** — uniform audit spine for all MCP requests across all principals
+- **Credential proxy** — two-level identity with auth injection and SSRF guard
 
 ## Architecture
 
@@ -29,7 +45,7 @@ Datum-Sync publishes Python workspaces as MCP-callable tools — accessible via 
 - MCP Streamable HTTP transport with OAuth 2.0 PKCE
 - APScheduler for cron-based triggers
 - `pg_notify` for durable SSE streaming
-- Vanilla JS web UI
+- Vanilla JS web UI with account/agent management
 - pySHACL for vault_scope coherence validation at account write time
 
 ## Holonic design
