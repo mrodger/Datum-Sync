@@ -13,7 +13,7 @@ import json
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, config
+from datum_sync import auth, config, tokens
 from datum_sync.mcp import _call_target, _is_governance
 
 pytestmark = pytest.mark.asyncio
@@ -112,17 +112,17 @@ async def log_setup(tmp_path, monkeypatch):
     except Exception:
         pytest.skip("database unavailable")
 
-    raw = auth.new_token()
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
-    await conn.execute(
+    account_id = await conn.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin, vault_scope)
-        VALUES ($1, $2, 4, false, $3)
+        INSERT INTO service_accounts (name, max_tier, is_admin, vault_scope)
+        VALUES ($1, 4, false, $2)
+        RETURNING id
         """,
         ACCOUNT_NAME,
-        auth.hash_token(raw),
         json.dumps(VAULT_SCOPE),
     )
+    _, raw = await tokens.create(conn, account_id, "fixture")
 
     await db_module.init_pool()
 

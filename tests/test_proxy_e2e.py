@@ -20,7 +20,9 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, connections as conn_mod, crypto, db as db_module, proxy
+from datum_sync import (
+    auth, connections as conn_mod, crypto, db as db_module, proxy, tokens,
+)
 from datum_sync.api import app
 
 pytestmark = pytest.mark.asyncio
@@ -59,16 +61,15 @@ async def setup(db, monkeypatch):
         monkeypatch.setenv(crypto.KEY_ENV, crypto.generate_key())
 
     # Service account
-    account_token = auth.new_token()
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ($1, $2, 4, true)
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ($1, 4, true)
         RETURNING id
         """,
         ACCOUNT_NAME,
-        auth.hash_token(account_token),
     )
+    _, account_token = await tokens.create(db, account_id, "fixture")
 
     # Agent with proxy grant
     agent_token = auth.new_token()

@@ -423,13 +423,22 @@ service account* rather than carrying permissions of its own. `max_tier`,
 
 **Bearer tokens:**
 - Opaque 32-byte random, stored as `sha256(token)` — raw value never persisted
-- Optional TTL; `null` = non-expiring
+- One row per credential in `account_tokens`, so an account may hold several at
+  once, each with a `label` and its own optional TTL (`null` = non-expiring)
 - Scopes inherit from service account (max_tier, repo scope, connection grants)
-- Rotation: `python -m datum_sync.accounts token <name>` — replaces the hash,
-  the old value stops working. There is deliberately no HTTP route that creates
-  an account: the first one has nobody to authenticate it, so a bootstrap
-  endpoint would be either open or seeded with a secret that has to be
-  delivered somehow. A shell on the box is already the trust boundary.
+- Rotation: `accounts token add <name> <label>`, move the fleet across, then
+  `accounts token revoke <name> <old-label>`. The window between the two is the
+  operator's to choose, and every other token is untouched. `label` exists
+  because the database cannot return a token — only its hash is stored — so
+  naming it is the only way to say which one to withdraw.
+- `service_accounts.token_hash` and `token_expires` are pre-012 columns. They
+  are still populated for accounts older than that migration and are **never
+  read**; see `migrations/012_account_tokens.sql` for why a fallback would make
+  revocation silently fail.
+- There is deliberately no HTTP route that creates an account: the first one has
+  nobody to authenticate it, so a bootstrap endpoint would be either open or
+  seeded with a secret that has to be delivered somehow. A shell on the box is
+  already the trust boundary.
 
 sha256 and not argon2: these are 32 random bytes, so there is no dictionary to
 attack, and the hash sits on the lookup path of every request. Passwords are the

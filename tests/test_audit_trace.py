@@ -27,6 +27,7 @@ import pytest_asyncio
 
 from datum_sync import (
     audit, auth, connections as conn_mod, crypto, db as db_module, mcp, proxy,
+    tokens,
 )
 from datum_sync.api import app
 
@@ -148,14 +149,14 @@ async def setup(db, monkeypatch):
     if not crypto.available():
         monkeypatch.setenv(crypto.KEY_ENV, crypto.generate_key())
 
-    account_token = auth.new_token()
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ($1, $2, 4, true) RETURNING id
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ($1, 4, true) RETURNING id
         """,
-        ACCOUNT_NAME, auth.hash_token(account_token),
+        ACCOUNT_NAME,
     )
+    _, account_token = await tokens.create(db, account_id, "fixture")
 
     agent_token = auth.new_token()
     await db.execute(

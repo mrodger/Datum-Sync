@@ -13,7 +13,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, config
+from datum_sync import auth, config, tokens
 from datum_sync.worker import WORKER_LOCK
 
 TEST_REPO = "_pytest"
@@ -79,20 +79,25 @@ async def token(db):
     cares about scope narrows it itself, and the tests that care about a
     missing or wrong credential send their own -- see test_auth.py.
     """
-    raw = auth.new_token()
     await db.execute("DELETE FROM service_accounts WHERE name = $1", TEST_ACCOUNT)
-    await db.execute(
+    account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ($1, $2, 4, true)
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ($1, 4, true)
+        RETURNING id
         """,
         TEST_ACCOUNT,
-        auth.hash_token(raw),
     )
+    # Minted through `tokens.create` rather than a hand-written INSERT: the
+    # fixture that authenticates almost every other test should use the same
+    # path the CLI does, so a break in minting fails loudly here instead of
+    # leaving the suite green against a credential no production code makes.
+    _, raw = await tokens.create(db, account_id, "fixture")
     try:
         yield raw
     finally:
-        # oauth_tokens/oauth_codes reference the account; cascade takes them.
+        # oauth_tokens/oauth_codes/account_tokens reference the account;
+        # cascade takes them.
         await db.execute("DELETE FROM service_accounts WHERE name = $1", TEST_ACCOUNT)
 
 

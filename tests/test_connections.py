@@ -15,7 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, connections, crypto
+from datum_sync import auth, connections, crypto, tokens
 from datum_sync import db as db_module
 from datum_sync.api import app
 
@@ -301,13 +301,12 @@ async def client(db, token):
 @pytest_asyncio.fixture
 async def plain_token(db):
     """Authenticated, not admin."""
-    raw = auth.new_token()
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_plain'")
-    await db.execute(
-        "INSERT INTO service_accounts (name, token_hash, max_tier, is_admin) "
-        "VALUES ('_pytest_plain', $1, 4, false)",
-        auth.hash_token(raw),
+    account_id = await db.fetchval(
+        "INSERT INTO service_accounts (name, max_tier, is_admin) "
+        "VALUES ('_pytest_plain', 4, false) RETURNING id"
     )
+    _, raw = await tokens.create(db, account_id, "fixture")
     yield raw
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_plain'")
 

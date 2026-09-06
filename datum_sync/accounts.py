@@ -1,7 +1,9 @@
 """Service accounts, from the command line.
 
     python -m datum_sync.accounts create scimac --scope 'SCIMAC/*'
-    python -m datum_sync.accounts token scimac
+    python -m datum_sync.accounts token add scimac ci-runner
+    python -m datum_sync.accounts token list scimac
+    python -m datum_sync.accounts token revoke scimac ci-runner
     python -m datum_sync.accounts passwd marcus
     python -m datum_sync.accounts list
 
@@ -12,8 +14,13 @@ or seeded with a secret that then has to be delivered somehow. A shell on the
 box is already the trust boundary.
 
 A raw token is printed exactly once, here. Only sha256(token) is stored, so a
-lost token is re-minted rather than recovered -- `token` on an account that
-already has one replaces it, invalidating the old value.
+lost token is re-minted rather than recovered.
+
+An account may hold several live tokens at once, each under a label, so a
+rotation is `token add` -- deploy it -- `token revoke <old label>`, with a
+window in between during which both work. Before `account_tokens` existed
+there was one column, and rotation broke every holder at the instant of the
+write.
 """
 from __future__ import annotations
 
@@ -22,10 +29,20 @@ import asyncio
 import getpass
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 
-from datum_sync import auth, config, vault
+from datum_sync import auth, config, tokens, vault
+
+# The label an account's first token gets. Named rather than left to the
+# operator so that `create` cannot produce an unlabelled row, and distinct from
+# 'legacy' (migration 012's backfill) so the two are never confused.
+INITIAL_LABEL = "initial"
+
+
+def _when(value: datetime | None) -> str:
+    return value.strftime("%Y-%m-%d %H:%M") if value else "-"
 
 
 def _scopes(values: list[str] | None) -> list[str] | None:
@@ -59,25 +76,28 @@ async def create(
 
     conn = await _connect()
     try:
-        raw = auth.new_token()
         vault_json = json.dumps(vault_scope) if vault_scope is not None else None
+        # One transaction: an account created without its first token is an
+        # account nobody can authenticate as, and the operator would have no
+        # signal that the second half failed.
         try:
-            account_id = await conn.fetchval(
-                """
-                INSERT INTO service_accounts
-                    (name, description, token_hash, max_tier, repo_scope, is_admin,
-                     vault_scope)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id
-                """,
-                name,
-                description,
-                auth.hash_token(raw),
-                max_tier,
-                _scopes(scopes),
-                admin,
-                vault_json,
-            )
+            async with conn.transaction():
+                account_id = await conn.fetchval(
+                    """
+                    INSERT INTO service_accounts
+                        (name, description, max_tier, repo_scope, is_admin,
+                         vault_scope)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
+                    """,
+                    name,
+                    description,
+                    max_tier,
+                    _scopes(scopes),
+                    admin,
+                    vault_json,
+                )
+                _, raw = await tokens.create(conn, account_id, INITIAL_LABEL)
         except asyncpg.UniqueViolationError:
             print(f"account {name!r} already exists", file=sys.stderr)
             return 1
@@ -85,33 +105,95 @@ async def create(
         await conn.close()
 
     print(f"created account {name} (id {account_id})")
-    print(f"token: {raw}")
+    print(f"token: {raw}  (label {INITIAL_LABEL})")
     print("This is the only time the token is shown. Store it now.")
     return 0
 
 
-async def mint(name: str) -> int:
-    """Replace an account's token. The previous one stops working."""
+async def _account_id(conn: asyncpg.Connection, name: str) -> int | None:
+    return await conn.fetchval("SELECT id FROM service_accounts WHERE name = $1", name)
+
+
+async def token_add(name: str, label: str, days: int | None) -> int:
+    """Mint an additional token. Existing ones keep working."""
+    expires = None
+    if days is not None:
+        expires = datetime.now(timezone.utc) + timedelta(days=days)
+
     conn = await _connect()
     try:
-        raw = auth.new_token()
-        updated = await conn.fetchval(
-            """
-            UPDATE service_accounts SET token_hash = $2, token_expires = NULL
-             WHERE name = $1
-            RETURNING id
-            """,
-            name,
-            auth.hash_token(raw),
-        )
+        account_id = await _account_id(conn, name)
+        if account_id is None:
+            print(f"no such account: {name}", file=sys.stderr)
+            return 1
+        try:
+            _, raw = await tokens.create(conn, account_id, label, expires)
+        except asyncpg.UniqueViolationError:
+            print(
+                f"{name} already has a live token labelled {label!r}; "
+                f"revoke it first or choose another label",
+                file=sys.stderr,
+            )
+            return 1
     finally:
         await conn.close()
 
-    if updated is None:
-        print(f"no such account: {name}", file=sys.stderr)
-        return 1
     print(f"token: {raw}")
-    print("The previous token for this account no longer works.")
+    print("This is the only time the token is shown. Store it now.")
+    print(
+        f"Every other live token on {name} still works. "
+        f"Revoke the one being replaced with: token revoke {name} <label>"
+    )
+    return 0
+
+
+async def token_list(name: str) -> int:
+    conn = await _connect()
+    try:
+        account_id = await _account_id(conn, name)
+        if account_id is None:
+            print(f"no such account: {name}", file=sys.stderr)
+            return 1
+        rows = await tokens.list_for_account(conn, account_id, include_revoked=True)
+    finally:
+        await conn.close()
+
+    if not rows:
+        print(f"{name} has no tokens")
+        return 0
+    print(f"{'LABEL':20} {'CREATED':16} {'EXPIRES':16} {'LAST USED':16} STATE")
+    for r in rows:
+        state = "revoked" if r["revoked_at"] is not None else "live"
+        if state == "live" and r["expires_at"] is not None:
+            if r["expires_at"] < datetime.now(timezone.utc):
+                state = "expired"
+        print(
+            f"{r['label']:20} {_when(r['created_at']):16} "
+            f"{_when(r['expires_at']):16} {_when(r['last_used_at']):16} {state}"
+        )
+    return 0
+
+
+async def token_revoke(name: str, label: str) -> int:
+    conn = await _connect()
+    try:
+        account_id = await _account_id(conn, name)
+        if account_id is None:
+            print(f"no such account: {name}", file=sys.stderr)
+            return 1
+        done = await tokens.revoke(conn, account_id, label)
+        remaining = await tokens.live_count(conn, account_id) if done else 0
+    finally:
+        await conn.close()
+
+    if not done:
+        print(f"{name} has no live token labelled {label!r}", file=sys.stderr)
+        return 1
+    print(f"revoked {label} on {name}; it no longer authenticates")
+    if remaining == 0:
+        # Worth saying out loud: the operator has just locked the account out,
+        # and the failure would otherwise show up as an unrelated 401 later.
+        print(f"WARNING: {name} now has no live token")
     return 0
 
 
@@ -164,7 +246,13 @@ async def show() -> int:
             """
             SELECT a.name, a.max_tier, a.repo_scope, a.is_admin, a.disabled,
                    a.password_hash IS NOT NULL AS has_password,
-                   a.token_hash IS NOT NULL AS has_token,
+                   -- From account_tokens, never a.token_hash: that column has
+                   -- not been the credential since migration 012 and reading
+                   -- it here would report on a token nothing accepts.
+                   EXISTS (SELECT 1 FROM account_tokens t
+                            WHERE t.account_id = a.id AND t.revoked_at IS NULL
+                              AND (t.expires_at IS NULL OR t.expires_at > now())
+                          ) AS has_token,
                    a.last_used_at,
                    (SELECT count(*) FROM oauth_tokens t
                      WHERE t.account_id = a.id AND t.kind = 'access'
@@ -222,8 +310,25 @@ def main() -> int:
         help='vault scope as JSON, e.g. \'{"read":["dev/**"],"write":["dev/**"]}\'',
     )
 
-    p = sub.add_parser("token", help="replace an account's token")
-    p.add_argument("name")
+    p = sub.add_parser("token", help="mint, list and revoke account tokens")
+    tsub = p.add_subparsers(dest="token_command", required=True)
+
+    t = tsub.add_parser("add", help="mint an additional token; others keep working")
+    t.add_argument("name")
+    t.add_argument("label", help="operator-facing name, e.g. 'ci-runner'")
+    t.add_argument(
+        "--expires-days",
+        type=int,
+        metavar="N",
+        help="expire this token after N days. Omit for no expiry.",
+    )
+
+    t = tsub.add_parser("list", help="show an account's tokens, revoked included")
+    t.add_argument("name")
+
+    t = tsub.add_parser("revoke", help="withdraw one token by label")
+    t.add_argument("name")
+    t.add_argument("label")
 
     p = sub.add_parser("passwd", help="set the consent-screen password")
     p.add_argument("name")
@@ -249,7 +354,11 @@ def main() -> int:
             create(args.name, args.scope, args.max_tier, args.admin, args.description, vs)
         )
     if args.command == "token":
-        return asyncio.run(mint(args.name))
+        if args.token_command == "add":
+            return asyncio.run(token_add(args.name, args.label, args.expires_days))
+        if args.token_command == "list":
+            return asyncio.run(token_list(args.name))
+        return asyncio.run(token_revoke(args.name, args.label))
     if args.command == "passwd":
         # Prompted, never an argument: a password on the command line is in the
         # shell history and in every `ps` listing on the box.

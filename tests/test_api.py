@@ -631,16 +631,16 @@ async def test_a_scoped_caller_is_not_told_how_busy_the_others_are(
 @pytest_asyncio.fixture
 async def scoped_token(db):
     """A credential confined to a repository the fixtures never create."""
-    from datum_sync import auth
+    from datum_sync import tokens
 
-    raw = auth.new_token()
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_scoped_api'")
-    await db.execute(
+    account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, repo_scope)
-        VALUES ('_pytest_scoped_api', $1, 4, ARRAY['Elsewhere/*'])
-        """,
-        auth.hash_token(raw),
+        INSERT INTO service_accounts (name, max_tier, repo_scope)
+        VALUES ('_pytest_scoped_api', 4, ARRAY['Elsewhere/*'])
+        RETURNING id
+        """
     )
+    _, raw = await tokens.create(db, account_id, "fixture")
     yield raw
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_scoped_api'")

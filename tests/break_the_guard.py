@@ -1683,6 +1683,73 @@ CASES = [
         '        pass  # log removed',
         "tests/test_mcp_call_log.py::test_log_error_outcome",
     ),
+    (
+        "TOKEN-001",
+        "a revoked token is refused",
+        "datum_sync/auth.py",
+        '    if row["revoked_at"] is not None:\n'
+        '        raise _unauthenticated("token has been revoked", "TOKEN_REVOKED")\n'
+        '    if row["disabled"]:',
+        '    if row["disabled"]:',
+        "tests/test_account_tokens.py::"
+        "test_revoking_one_token_leaves_the_others_working",
+    ),
+    (
+        "TOKEN-002",
+        "expiry is read from the token row, not the account",
+        "datum_sync/auth.py",
+        '    if row["expires_at"] is not None and row["expires_at"] < _now():\n'
+        '        raise _unauthenticated("token has expired", "TOKEN_EXPIRED")\n'
+        "\n"
+        '    await tokens.mark_used(conn, row["token_id"])',
+        '    await tokens.mark_used(conn, row["token_id"])',
+        "tests/test_account_tokens.py::test_expiry_is_per_token_not_per_account",
+    ),
+    (
+        "TOKEN-003",
+        "revoke by label is scoped to one account",
+        "datum_sync/tokens.py",
+        "         WHERE account_id = $1 AND label = $2 AND revoked_at IS NULL",
+        # $1 stays referenced so asyncpg still accepts two arguments -- the
+        # break has to be the missing scope, not an arity error.
+        "         WHERE label = $2 AND revoked_at IS NULL AND $1 IS NOT NULL",
+        "tests/test_account_tokens.py::test_revoke_does_not_reach_across_accounts",
+    ),
+    (
+        "TOKEN-004",
+        "revoking an already-revoked token does not re-stamp the time",
+        "datum_sync/tokens.py",
+        "         WHERE account_id = $1 AND label = $2 AND revoked_at IS NULL",
+        "         WHERE account_id = $1 AND label = $2",
+        "tests/test_account_tokens.py::"
+        "test_revoking_twice_does_not_move_the_revocation_time",
+    ),
+    (
+        "TOKEN-005",
+        "the pre-012 token_hash column is not a fallback read path",
+        "datum_sync/auth.py",
+        "    row = await tokens.resolve(conn, token_hash)\n"
+        "    if row is None:\n"
+        '        raise _unauthenticated("unknown or invalid token")',
+        # The tempting migration-safety measure: if the new table does not know
+        # this token, try the old column. Both hold the same hash after 012's
+        # backfill, so this makes revoking a backfilled row a no-op that
+        # reports success. Only test_account_tokens.py notices.
+        "    row = await tokens.resolve(conn, token_hash)\n"
+        "    if row is None:\n"
+        "        row = await conn.fetchrow(\n"
+        '            "SELECT sa.id AS account_id, sa.name, sa.max_tier, "\n'
+        '            "sa.repo_scope, sa.connection_grants, sa.is_admin, "\n'
+        '            "sa.disabled, sa.vault_scope, NULL::int AS token_id, "\n'
+        '            "NULL::timestamptz AS revoked_at, "\n'
+        '            "sa.token_expires AS expires_at "\n'
+        '            "FROM service_accounts sa WHERE sa.token_hash = $1",\n'
+        "            token_hash,\n"
+        "        )\n"
+        "    if row is None:\n"
+        '        raise _unauthenticated("unknown or invalid token")',
+        "tests/test_account_tokens.py::test_the_legacy_column_is_not_a_credential",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

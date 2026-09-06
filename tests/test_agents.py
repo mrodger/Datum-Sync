@@ -7,7 +7,7 @@ import pytest_asyncio
 
 from conftest import TEST_ACCOUNT
 
-from datum_sync import auth, db as db_module
+from datum_sync import auth, db as db_module, tokens
 from datum_sync.api import app
 
 pytestmark = pytest.mark.asyncio
@@ -154,11 +154,10 @@ async def test_agent_token_resolves_to_principal(db):
     # Create an admin account — agents must still resolve as non-admin.
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ('_agent_test_acct', $1, 3, true)
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ('_agent_test_acct', 3, true)
         RETURNING id
-        """,
-        auth.hash_token("account-token-unused"),
+        """
     )
 
     # Create an agent
@@ -189,11 +188,10 @@ async def test_agent_token_resolves_to_principal(db):
 async def test_disabled_agent_rejected(db):
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ('_dis_agent_acct', $1, 2, false)
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ('_dis_agent_acct', 2, false)
         RETURNING id
-        """,
-        auth.hash_token("unused"),
+        """
     )
     raw = auth.new_token()
     await db.execute(
@@ -216,11 +214,10 @@ async def test_disabled_agent_rejected(db):
 async def test_disabled_account_blocks_agent(db):
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin, disabled)
-        VALUES ('_dis_acct2', $1, 2, false, true)
+        INSERT INTO service_accounts (name, max_tier, is_admin, disabled)
+        VALUES ('_dis_acct2', 2, false, true)
         RETURNING id
-        """,
-        auth.hash_token("unused"),
+        """
     )
     raw = auth.new_token()
     await db.execute(
@@ -241,14 +238,14 @@ async def test_disabled_account_blocks_agent(db):
 
 async def test_account_token_has_no_agent_id(db):
     """A plain account token resolves with agent_id=None."""
-    raw = auth.new_token()
-    await db.execute(
+    account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ('_no_agent_acct', $1, 4, true)
-        """,
-        auth.hash_token(raw),
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ('_no_agent_acct', 4, true)
+        RETURNING id
+        """
     )
+    _, raw = await tokens.create(db, account_id, "fixture")
     try:
         principal = await auth.resolve(db, raw)
         assert principal.agent_id is None
@@ -262,11 +259,10 @@ async def test_agent_cascade_on_account_delete(db):
     """Deleting an account cascades to its agents."""
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ('_cascade_acct', $1, 1, false)
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ('_cascade_acct', 1, false)
         RETURNING id
-        """,
-        auth.hash_token("unused"),
+        """
     )
     await db.execute(
         "INSERT INTO agents (account_id, name, token_hash) VALUES ($1, '_cascade_agent', $2)",

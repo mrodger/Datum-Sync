@@ -15,7 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, jobs, schedules
+from datum_sync import auth, jobs, schedules, tokens
 from datum_sync import db as db_module
 from datum_sync.api import app
 
@@ -298,15 +298,15 @@ async def client(db, token):
 @pytest_asyncio.fixture
 async def scoped_token(db):
     """An account that can reach only a repository the fixtures do not use."""
-    raw = auth.new_token()
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_scoped'")
-    await db.execute(
+    account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, repo_scope)
-        VALUES ('_pytest_scoped', $1, 4, ARRAY['Elsewhere/*'])
-        """,
-        auth.hash_token(raw),
+        INSERT INTO service_accounts (name, max_tier, repo_scope)
+        VALUES ('_pytest_scoped', 4, ARRAY['Elsewhere/*'])
+        RETURNING id
+        """
     )
+    _, raw = await tokens.create(db, account_id, "fixture")
     yield raw
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_scoped'")
 

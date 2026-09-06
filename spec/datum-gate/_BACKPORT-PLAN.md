@@ -29,7 +29,7 @@ locks the tier-4 credentials out of the only process that can read them.
 |---|---|---|---|---|---|
 | B1 | Guard registry with stable IDs | tests only | yes | — | **done** |
 | B2 | One `audit_log` + server-minted trace id | +1 table | yes | B1 | **done** |
-| B5 | Multiple labelled tokens per principal | +1 table | yes | B1 | |
+| B5 | Multiple labelled tokens per principal | +1 table | yes | B1 | done 2026-09-05 |
 | B4 | Multi-key secrets (key-id byte) | `connections.secret` bytes | yes, with both keys | B1 | |
 | B3 | Single grant document | 4 columns → 1 | needs a down path | B1, B2 | |
 
@@ -267,6 +267,28 @@ Two live tokens on one account, both accepted; revoke one, assert the other stil
 works and the revoked one 401s. That second half is the assertion — a test that only
 checks the new token works passes just as well against a design that silently
 invalidated the old one.
+
+### What was built — 2026-09-05
+
+`migrations/012_account_tokens.sql`, `datum_sync/tokens.py`,
+`tests/test_account_tokens.py` (13 tests), guards `TOKEN-001`…`TOKEN-005`.
+CLI is `accounts token add|list|revoke <name> [label]`. Suite 598 passing.
+
+**Deviation: the old column is not read.** The section above says to keep reading
+`service_accounts.token_hash` until the new path is proven. That was not done, and
+the reason is the backfill itself: it copies the *same* hash into both places, so a
+fallback would accept a token whose `account_tokens` row had just been revoked.
+Revocation would return success and change nothing — the exact failure the feature
+exists to prevent, reintroduced by the safety measure meant to protect it. The
+column is instead left populated but unread, which keeps the rollback a code revert
+with no data migration. `TOKEN-005` is the break case: it re-adds the fallback and
+requires `test_the_legacy_column_is_not_a_credential` to fail.
+
+Expiry moved with the token. `service_accounts.token_expires` is likewise stale —
+per-account expiry cannot express a short-lived CI credential alongside a permanent
+one, which is the same defect as the single hash.
+
+Both stale columns are left for a later migration to drop; nothing reads either.
 
 ---
 

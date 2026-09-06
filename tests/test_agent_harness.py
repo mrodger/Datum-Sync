@@ -31,7 +31,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, config
+from datum_sync import auth, config, tokens
 from datum_sync.mcp import _GOVERNANCE_PREFIXES, _GOVERNANCE_PATHS
 
 pytestmark = pytest.mark.asyncio
@@ -264,19 +264,19 @@ async def harness(tmp_path, monkeypatch):
     accounts: dict[str, HarnessAccount] = {}
     for char in CHARACTERS:
         acct_name = f"{_ACCT_PREFIX}{char['name']}"
-        raw = auth.new_token()
         await conn.execute(
             "DELETE FROM service_accounts WHERE name = $1", acct_name
         )
-        await conn.execute(
+        account_id = await conn.fetchval(
             """
-            INSERT INTO service_accounts (name, token_hash, max_tier, is_admin, vault_scope)
-            VALUES ($1, $2, 4, false, $3)
+            INSERT INTO service_accounts (name, max_tier, is_admin, vault_scope)
+            VALUES ($1, 4, false, $2)
+            RETURNING id
             """,
             acct_name,
-            auth.hash_token(raw),
             json.dumps(_vault_scope_for(char)),
         )
+        _, raw = await tokens.create(conn, account_id, "fixture")
         accounts[char["name"]] = HarnessAccount(name=acct_name, token=raw)
 
     await db_module.init_pool()

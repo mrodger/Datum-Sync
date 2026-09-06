@@ -754,7 +754,16 @@ async def list_accounts(caller: Principal = Caller) -> dict[str, Any]:
             """
             SELECT a.id, a.name, a.max_tier, a.repo_scope, a.is_admin,
                    a.disabled, a.created_at, a.last_used_at,
-                   a.token_hash IS NOT NULL AS has_token,
+                   -- From account_tokens, not a.token_hash: since migration
+                   -- 012 that column is a stale copy nothing authenticates
+                   -- against, so reading it here would be wrong in both
+                   -- directions -- an account holding three live tokens
+                   -- reported as having none, and an account whose only token
+                   -- was revoked reported as still holding a credential.
+                   EXISTS (SELECT 1 FROM account_tokens at
+                            WHERE at.account_id = a.id AND at.revoked_at IS NULL
+                              AND (at.expires_at IS NULL OR at.expires_at > now())
+                          ) AS has_token,
                    a.password_hash IS NOT NULL AS has_password,
                    count(t.id) FILTER (
                        WHERE t.kind = 'session' AND t.revoked_at IS NULL
@@ -802,7 +811,12 @@ async def get_account(name: str, caller: Principal = Caller) -> dict[str, Any]:
             """
             SELECT id, name, max_tier, repo_scope, is_admin, disabled,
                    vault_scope, created_at, last_used_at,
-                   token_hash IS NOT NULL AS has_token,
+                   -- See list_accounts: account_tokens is the credential now.
+                   EXISTS (SELECT 1 FROM account_tokens at
+                            WHERE at.account_id = service_accounts.id
+                              AND at.revoked_at IS NULL
+                              AND (at.expires_at IS NULL OR at.expires_at > now())
+                          ) AS has_token,
                    password_hash IS NOT NULL AS has_password
               FROM service_accounts
              WHERE name = $1

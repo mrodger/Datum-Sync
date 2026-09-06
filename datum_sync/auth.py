@@ -3,8 +3,10 @@
 Three credentials reach this module. Two arrive as `Authorization: Bearer
 <token>`:
 
-  * a **service account token**, created out of band for scripts and stored on
-    `service_accounts.token_hash`;
+  * a **service account token**, created out of band for scripts and stored in
+    `account_tokens` -- one row per credential, so an account can hold several
+    at once and rotation does not have to break every holder at the instant of
+    the write;
   * an **access token** minted by the OAuth flow in `oauth.py`, stored in
     `oauth_tokens`, for an MCP client such as Claude.ai.
 
@@ -38,7 +40,7 @@ from argon2.exceptions import VerificationError
 from fastapi import Request
 
 from datum_sync import agents as agents_mod
-from datum_sync import config, db, vault
+from datum_sync import config, db, tokens, vault
 from datum_sync.errors import ApiError
 
 _hasher = PasswordHasher()
@@ -351,27 +353,28 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
             scope=row["scope"],
         )
 
-    row = await conn.fetchrow(
-        """
-        SELECT id, name, max_tier, repo_scope, connection_grants, is_admin,
-               disabled, token_expires, vault_scope
-          FROM service_accounts
-         WHERE token_hash = $1
-        """,
-        token_hash,
-    )
+    # Service account tokens live in `account_tokens`, one row per credential.
+    # `service_accounts.token_hash` still holds the pre-migration value and is
+    # deliberately NOT consulted: falling back to it would accept a token whose
+    # `account_tokens` row had just been revoked, since migration 012's backfill
+    # put the same hash in both places. See migrations/012_account_tokens.sql.
+    row = await tokens.resolve(conn, token_hash)
     if row is None:
         raise _unauthenticated("unknown or invalid token")
+    if row["revoked_at"] is not None:
+        raise _unauthenticated("token has been revoked", "TOKEN_REVOKED")
     if row["disabled"]:
         raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
-    if row["token_expires"] is not None and row["token_expires"] < _now():
+    if row["expires_at"] is not None and row["expires_at"] < _now():
         raise _unauthenticated("token has expired", "TOKEN_EXPIRED")
 
+    await tokens.mark_used(conn, row["token_id"])
     await conn.execute(
-        "UPDATE service_accounts SET last_used_at = now() WHERE id = $1", row["id"]
+        "UPDATE service_accounts SET last_used_at = now() WHERE id = $1",
+        row["account_id"],
     )
     return Principal(
-        account_id=row["id"],
+        account_id=row["account_id"],
         name=row["name"],
         max_tier=row["max_tier"],
         repo_scope=row["repo_scope"],

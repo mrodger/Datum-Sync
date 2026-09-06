@@ -10,7 +10,7 @@ import json
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, config, vault_fs
+from datum_sync import auth, config, tokens, vault_fs
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 
@@ -210,18 +210,18 @@ async def vault_setup(tmp_path, monkeypatch):
     except (OSError, Exception):
         pytest.skip("database unavailable")
 
-    raw = auth.new_token()
     vault_scope = json.dumps(SCOPE)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
-    await conn.execute(
+    account_id = await conn.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin, vault_scope)
-        VALUES ($1, $2, 4, false, $3)
+        INSERT INTO service_accounts (name, max_tier, is_admin, vault_scope)
+        VALUES ($1, 4, false, $2)
+        RETURNING id
         """,
         ACCOUNT_NAME,
-        auth.hash_token(raw),
         vault_scope,
     )
+    _, raw = await tokens.create(conn, account_id, "fixture")
 
     # Pool must be available for the MCP endpoint.
     from datum_sync import db as db_module
@@ -330,16 +330,16 @@ async def test_mcp_vault_tools_hidden_without_scope(vault_setup):
     s = vault_setup
     # Create a second account with no vault_scope
     no_scope_name = "_vault_e2e_noscope"
-    raw2 = auth.new_token()
     await s["conn"].execute("DELETE FROM service_accounts WHERE name = $1", no_scope_name)
-    await s["conn"].execute(
+    account_id = await s["conn"].fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, is_admin)
-        VALUES ($1, $2, 4, false)
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ($1, 4, false)
+        RETURNING id
         """,
         no_scope_name,
-        auth.hash_token(raw2),
     )
+    _, raw2 = await tokens.create(s["conn"], account_id, "fixture")
     try:
         resp = await s["client"].post(
             "/mcp",

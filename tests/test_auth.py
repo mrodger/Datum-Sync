@@ -27,7 +27,7 @@ from starlette.datastructures import Address
 import pytest
 import pytest_asyncio
 
-from datum_sync import auth, config
+from datum_sync import auth, config, tokens
 from datum_sync import db as db_module
 from datum_sync.api import app
 from datum_sync.manifest import Manifest
@@ -151,9 +151,11 @@ async def test_a_disabled_account_cannot_use_a_valid_token(client, db, token):
 
 @pytest.mark.asyncio
 async def test_an_expired_token_is_refused(client, db):
+    # Expiry lives on the token row, not the account: one credential can lapse
+    # while the account's others keep working.
     await db.execute(
-        "UPDATE service_accounts SET token_expires = now() - interval '1 second' "
-        "WHERE name = $1",
+        "UPDATE account_tokens SET expires_at = now() - interval '1 second' "
+        "WHERE account_id = (SELECT id FROM service_accounts WHERE name = $1)",
         TEST_ACCOUNT,
     )
     r = await client.get("/rest/v1/repositories")
@@ -161,7 +163,9 @@ async def test_an_expired_token_is_refused(client, db):
     assert r.json()["code"] == "TOKEN_EXPIRED"
 
     await db.execute(
-        "UPDATE service_accounts SET token_expires = NULL WHERE name = $1", TEST_ACCOUNT
+        "UPDATE account_tokens SET expires_at = NULL "
+        "WHERE account_id = (SELECT id FROM service_accounts WHERE name = $1)",
+        TEST_ACCOUNT,
     )
     assert (await client.get("/rest/v1/repositories")).status_code == 200
 
@@ -1673,17 +1677,16 @@ VAULT_SCOPE_FIXTURE = {"read": ["dev/**"], "deny": ["dev/secrets/**"]}
 @pytest_asyncio.fixture
 async def vault_account(db):
     """An account carrying a vault_scope, plus its raw service token."""
-    raw = auth.new_token()
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_vault'")
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, token_hash, max_tier, vault_scope)
-        VALUES ('_pytest_vault', $1, 4, $2)
+        INSERT INTO service_accounts (name, max_tier, vault_scope)
+        VALUES ('_pytest_vault', 4, $1)
         RETURNING id
         """,
-        auth.hash_token(raw),
         json.dumps(VAULT_SCOPE_FIXTURE),
     )
+    _, raw = await tokens.create(db, account_id, "fixture")
     try:
         yield account_id, raw
     finally:
