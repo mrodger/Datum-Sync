@@ -23,6 +23,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -195,6 +196,117 @@ async def authenticate(request: Request, call_next):
             exc.status, exc.code, exc.message, exc.detail, exc.headers
         )
     return await call_next(request)
+
+
+# Reads are excluded, per 10 §1. Including them would multiply the table by the
+# UI's polling without adding a fact: a GET that changed nothing is answered by
+# the access log, and burying the writes under it is how an audit trail stops
+# being read.
+AUDIT_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Surfaces that write their own, richer audit rows. `011_audit_log.sql` states
+# that `audit_log` and `mcp_call_log` agreeing row for row is the check on B2's
+# phase one -- so adding a second row per `/mcp` post would not merely duplicate,
+# it would retire that check silently while every existing test still passed.
+AUDIT_SELF_LOGGING = ("/mcp",)
+
+
+def _via(path: str) -> str:
+    """Which surface the request arrived on, for `audit_log.via`.
+
+    The column exists to stop two surfaces' verbs colliding, so this only has to
+    separate them, not describe them. Anything not obviously the UI or the OAuth
+    dance is the programmatic API -- including the root service paths
+    (`/upload/...`), which are REST endpoints that happen not to sit under the
+    version prefix.
+    """
+    if path.startswith("/ui"):
+        return "ui"
+    if path.startswith("/oauth") or path.startswith("/.well-known"):
+        return "oauth"
+    return "rest"
+
+
+@app.middleware("http")
+async def trace_and_audit(request: Request, call_next):
+    """Mint the request trace, and write one audit row per write request.
+
+    Registered *after* `authenticate` and therefore outermost: Starlette's
+    `add_middleware` inserts at index 0 and builds the stack so index 0 wraps the
+    rest, which means the last decorator in this file runs first -- backwards
+    from how the file reads, so `test_audit_middleware.py` asserts it.
+
+    Only one thing needs that order, and it is not the principal: the principal
+    is read after `call_next` returns, by which point `authenticate` has run
+    whichever side of this it sits on. The order is for the trace, which has to
+    be minted outside `authenticate` so that a request rejected *by* it still
+    has one to quote. Worth stating plainly because the reflex is to assume the
+    audit layer must sit inside auth to see who the caller is, and that reasoning
+    would be wrong in a way that happens to produce the same behaviour.
+
+    One middleware, not the spec's separate trace and audit layers. Minting on
+    the way in and writing on the way out is a single request lifecycle; splitting
+    it across two layers would add an ordering constraint between them and buy
+    nothing, since neither half is useful without the other.
+
+    Why a middleware at all, when `audit.write` is deliberately called explicitly
+    elsewhere: those call sites pass a rich domain verb and are worth keeping,
+    but the contract "remember to call this in your new route" has already been
+    run as an experiment. It produced two call sites, both on one surface, while
+    the REST API and UI wrote nothing for a whole release. Coverage that depends
+    on being remembered is coverage that decays. So this row is deliberately
+    coarse -- `rest.post`, and the path -- and its whole merit is that a route
+    added tomorrow is audited without anybody touching this function.
+
+    Never fails the request. `audit.write` swallows its own failures, but it is
+    handed an open connection, so acquiring one is a step it cannot cover --
+    hence the `except` below, which counts the loss through `audit.drop()` so a
+    gap stays visible on `/health` rather than reporting as zero.
+    """
+    trace = audit.Trace.mint(request.headers.get("X-Trace-Id") or None)
+    request.state.trace = trace
+    t0 = time.monotonic()
+    response = await call_next(request)
+
+    if request.method in AUDIT_READ_METHODS:
+        return response
+    path = request.url.path
+    if path.startswith(AUDIT_SELF_LOGGING):
+        return response
+    # Unauthenticated requests cannot be rows: `audit_log.actor_id` is NOT NULL,
+    # so a failed credential has no actor to record. That leaves failed auth
+    # unaudited, which is a real gap and not this change's to close -- it needs
+    # the column to be nullable. Recorded in the backport plan under C1 rather
+    # than left to be discovered from the absence of rows.
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        return response
+
+    ok = response.status_code < 400
+    try:
+        async with db.pool().acquire() as conn:
+            await audit.write(
+                conn,
+                trace=trace,
+                principal=principal,
+                via=_via(path),
+                # Coarse on purpose -- see above. A path-to-domain-verb mapping
+                # is the same "remember your route" contract in a new costume.
+                verb=f"{_via(path)}.{request.method.lower()}",
+                target_kind="path",
+                target=path,
+                outcome="ok" if ok else "error",
+                # Still no 'denied': the CHECK is ('ok','error') and the
+                # classification defect that justifies it is unchanged.
+                error_code=None if ok else response.status_code,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+    except Exception:
+        # The pool itself being unavailable is the case audit.write cannot
+        # swallow, because it never gets the connection. A request must not fail
+        # because it could not be recorded.
+        audit.drop()
+    return response
 
 
 # -- helpers ---------------------------------------------------------------

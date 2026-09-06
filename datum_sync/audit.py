@@ -24,6 +24,20 @@ write is a hole in an audit trail, so failures are counted in `dropped()` and
 reported on `/health` as `audit_dropped`. An audit gap should be visible; a
 bare `except: pass` makes it the one kind of failure nobody can see.
 
+Who writes rows
+---------------
+`011_audit_log.sql` says only `mcp` is written, and that stopped being true when
+`api.trace_and_audit` was added: every authenticated non-GET request now writes
+one coarse row (`via` of `rest`, `ui` or `oauth`), alongside the richer rows the
+`/mcp` endpoint and the proxy write for themselves. The migration's comment is
+left as it was -- it was true when it was applied, and an applied migration is a
+record of what happened, not a description of the present. This is the present.
+
+`/mcp` is excluded from the middleware row on purpose. That migration states
+that `audit_log` and `mcp_call_log` agreeing row for row is the check on phase
+one, and a second row per `/mcp` post would end that check without failing
+anything.
+
 Not implemented here (deliberately): the spec's bounded queue and background
 batch drain, its retention sweeper, and its export CLI. `write()` awaits the
 insert inline, which is what the writers it sits beside already do. Adding a
@@ -50,6 +64,21 @@ _dropped = 0
 def dropped() -> int:
     """How many audit rows failed to write since start. Reported on /health."""
     return _dropped
+
+
+def drop() -> None:
+    """Count a row that could not be written, for a caller that never reached
+    `write()`.
+
+    `write()` takes an open connection, so the one failure it cannot swallow is
+    the pool being unavailable -- the caller fails while acquiring and never gets
+    here. Without this the row would go missing and `dropped()` would still read
+    zero, which is the single reading this counter must never give wrongly: it
+    exists so an audit gap is visible, and a gap that reports none is worse than
+    no counter at all.
+    """
+    global _dropped
+    _dropped += 1
 
 
 @dataclass(frozen=True)

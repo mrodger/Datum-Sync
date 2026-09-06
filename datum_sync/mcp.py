@@ -612,10 +612,14 @@ def _rpc_error(request_id: Any, code: int, message: str, data: Any = None) -> JS
 @router.post("/mcp")
 async def endpoint(request: Request) -> Response:
     principal = await auth.require_auth(request)
-    # Minted once, here, and passed down. The header goes into the same object
-    # but only as `client_id`: a caller supplies that string, so honouring it
-    # as the join key would let one agent merge its calls into another's trace.
-    trace = audit.Trace.mint(request.headers.get("X-Trace-Id") or None)
+    # Minted once per inbound request by the `trace_and_audit` middleware, and
+    # passed down from here. Read rather than minted so that one request has one
+    # trace: this endpoint used to mint its own, which was correct while it was
+    # the only writer, but became a second trace for the same request the moment
+    # anything upstream had one. No fallback if the attribute is missing --
+    # minting one here would paper over the middleware not running, and the
+    # symptom would be rows that quietly fail to join.
+    trace: audit.Trace = request.state.trace
 
     try:
         body = json.loads(await request.body())

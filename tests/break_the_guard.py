@@ -1494,7 +1494,10 @@ CASES = [
     (
         "AUDIT-004",
         "a repeated X-Trace-Id does not merge two requests into one trace",
-        "datum_sync/mcp.py",
+        # Followed the mint when it moved out of the /mcp endpoint into the
+        # `trace_and_audit` middleware. The line is identical; only the file it
+        # lives in changed, which is exactly the drift a fixed anchor catches.
+        "datum_sync/api.py",
         "    trace = audit.Trace.mint(request.headers.get(\"X-Trace-Id\") or None)",
         # Derives the trace from the client's header while still producing a
         # real UUID, so the insert succeeds and the test fails on the grouping.
@@ -1513,7 +1516,8 @@ CASES = [
     (
         "AUDIT-005",
         "a forged X-Trace-Id cannot splice a caller into another's trace",
-        "datum_sync/mcp.py",
+        # See AUDIT-004: the mint moved to the middleware, so this follows it.
+        "datum_sync/api.py",
         "    trace = audit.Trace.mint(request.headers.get(\"X-Trace-Id\") or None)",
         # The direct forgery: honour the header verbatim as the trace id. The
         # value that test sends is a real server-minted trace id, so this
@@ -1795,6 +1799,71 @@ CASES = [
         "        )",
         "    pass  # key-id check removed",
         "tests/test_crypto_multikey.py::test_open_with_wrong_key_id_fails_closed",
+    ),
+    # -- C1: the REST surface writes audit rows --------------------------------
+    (
+        "AUDIT-010",
+        "every write request writes a row, including routes added later",
+        "datum_sync/api.py",
+        "    ok = response.status_code < 400\n    try:",
+        # Returns before the write. The response is unchanged, so only the
+        # absence of the row can fail the test -- which is the property.
+        "    ok = response.status_code < 400\n    return response\n    try:",
+        "tests/test_audit_middleware.py::"
+        "test_a_route_the_middleware_does_not_know_about_is_audited",
+    ),
+    (
+        "AUDIT-011",
+        "reads are not audited, so writes are not buried under UI polling",
+        "datum_sync/api.py",
+        "    if request.method in AUDIT_READ_METHODS:\n        return response",
+        "    if request.method in ():\n        return response",
+        "tests/test_audit_middleware.py::test_a_read_is_not_a_row",
+    ),
+    (
+        "AUDIT-012",
+        "a failed request is recorded as an error, with its status",
+        "datum_sync/api.py",
+        "    ok = response.status_code < 400",
+        # Not `outcome="ok"` directly: `error_code` is derived from the same
+        # flag, so flipping the flag proves both columns at once, and a break
+        # that only touched `outcome` would leave a row saying ok with a 400 in
+        # error_code -- self-contradictory, and passing.
+        "    ok = True",
+        "tests/test_audit_middleware.py::test_a_failed_request_is_recorded_as_error",
+    ),
+    (
+        "AUDIT-013",
+        "/mcp is not double-counted, so audit_log still mirrors mcp_call_log",
+        "datum_sync/api.py",
+        "    if path.startswith(AUDIT_SELF_LOGGING):\n        return response",
+        "    if path.startswith(()):\n        return response",
+        "tests/test_audit_middleware.py::"
+        "test_mcp_writes_its_own_rows_and_gains_no_duplicate",
+    ),
+    (
+        "AUDIT-014",
+        "one request mints one trace: /mcp reads it rather than minting a second",
+        "datum_sync/mcp.py",
+        "    trace: audit.Trace = request.state.trace",
+        # The previous implementation, restored. It inserts cleanly and every
+        # mcp test still passes -- the only visible difference is that the
+        # request now holds two traces that cannot be joined to each other.
+        "    trace = audit.Trace.mint(request.headers.get(\"X-Trace-Id\") or None)",
+        "tests/test_audit_middleware.py::"
+        "test_the_mcp_row_uses_the_trace_the_middleware_minted",
+    ),
+    (
+        "AUDIT-015",
+        "an audit failure is counted and does not fail the request",
+        "datum_sync/api.py",
+        "    except Exception:",
+        # Catches nothing, so the failure propagates: the request 500s and the
+        # counter stays put. Both halves of the test then fail, which is right
+        # -- answering the caller and recording the gap are one property.
+        "    except _NeverRaised:",
+        "tests/test_audit_middleware.py::"
+        "test_a_request_survives_an_unwritable_audit_row",
     ),
 ]
 

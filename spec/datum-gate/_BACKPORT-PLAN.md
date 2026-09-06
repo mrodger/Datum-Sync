@@ -415,8 +415,164 @@ and those two helpers would have no caller. Revisit when something needs them.
 
 ---
 
+## Tranche C — what the corpus specifies that no list had ranked
+
+**Date:** 2026-09-06. B1–B5 are all shipped, which exhausted the ranked items. That
+left a category no review recorded a decision on: things the corpus specifies that
+never reached any list. Enumerated by re-reading docs 00–23 against the source.
+
+Same rule as above — every "what exists now" here was grepped out of this package,
+not taken from the fable. That mattered: three candidates turned out to be things we
+already have, and one turned out to be documented as deferred rather than missed.
+
+Two facts frame the rest:
+
+- `api.py` had exactly **one** `@app.middleware("http")` (auth, line 153). Doc `10 §1`
+  specifies four — trace, auth, audit, rate limit. Three of the four cross-cutting
+  concerns had no layer to live in. C1 has since made it two, folding trace and audit
+  into one; rate limit (C3) is still missing.
+- **19 tables exist.** Seven the corpus requires do not: `workspace_versions`,
+  `artifacts`, `uploads`, `promotions`, `deliveries`, `webhook_receipts`, `workers`.
+
+| | Item | Touches | Reversible | Depends on | Status |
+|---|---|---|---|---|---|
+| C1 | Audit the REST surface: trace + audit middleware | +1 middleware, no schema | yes | B2 | **done 2026-09-06** |
+| C2 | `Content-Security-Policy` on `/serve/` | response headers | yes | — | |
+| C3 | A rate limit that exists | +1 middleware, makes a dead column real | yes | C1 | |
+| C4 | Resolve `quarantine`/`promote`; symlink check on write | `vault.ACTIONS` or `vault_fs` | yes | — | |
+| C5 | Delivery outbox for `http_request` | +1 table | yes | — | |
+
+### C1 — the REST surface writes no audit rows at all
+
+**What exists now.** `audit.write` has two call sites, `mcp.py:178` and `proxy.py:351`.
+`audit.Trace.mint` has one, `mcp.py:618`. So it is not that REST coverage is patchy —
+REST and the UI mint no trace and write no row, ever. `011_audit_log.sql:73` states
+this deliberately ("the REST API and UI do not yet write audit rows") and put `via` on
+the table for the surfaces that were coming. This is that.
+
+**The change.** One middleware, registered *after* `authenticate` so it is outermost:
+mint the trace on the way in and stash it on `request.state`, write one row on the way
+out. Not two middlewares as `10 §1` has it — mint-before and write-after are one
+request lifecycle, and splitting them buys nothing but an ordering constraint.
+
+Three constraints the migration imposes, none of them optional:
+
+1. `actor_id INTEGER NOT NULL`, so an unauthenticated request cannot be a row. Failed
+   auth stays unaudited until the column is nullable — out of scope here, and worth
+   saying out loud because "audit every request" is the thing this looks like.
+2. The middleware must **skip `/mcp`**. `011` states that `audit_log` and
+   `mcp_call_log` agreeing row for row is the check on B2's phase one. A middleware row
+   per `/mcp` post breaks that agreement and takes the check with it.
+3. `outcome` is `('ok','error')` only, so status `< 400` maps to `ok`, the rest to
+   `error` with the status in `error_code`. Still no `denied` — that classification
+   defect is unchanged and still recorded above.
+
+`verb` is `rest.{method}` and `target` is the path, deliberately crude. A mapping from
+path to a rich domain verb is the same "remember to add your route" contract that
+produced two call sites out of three surfaces; a coarse row that cannot be forgotten
+beats a rich row that can. The rich per-domain calls stay where they are and are now
+joined to the request row by the shared trace, which is what `trace_id` was for.
+
+**How it is proven.** A route added without touching the middleware still writes a row
+(that is the property — a test that names routes would decay with them). `/mcp` writes
+its existing rows and no extra one. A 4xx writes `error` with the status. The trace on
+the request row equals the trace on the rows the handler wrote.
+
+### What was built — 2026-09-06
+
+`api.trace_and_audit`, one middleware, registered after `authenticate` so it is
+outermost. `tests/test_audit_middleware.py`, 10 tests. Guards AUDIT-010…015.
+628 tests pass, 154 guards proven, registry 13/13.
+
+The central test registers a route in the test file and POSTs to it. `api.py` contains
+no reference to that path — the row exists because the request crossed a layer, which
+is the only formulation of "covered" that does not decay as routes are added.
+
+Deviations and things found on the way:
+
+- **The mint moved out of `/mcp`.** `Trace.mint` had one call site; now it has one
+  again, in the middleware, and `mcp.endpoint` reads `request.state.trace`. Left as
+  it was, one request would have carried two traces that could not be joined to each
+  other, with each set of rows internally consistent — the failure would have looked
+  like working software. Guards AUDIT-004 and AUDIT-005 followed the line across to
+  `api.py`; the anchor text was identical, only the file changed.
+- **`audit.drop()` added.** `write()` swallows its own failures, but it takes an
+  already-open connection, so a failure to *acquire* one never reaches it and would
+  have gone unrecorded while `dropped()` still read zero. `/health` would then have
+  reported an intact audit trail with rows missing.
+- **The middleware ordering is not load-bearing today, and the first version of this
+  document said it was.** The claim was that an inner audit layer would read
+  `request.state.principal` before `authenticate` set it. That is wrong: the principal
+  is read after `call_next`, so either order works. The order is for the trace to exist
+  outside `authenticate`, which nothing consumes until the error envelope carries it.
+  The ordering test is therefore a tripwire, not a guard, and says so.
+- **Failed authentication is still not audited.** `actor_id` is NOT NULL, so a rejected
+  credential has no actor. This is the event someone will go looking for first, so it
+  has its own test asserting the absence rather than being left to be inferred from
+  empty results. Closing it needs the column nullable.
+- **One test passed for the wrong reason and was rewritten.** The failure-policy test
+  broke `db.pool`, but `authenticate` uses the pool too, so the request died upstream
+  and the audit branch never ran. It now raises from `audit.write` instead.
+
+Follow-ups: `trace_id` in the error envelope (which is what makes the ordering above
+real); `/audit` read routes; the `denied` outcome, still blocked on the same
+classification defect recorded under B2.
+
+### C2 — no `Content-Security-Policy` anywhere in the package
+
+`grep -r 'Content-Security-Policy' datum_sync/` returns nothing; the only hit in the
+repository is `13-hosted-services.md:114` specifying one. `/serve/{name}/` returns
+workspace-authored HTML from the same origin that holds the `SameSite=Lax` session
+cookie. Path traversal into `/serve/` is already prevented (`is_relative_to`) — this is
+the other half, the content once it is legitimately served.
+
+### C3 — nothing is rate limited except the login form
+
+`rate_limit_per_min` (`001_core.sql:54`) is read by no Python. `calls_per_minute`,
+`jobs_per_hour` and `concurrent_jobs` appear only in spec files. Login lockout exists
+(`oauth.py:422`, `ui.py:85`) and is the whole of it. Depends on C1 only because both
+are middleware and C1 settles the ordering.
+
+### C4 — two grant actions authorise nothing
+
+`vault.py:31` declares `ACTIONS = ("read", "write", "quarantine", "promote")` and
+`validate_scope()` accepts all four. `vault_fs.py` implements read, write and
+`list_dir`. So a grant can name `quarantine` and be stored, and nothing will ever act
+on it — the vocabulary is lying about what it authorises. Either implement the pair or
+drop them from `ACTIONS`; leaving both is the only option that is wrong. Separately,
+`fs_path.write_text()` has no post-resolution symlink check.
+
+### C5 — the outbox, and we already ship the thing it fixes
+
+`deliveries` does not exist and the automation `http_request` action is
+fire-and-forget. That is precisely the failure the outbox is specified to fix, so
+unlike most of this list it is not hypothetical.
+
+### Also missing, not yet ranked
+
+Worker leases and heartbeats (one advisory lock, `WORKER_LOCK = 0x0DA7_0000`; no
+leases, no job priority, no retries); workspace versioning (jobs are not pinned to a
+version); inbound webhooks; `vault_delete`/`stat`/`search`, `whoami` and `job_status`
+on MCP (5 tools shipped against ~20 specified); `/audit` read routes; cursor
+pagination (paging is client-side, `table.js:107`); five UI screens.
+
+### Not gaps — verified present
+
+Recorded because the reviews leave the opposite impression. Argument-level control
+exists (`proxy.py:157-159`); idempotency and SSE resume are present; OAuth is
+substantially the fable's design, with `_revoke_family` correctly outside the
+rolled-back transaction; the `innerHTML` ban is real and tested (`tests/test_ui.py:223`);
+service-name theft and `/serve/` traversal are both already prevented.
+
+---
+
 ## Not adopting
 
+- **Version rollback, the argument-guard format, scheduled-job vault scope, and
+  `policy.yaml`.** Not deferred — unbuildable as written. Activation requires the disk
+  hash to match but nothing archives the bytes; the argument-guard format cannot
+  express its own flagship `owner/repo` example; the scheduled-job scope intersects to
+  empty. These should not be costed as if they were specifications.
 - **Federation (docs 21–23) and the memory layer.** Per the review, these are a
   proposal with a schema sketch, not a spec: version rollback stores no bytes,
   `resources/read` federates with no guards at all, and `16`'s `policy.yaml` is
