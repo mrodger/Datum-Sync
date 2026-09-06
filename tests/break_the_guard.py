@@ -119,9 +119,10 @@ CASES = [
         "the WWW-Authenticate challenge survives the middleware",
         "datum_sync/api.py",
         "        return errors.envelope(\n"
-        "            exc.status, exc.code, exc.message, exc.detail, exc.headers\n"
+        "            request, exc.status, exc.code, exc.message, exc.detail, exc.headers\n"
         "        )",
-        "        return errors.envelope(exc.status, exc.code, exc.message, exc.detail)",
+        "        return errors.envelope("
+        "request, exc.status, exc.code, exc.message, exc.detail)",
         "tests/test_auth.py::test_an_anonymous_request_is_refused_with_a_discovery_challenge",
     ),
     (
@@ -1805,10 +1806,10 @@ CASES = [
         "AUDIT-010",
         "every write request writes a row, including routes added later",
         "datum_sync/api.py",
-        "    ok = response.status_code < 400\n    try:",
+        "    ok = status < 400\n    try:",
         # Returns before the write. The response is unchanged, so only the
         # absence of the row can fail the test -- which is the property.
-        "    ok = response.status_code < 400\n    return response\n    try:",
+        "    ok = status < 400\n    return\n    try:",
         "tests/test_audit_middleware.py::"
         "test_a_route_the_middleware_does_not_know_about_is_audited",
     ),
@@ -1816,15 +1817,15 @@ CASES = [
         "AUDIT-011",
         "reads are not audited, so writes are not buried under UI polling",
         "datum_sync/api.py",
-        "    if request.method in AUDIT_READ_METHODS:\n        return response",
-        "    if request.method in ():\n        return response",
+        "    if request.method in AUDIT_READ_METHODS:\n        return",
+        "    if request.method in ():\n        return",
         "tests/test_audit_middleware.py::test_a_read_is_not_a_row",
     ),
     (
         "AUDIT-012",
         "a failed request is recorded as an error, with its status",
         "datum_sync/api.py",
-        "    ok = response.status_code < 400",
+        "    ok = status < 400",
         # Not `outcome="ok"` directly: `error_code` is derived from the same
         # flag, so flipping the flag proves both columns at once, and a break
         # that only touched `outcome` would leave a row saying ok with a 400 in
@@ -1836,8 +1837,8 @@ CASES = [
         "AUDIT-013",
         "/mcp is not double-counted, so audit_log still mirrors mcp_call_log",
         "datum_sync/api.py",
-        "    if path.startswith(AUDIT_SELF_LOGGING):\n        return response",
-        "    if path.startswith(()):\n        return response",
+        "    if path.startswith(AUDIT_SELF_LOGGING):\n        return",
+        "    if path.startswith(()):\n        return",
         "tests/test_audit_middleware.py::"
         "test_mcp_writes_its_own_rows_and_gains_no_duplicate",
     ),
@@ -1857,13 +1858,65 @@ CASES = [
         "AUDIT-015",
         "an audit failure is counted and does not fail the request",
         "datum_sync/api.py",
-        "    except Exception:",
+        "    except Exception:\n        # The pool itself being unavailable",
         # Catches nothing, so the failure propagates: the request 500s and the
         # counter stays put. Both halves of the test then fail, which is right
         # -- answering the caller and recording the gap are one property.
-        "    except _NeverRaised:",
+        "    except _NeverRaised:\n        # The pool itself being unavailable",
         "tests/test_audit_middleware.py::"
         "test_a_request_survives_an_unwritable_audit_row",
+    ),
+    # -- C1 follow-up: the error response carries the trace it was audited under
+    (
+        "ERROR-001",
+        "the error body quotes this request's trace, not an invented one",
+        "datum_sync/errors.py",
+        "    trace = getattr(request.state, \"trace\", None)",
+        # Still a valid envelope, still the same five keys, still every existing
+        # error test passing -- the id is simply null and joins to nothing.
+        "    trace = None",
+        "tests/test_error_trace.py::test_a_handled_error_body_joins_to_its_audit_row",
+    ),
+    (
+        "ERROR-002",
+        "an unhandled exception is answered with the envelope, not plain text",
+        "datum_sync/errors.py",
+        "    @app.exception_handler(Exception)",
+        # Registered for something that never happens, which uninstalls the
+        # handler without deleting code that would then fail to parse.
+        "    @app.exception_handler(ZeroDivisionError)",
+        "tests/test_error_trace.py::test_a_crash_is_an_envelope_and_not_plain_text",
+    ),
+    (
+        "ERROR-003",
+        "a crash is audited: the middleware sees a raise, not a 500 response",
+        "datum_sync/api.py",
+        "        await _audit_row(request, trace, 500, t0)\n        raise",
+        # The behaviour before this change: the exception propagates to
+        # ServerErrorMiddleware and the request leaves no row at all.
+        "        raise",
+        "tests/test_error_trace.py::test_a_crash_still_writes_an_audit_row_and_it_joins",
+    ),
+    (
+        "ERROR-004",
+        "a crash does not return the exception's own text",
+        "datum_sync/errors.py",
+        "            request, 500, \"INTERNAL_ERROR\", "
+        "\"the server failed to handle this request\"",
+        # The obvious, helpful-looking mistake: it makes debugging easier and
+        # publishes whatever the traceback happened to be carrying.
+        "            request, 500, \"INTERNAL_ERROR\", str(exc)",
+        "tests/test_error_trace.py::test_a_crash_does_not_leak_the_exception_text",
+    ),
+    (
+        "ERROR-005",
+        "each failure carries its own trace, so an id identifies one request",
+        "datum_sync/errors.py",
+        "            \"trace_id\": trace.id if trace else None,",
+        # A constant id is worse than none: it is present, well-formed, and
+        # joins every request ever made to the same row.
+        "            \"trace_id\": \"00000000-0000-0000-0000-000000000000\",",
+        "tests/test_error_trace.py::test_two_failures_do_not_share_a_trace",
     ),
 ]
 

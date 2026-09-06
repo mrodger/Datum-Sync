@@ -180,6 +180,7 @@ async def authenticate(request: Request, call_next):
         # X-Forwarded-For.
         if not config.is_loopback_client(request.client):
             return errors.envelope(
+                request,
                 403,
                 "FORBIDDEN",
                 "this server is running with authentication disabled and will "
@@ -193,7 +194,7 @@ async def authenticate(request: Request, call_next):
         )
     except ApiError as exc:
         return errors.envelope(
-            exc.status, exc.code, exc.message, exc.detail, exc.headers
+            request, exc.status, exc.code, exc.message, exc.detail, exc.headers
         )
     return await call_next(request)
 
@@ -266,13 +267,38 @@ async def trace_and_audit(request: Request, call_next):
     trace = audit.Trace.mint(request.headers.get("X-Trace-Id") or None)
     request.state.trace = trace
     t0 = time.monotonic()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        # A crash reaches this function as a raise, not as a 500 response:
+        # Starlette's ServerErrorMiddleware -- the thing that turns an unhandled
+        # exception into a response -- is installed *outside* every user
+        # middleware, so it never runs before this point. Written and re-raised
+        # rather than returned, so the traceback still reaches the server log.
+        #
+        # Measured, not reasoned: before this branch existed, an unhandled
+        # exception left no audit row at all, which is the request most worth
+        # having a row for.
+        await _audit_row(request, trace, 500, t0)
+        raise
+    await _audit_row(request, trace, response.status_code, t0)
+    return response
 
+
+async def _audit_row(
+    request: Request, trace: audit.Trace, status: int, t0: float
+) -> None:
+    """Write the one row for a finished request, or account for its loss.
+
+    Called from both of `trace_and_audit`'s exits. One body rather than two so
+    that a filter added to the normal path cannot be forgotten on the crash
+    path, which is the one nobody exercises by hand.
+    """
     if request.method in AUDIT_READ_METHODS:
-        return response
+        return
     path = request.url.path
     if path.startswith(AUDIT_SELF_LOGGING):
-        return response
+        return
     # Unauthenticated requests cannot be rows: `audit_log.actor_id` is NOT NULL,
     # so a failed credential has no actor to record. That leaves failed auth
     # unaudited, which is a real gap and not this change's to close -- it needs
@@ -280,9 +306,9 @@ async def trace_and_audit(request: Request, call_next):
     # than left to be discovered from the absence of rows.
     principal = getattr(request.state, "principal", None)
     if principal is None:
-        return response
+        return
 
-    ok = response.status_code < 400
+    ok = status < 400
     try:
         async with db.pool().acquire() as conn:
             await audit.write(
@@ -298,7 +324,7 @@ async def trace_and_audit(request: Request, call_next):
                 outcome="ok" if ok else "error",
                 # Still no 'denied': the CHECK is ('ok','error') and the
                 # classification defect that justifies it is unchanged.
-                error_code=None if ok else response.status_code,
+                error_code=None if ok else status,
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
     except Exception:
@@ -306,7 +332,6 @@ async def trace_and_audit(request: Request, call_next):
         # swallow, because it never gets the connection. A request must not fail
         # because it could not be recorded.
         audit.drop()
-    return response
 
 
 # -- helpers ---------------------------------------------------------------

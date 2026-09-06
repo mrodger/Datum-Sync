@@ -75,9 +75,9 @@ async def test_unknown_workspace_is_a_not_found_envelope(client):
     )
     assert r.status_code == 404
     body = r.json()
-    # Every failure carries the same four keys so a client branches on `code`
+    # Every failure carries the same five keys so a client branches on `code`
     # and never on the message text.
-    assert set(body) == {"status", "code", "message", "detail"}
+    assert set(body) == {"status", "code", "message", "detail", "trace_id"}
     assert body["code"] == "NOT_FOUND"
 
 

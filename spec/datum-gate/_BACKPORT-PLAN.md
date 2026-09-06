@@ -437,6 +437,7 @@ Two facts frame the rest:
 | | Item | Touches | Reversible | Depends on | Status |
 |---|---|---|---|---|---|
 | C1 | Audit the REST surface: trace + audit middleware | +1 middleware, no schema | yes | B2 | **done 2026-09-06** |
+| C1a | `trace_id` in the error envelope, and a crash gets one too | response body | yes | C1 | **done 2026-09-06** |
 | C2 | `Content-Security-Policy` on `/serve/` | response headers | yes | — | |
 | C3 | A rate limit that exists | +1 middleware, makes a dead column real | yes | C1 | |
 | C4 | Resolve `quarantine`/`promote`; symlink check on write | `vault.ACTIONS` or `vault_fs` | yes | — | |
@@ -504,8 +505,11 @@ Deviations and things found on the way:
   document said it was.** The claim was that an inner audit layer would read
   `request.state.principal` before `authenticate` set it. That is wrong: the principal
   is read after `call_next`, so either order works. The order is for the trace to exist
-  outside `authenticate`, which nothing consumes until the error envelope carries it.
-  The ordering test is therefore a tripwire, not a guard, and says so.
+  outside `authenticate`, which nothing consumed until C1a made the 401 envelope carry
+  it — a rejected request now quotes an id built in `authenticate` itself, which only
+  exists because the mint is outside it. The ordering test stayed a tripwire rather than
+  being promoted to a guard: ERROR-001 and the 401 test already fail if the trace is not
+  there, and a guard whose break is covered by two existing cases proves nothing new.
 - **Failed authentication is still not audited.** `actor_id` is NOT NULL, so a rejected
   credential has no actor. This is the event someone will go looking for first, so it
   has its own test asserting the absence rather than being left to be inferred from
@@ -514,9 +518,51 @@ Deviations and things found on the way:
   broke `db.pool`, but `authenticate` uses the pool too, so the request died upstream
   and the audit branch never ran. It now raises from `audit.write` instead.
 
-Follow-ups: `trace_id` in the error envelope (which is what makes the ordering above
-real); `/audit` read routes; the `denied` outcome, still blocked on the same
+Follow-ups: `/audit` read routes; the `denied` outcome, still blocked on the same
 classification defect recorded under B2.
+
+#### C1a — `trace_id` in the error envelope — done 2026-09-06
+
+The half of C1 that makes the row reachable: a caller reporting a failure can now quote
+an id instead of a timestamp and a path. `envelope()` takes `request` as a required
+first parameter and emits a fifth key, `trace_id`. 635 tests pass, 159 guards proven.
+
+The load-bearing test is not "the body has a `trace_id`" — an id invented in
+`envelope()` would pass that, and join to nothing. It is that the id in the body equals
+the `trace_id` on that request's `audit_log` row.
+
+- **Required parameter, not a ContextVar.** A module-level ContextVar read inside
+  `envelope()` would have cost nothing at the call sites and been less code. Its failure
+  mode is that the var is never set, every error carries `"trace_id": null`, and every
+  test asserting the envelope's *shape* still passes. A required parameter cannot be
+  omitted by a handler added later. This is the same argument as C1's, applied to the
+  same class of decay.
+- **Writing the tests found a gap in C1 rather than confirming it.** An unhandled
+  exception produced a plain-text 500 — 21 bytes, no `code`, no trace — **and no audit
+  row at all**. `ServerErrorMiddleware` is installed outside every user middleware, so
+  `call_next` raises rather than returning and the write was never reached. A crash was
+  the single request type with nothing recorded, which is the inverse of the point.
+  Fixed in two places, because the two halves live on opposite sides of that boundary:
+  an `@app.exception_handler(Exception)` (the only way to reach ServerErrorMiddleware)
+  gives the crash an envelope, and an `except` around `call_next` writes the row and
+  re-raises. Starlette re-raises after calling the handler — checked in its source, not
+  assumed — so the traceback still reaches the log.
+- **The audit filters moved into `_audit_row`.** Two exits now write, and a filter added
+  to the normal path must not be missable on the crash path, which is the one nobody
+  exercises by hand. Guard anchors AUDIT-010…013 and 015 followed it; `api.py` gained a
+  second `except Exception:` so AUDIT-015's anchor is now qualified by its comment.
+- **The 500 does not carry `str(exc)`.** An unhandled exception's text is written for a
+  developer reading a traceback and can carry a path, a query or a connection string.
+  Guard ERROR-004, because the leak is the *helpful-looking* version.
+- **The envelope grew a key, and `test_api.py` caught it** — that test asserts the exact
+  key set, which is why the change could not be made quietly.
+- **`envelope()` reads the trace with `getattr(..., None)`, not `request.state.trace`.**
+  An error path is the worst place to add a second way to fail, so a missing trace costs
+  a null field rather than turning every handled 4xx into a 500. Guard ERROR-001 is what
+  makes that leniency safe.
+
+Still true and still tracked: a rejected 401 gets a `trace_id` that joins to nothing,
+because `actor_id` is NOT NULL. Asserted in a test rather than left to be discovered.
 
 ### C2 — no `Content-Security-Policy` anywhere in the package
 
