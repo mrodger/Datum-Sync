@@ -1762,6 +1762,40 @@ CASES = [
         '        raise _unauthenticated("unknown or invalid token")',
         "tests/test_account_tokens.py::test_the_legacy_column_is_not_a_credential",
     ),
+    # -- B4: multi-key secrets (key-id byte) ----------------------------------
+    (
+        "SECRET-005",
+        "seal prepends the current key id, not a hardcoded value",
+        "datum_sync/crypto.py",
+        "    return bytes([kid]) + nonce + AESGCM(key).encrypt(nonce, plaintext, _aad(name))",
+        "    return bytes([0]) + nonce + AESGCM(key).encrypt(nonce, plaintext, _aad(name))",
+        "tests/test_crypto_multikey.py::test_seal_prepends_key_id_byte",
+    ),
+    (
+        "SECRET-006",
+        "open_ selects the key from the blob's prefix byte, not the current key",
+        "datum_sync/crypto.py",
+        "    kid = blob[0]\n"
+        "    keys = _load_keys()\n"
+        "    if kid not in keys:",
+        "    keys = _load_keys()\n"
+        "    kid = _current_key_id()\n"
+        "    if kid not in keys:",
+        "tests/test_crypto_multikey.py::test_rotation_both_keys_loaded",
+    ),
+    (
+        "SECRET-007",
+        "open_ fails closed when the key id is unknown (removed after rotation)",
+        "datum_sync/crypto.py",
+        "    if kid not in keys:\n"
+        "        raise CryptoError(\n"
+        '            f"sealed value for {name!r} uses key id {kid}, but "\n'
+        '            f"{KEY_ENV_PREFIX}{kid:02d} is not in the environment. "\n'
+        '            f"The key may have been removed after rotation."\n'
+        "        )",
+        "    pass  # key-id check removed",
+        "tests/test_crypto_multikey.py::test_open_with_wrong_key_id_fails_closed",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

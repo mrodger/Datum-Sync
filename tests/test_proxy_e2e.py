@@ -58,7 +58,7 @@ async def db():
 async def setup(db, monkeypatch):
     """Create account, agent, and HTTP connection. Returns (agent_token, account_token)."""
     if not crypto.available():
-        monkeypatch.setenv(crypto.KEY_ENV, crypto.generate_key())
+        crypto.set_test_keys(monkeypatch)
 
     # Service account
     account_id = await db.fetchval(

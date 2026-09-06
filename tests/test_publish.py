@@ -143,7 +143,7 @@ def test_a_complete_manifest_md_passes(tmp_path):
 
 @pytest.fixture(autouse=True)
 def key(monkeypatch):
-    monkeypatch.setenv(crypto.KEY_ENV, crypto.generate_key())
+    crypto.set_test_keys(monkeypatch)
 
 
 @pytest_asyncio.fixture

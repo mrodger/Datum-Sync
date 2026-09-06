@@ -30,7 +30,7 @@ def key(monkeypatch):
     open a blob another test sealed, which is the very confusion the AAD
     binding exists to prevent.
     """
-    monkeypatch.setenv(crypto.KEY_ENV, crypto.generate_key())
+    crypto.set_test_keys(monkeypatch)
 
 
 @pytest_asyncio.fixture
@@ -132,7 +132,7 @@ async def test_a_secret_sealed_for_one_connection_will_not_open_for_another(conn
 async def test_a_write_without_a_key_is_refused_rather_than_stored_in_clear(
     conns, monkeypatch
 ):
-    monkeypatch.delenv(crypto.KEY_ENV, raising=False)
+    crypto.clear_test_keys(monkeypatch)
     assert crypto.available() is False
     with pytest.raises(crypto.KeyUnavailable):
         await _make(conns)
@@ -370,9 +370,9 @@ async def test_storing_a_secret_without_a_key_is_a_503_not_a_500(
     client, conns, monkeypatch
 ):
     """A configuration gap the operator can act on, said in the response."""
-    monkeypatch.delenv(crypto.KEY_ENV, raising=False)
+    crypto.clear_test_keys(monkeypatch)
     r = await client.post("/rest/v1/connections", json=BODY)
-    assert r.status_code == 503 and crypto.KEY_ENV in r.text
+    assert r.status_code == 503 and crypto.KEY_ENV_PREFIX in r.text
     assert await connections.get(conns, f"{PREFIX}-api") is None
 
 

@@ -147,7 +147,7 @@ async def db():
 @pytest_asyncio.fixture
 async def setup(db, monkeypatch):
     if not crypto.available():
-        monkeypatch.setenv(crypto.KEY_ENV, crypto.generate_key())
+        crypto.set_test_keys(monkeypatch)
 
     account_id = await db.fetchval(
         """

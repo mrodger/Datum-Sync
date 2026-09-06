@@ -1419,8 +1419,9 @@ def _require_key() -> None:
     if not crypto.available():
         raise ApiError(
             503, "SERVICE_UNAVAILABLE",
-            f"{crypto.KEY_ENV} is not configured, so connection secrets cannot "
-            f"be stored. Generate a key with `python -m datum_sync.crypto`.",
+            f"{crypto.KEY_ENV_PREFIX}* is not configured, so connection secrets "
+            f"cannot be stored. Generate a key with "
+            f"`python -m datum_sync.crypto`.",
         )
 
 
