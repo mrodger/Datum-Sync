@@ -29,7 +29,6 @@ def _principal(vault_scope=SCOPE) -> Principal:
         name="_vault_test",
         max_tier=4,
         repo_scope=None,
-        connection_grants=None,
         is_admin=False,
         vault_scope=vault_scope,
         source="test",

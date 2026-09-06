@@ -1739,7 +1739,7 @@ CASES = [
         "    if row is None:\n"
         "        row = await conn.fetchrow(\n"
         '            "SELECT sa.id AS account_id, sa.name, sa.max_tier, "\n'
-        '            "sa.repo_scope, sa.connection_grants, sa.is_admin, "\n'
+        '            "sa.repo_scope, sa.is_admin, "\n'
         '            "sa.disabled, sa.vault_scope, NULL::int AS token_id, "\n'
         '            "NULL::timestamptz AS revoked_at, "\n'
         '            "sa.token_expires AS expires_at "\n'
@@ -1780,6 +1780,15 @@ UNPROVABLE = {
         "watching the test still pass would report it as not load-bearing, which "
         "is true of every property that holds by construction and says nothing "
         "about whether the property is worth asserting."
+    ),
+    "AUTHZ-001": (
+        "The guard is that no field sits on a Principal claiming an authority "
+        "nothing enforces -- `service_accounts.connection_grants` was exactly "
+        "that for five migrations. Making it false means ADDING the field back "
+        "to the dataclass and to the queries, in two files at once, and the "
+        "harness proves a guard by removing one string from one file. Deleting "
+        "the assertion and watching the test pass measures the test, not the "
+        "property."
     ),
 }
 

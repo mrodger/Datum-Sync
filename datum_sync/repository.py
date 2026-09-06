@@ -47,7 +47,6 @@ LOCAL_PUBLISHER = Principal(
     name="local",
     max_tier=4,
     repo_scope=None,
-    connection_grants=None,
     is_admin=True,
     # None, not the wide-open scope DEV_PRINCIPAL carries. This principal exists
     # to publish workspaces from a shell; it never reaches the MCP vault tools.

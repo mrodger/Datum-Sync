@@ -15,8 +15,8 @@ returned in a cookie, because a browser has no token to present.
 
 All three resolve to the same `Principal`, because an OAuth grant and a session
 are both *bound to a service account* rather than carrying permissions of their
-own. `max_tier`, `repo_scope` and `connection_grants` therefore have exactly one
-home and there is no second permission model to keep in sync.
+own. `max_tier`, `repo_scope` and `vault_scope` therefore have exactly one home
+and there is no second permission model to keep in sync.
 
 Only sha256(token) is ever stored. The raw value is returned once, at mint
 time, and cannot be recovered from the database. sha256 is the right primitive
@@ -116,7 +116,6 @@ class Principal:
     name: str
     max_tier: int
     repo_scope: list[str] | None
-    connection_grants: list[str] | None
     is_admin: bool
     # 'token' for a service account token, 'oauth' for an OAuth access token.
     source: str
@@ -137,7 +136,10 @@ class Principal:
     client_id: str | None = None
     scope: str | None = None
     # Agent identity — set when the token belongs to an agent, not the account.
-    # proxy_grants is the agent's own list, separate from connection_grants.
+    # proxy_grants is the agent's own list, and is the only per-principal
+    # connection grant that anything enforces (proxy.py). `service_accounts`
+    # once carried a `connection_grants` column beside it; see the note above
+    # `_ACCOUNT_COLS` in tokens.py for why it is no longer read.
     agent_id: int | None = None
     agent_name: str | None = None
     proxy_grants: list[str] | None = None
@@ -195,7 +197,6 @@ DEV_PRINCIPAL = Principal(
     name="auth-disabled",
     max_tier=4,
     repo_scope=None,
-    connection_grants=None,
     is_admin=True,
     # The whole vault, matching the rest of this principal. With the flag on
     # there is no account to scope against and every other permission here is
@@ -300,7 +301,6 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
             name=agent_row["account_name"],
             max_tier=agent_row["max_tier"],
             repo_scope=agent_row["repo_scope"],
-            connection_grants=agent_row["connection_grants"],
             is_admin=False,  # agents are never admin
             vault_scope=vault_scope_of(agent_row),
             source="agent",
@@ -314,7 +314,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         SELECT t.id, t.client_id, t.scope, t.resource, t.expires_at,
                t.revoked_at, t.rotated_to,
                a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.connection_grants, a.is_admin, a.disabled, a.vault_scope
+               a.is_admin, a.disabled, a.vault_scope
           FROM oauth_tokens t
           JOIN service_accounts a ON a.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'access'
@@ -345,7 +345,6 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
             name=row["name"],
             max_tier=row["max_tier"],
             repo_scope=row["repo_scope"],
-            connection_grants=row["connection_grants"],
             is_admin=row["is_admin"],
             vault_scope=vault_scope_of(row),
             source="oauth",
@@ -378,7 +377,6 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         name=row["name"],
         max_tier=row["max_tier"],
         repo_scope=row["repo_scope"],
-        connection_grants=row["connection_grants"],
         is_admin=row["is_admin"],
         vault_scope=vault_scope_of(row),
         source="token",
@@ -406,7 +404,7 @@ async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
     """
     row = await conn.fetchrow(
         """
-        SELECT id, name, max_tier, repo_scope, connection_grants, is_admin,
+        SELECT id, name, max_tier, repo_scope, is_admin,
                disabled, vault_scope
           FROM service_accounts
          WHERE name = $1
@@ -423,7 +421,6 @@ async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
         name=row["name"],
         max_tier=row["max_tier"],
         repo_scope=row["repo_scope"],
-        connection_grants=row["connection_grants"],
         is_admin=row["is_admin"],
         vault_scope=vault_scope_of(row),
         source="local",
@@ -485,7 +482,7 @@ async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal
         """
         SELECT t.id, t.expires_at, t.revoked_at,
                a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.connection_grants, a.is_admin, a.disabled, a.vault_scope
+               a.is_admin, a.disabled, a.vault_scope
           FROM oauth_tokens t
           JOIN service_accounts a ON a.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'session'
@@ -512,7 +509,6 @@ async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal
         name=row["name"],
         max_tier=row["max_tier"],
         repo_scope=row["repo_scope"],
-        connection_grants=row["connection_grants"],
         is_admin=row["is_admin"],
         vault_scope=vault_scope_of(row),
         source="session",

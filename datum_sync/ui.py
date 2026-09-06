@@ -103,7 +103,6 @@ async def login(request: Request, body: dict = Body(...)) -> JSONResponse:
         name=account["name"],
         max_tier=account["max_tier"],
         repo_scope=account["repo_scope"],
-        connection_grants=account["connection_grants"],
         is_admin=account["is_admin"],
         vault_scope=auth.vault_scope_of(account),
         source="session",

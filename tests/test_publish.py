@@ -46,7 +46,7 @@ No side effects.
 def principal(name="pub", max_tier=4) -> Principal:
     return Principal(
         account_id=0, name=name, max_tier=max_tier, repo_scope=None,
-        connection_grants=None, is_admin=True, vault_scope=None,
+        is_admin=True, vault_scope=None,
         source="local",
     )
 

@@ -456,7 +456,7 @@ async def _drop_one() -> None:
         trace=audit.Trace.mint(None),
         principal=Principal(
             account_id=1, name=ACCOUNT_NAME, max_tier=4, repo_scope=None,
-            connection_grants=None, is_admin=False, source="token",
+            is_admin=False, source="token",
             vault_scope=None,
         ),
         via="mcp", verb="mcp.ping", target_kind=None, target=None, outcome="ok",

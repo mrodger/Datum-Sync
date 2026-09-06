@@ -32,9 +32,17 @@ from datum_sync import auth
 # same reason `auth.principal_by_name` gives: a new permission column added to
 # one query and missed in another is a principal whose permissions quietly
 # differ depending on how it authenticated.
+#
+# `sa.connection_grants` is deliberately absent, here and in every other
+# Principal query. The column exists and is populated, but no code has ever
+# read it to decide anything: whether a workspace may use a connection is
+# settled by the connection's own scope/scope_targets (`connections.matches_scope`)
+# and by the publisher's `max_tier`. Carrying it put a list on every Principal
+# that read like a permission and enforced nothing. `agents.proxy_grants` is a
+# different thing and is enforced (proxy.py).
 _ACCOUNT_COLS = """
     sa.id AS account_id, sa.name, sa.max_tier, sa.repo_scope,
-    sa.connection_grants, sa.is_admin, sa.disabled, sa.vault_scope
+    sa.is_admin, sa.disabled, sa.vault_scope
 """
 
 # Never `token_hash`. There is no read path that returns it, so no route can

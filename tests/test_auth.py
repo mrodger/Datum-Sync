@@ -16,9 +16,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import pathlib
 import re
 import secrets
 import uuid
+from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
@@ -182,7 +184,7 @@ def test_scope_patterns_are_two_literal_forms():
     """
     p = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["SCIMAC/*"],
-        connection_grants=None, is_admin=False, vault_scope=None,
+        is_admin=False, vault_scope=None,
         source="token",
     )
     assert p.allows_repo("SCIMAC")
@@ -191,21 +193,21 @@ def test_scope_patterns_are_two_literal_forms():
 
     glob = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["S*"],
-        connection_grants=None, is_admin=False, vault_scope=None,
+        is_admin=False, vault_scope=None,
         source="token",
     )
     assert not glob.allows_repo("SCIMAC")
 
     everything = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=None,
-        connection_grants=None, is_admin=False, vault_scope=None,
+        is_admin=False, vault_scope=None,
         source="token",
     )
     assert everything.allows_repo("anything")
 
     nothing = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=[],
-        connection_grants=None, is_admin=False, vault_scope=None,
+        is_admin=False, vault_scope=None,
         source="token",
     )
     # An empty array is not the same as NULL, and must not mean "all".
@@ -1763,3 +1765,38 @@ async def test_whoami_reports_vault_scope(client, vault_account):
     )
     assert r.status_code == 200
     assert r.json()["vault_scope"] == VAULT_SCOPE_FIXTURE
+
+
+def test_connection_grants_is_not_an_authority_field():
+    """No Principal field may claim an authority nothing enforces.
+
+    Guard: AUTHZ-001.
+
+    `service_accounts.connection_grants` was carried on every Principal, and on
+    every query that builds one, from migration 001 until it was removed. No
+    code ever read it to decide anything: whether a workspace may use a
+    connection is settled by the connection's own scope/scope_targets
+    (`connections.matches_scope`) and by the publisher's `max_tier`. Migration
+    008's own comment asserts the opposite -- "connection_grants controls which
+    connections a workspace can resolve at job time" -- which is how it kept
+    looking load-bearing.
+
+    A dead permission field is worse than no field. It reads like a control in
+    every review, and the first person to grant it will believe they restricted
+    something.
+
+    The SQL half of this matters as much as the dataclass half: re-adding the
+    column to a query would put it back on the rows Principals are built from,
+    where the next constructor to accept **row picks it up silently. The column
+    itself still exists and is still populated -- dropping it is a later
+    migration -- so this asserts what the code reads, not what the table holds.
+    """
+    assert "connection_grants" not in {f.name for f in fields(auth.Principal)}
+
+    src = pathlib.Path(auth.__file__).parent
+    offenders = sorted(
+        p.name for p in src.glob("*.py") if "connection_grants" in
+        # Comments are allowed to name it; a SQL column reference is not.
+        re.sub(r"#.*", "", p.read_text())
+    )
+    assert offenders == [], f"connection_grants read back into: {offenders}"
