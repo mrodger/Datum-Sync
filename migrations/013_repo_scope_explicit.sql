@@ -1,0 +1,56 @@
+-- 013_repo_scope_explicit.sql
+--
+-- `repo_scope` says which repositories it holds, always. Per the B3 entry in
+-- spec/datum-gate/_BACKPORT-PLAN.md.
+--
+-- The asymmetry this removes
+-- -------------------------
+-- Two scope columns sat on the same table and NULL meant the opposite thing in
+-- each:
+--
+--     repo_scope  IS NULL  ->  EVERY repository   (001_core.sql, line 42)
+--     vault_scope IS NULL  ->  NO vault access    (007_vault_scope.sql)
+--
+-- Both defaults are what an account gets by *not being configured*, and they
+-- point in opposite directions. So "the column was never filled in" is the most
+-- dangerous state one column can be in and the safest state the other can be
+-- in, and there is nothing in either name to say which. `auth.Principal` had to
+-- carry a five-line comment warning readers about it, and any future scope
+-- column would have had to pick a side with no rule to follow.
+--
+-- After this migration there is a rule: a scope column lists what the account
+-- may reach, and reaching everything is written down as `*` rather than left
+-- blank. Absent means nothing, on both columns and on the next one.
+--
+-- Why `*` and not a boolean
+-- -------------------------
+-- `*` is already the wildcard: `auth._scope_matches` has accepted it since the
+-- scope column existed, alongside `SCIMAC` and `SCIMAC/*`. So the wildcard is
+-- not new syntax, it is the syntax that was there, now used for the case that
+-- had been spelled by omission. An `is_unrestricted` boolean would be a second
+-- place for the answer to live and a way for the two to disagree.
+--
+-- vault_scope is deliberately not touched. NULL there already means no access,
+-- which is the sense this migration is making universal, and `vault.permits`
+-- treats NULL and `{}` identically -- so rewriting the column would change no
+-- decision anywhere while rewriting every row.
+--
+-- Reversibility
+-- -------------
+-- There is no down migration; the revert path is to restore the NULLs, and the
+-- dump taken before this ran is what does it. Worth knowing if that is ever
+-- needed: reverting the CODE alone, against `*` rows, fails CLOSED and loudly.
+-- The old `_scope_sql` compiles a scope list to `repository = ANY($1)` with no
+-- wildcard case, so `{*}` becomes "a repository literally named *" and a
+-- previously unrestricted account sees an empty schedule list. It does not
+-- silently widen anything; it shows nothing, which is the failure an operator
+-- notices in one screen.
+
+UPDATE service_accounts SET repo_scope = ARRAY['*'] WHERE repo_scope IS NULL;
+
+-- '{}' -- an account created without a scope holds no repositories. The
+-- previous default was NULL, which is why every account on this database was
+-- unrestricted: nothing ever set the column, and not setting it granted
+-- everything.
+ALTER TABLE service_accounts ALTER COLUMN repo_scope SET DEFAULT '{}';
+ALTER TABLE service_accounts ALTER COLUMN repo_scope SET NOT NULL;

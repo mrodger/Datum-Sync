@@ -74,16 +74,22 @@ async def db():
 async def token(db):
     """A service account token that reaches everything.
 
-    Unscoped (`repo_scope` NULL) and admin on purpose: this fixture exists so
-    the *other* tests are authenticated, not to test authorisation. A test that
-    cares about scope narrows it itself, and the tests that care about a
-    missing or wrong credential send their own -- see test_auth.py.
+    Wildcard-scoped and admin on purpose: this fixture exists so the *other*
+    tests are authenticated, not to test authorisation. A test that cares about
+    scope narrows it itself, and the tests that care about a missing or wrong
+    credential send their own -- see test_auth.py.
+
+    `repo_scope` is stated rather than left out. It used to be omitted, because
+    the column defaulted to NULL and NULL meant every repository; since
+    migration 013 the default is `{}` and means none, so a fixture that says
+    nothing would authenticate as a principal holding no repository at all --
+    and the tests that use it would fail 403 far from the cause.
     """
     await db.execute("DELETE FROM service_accounts WHERE name = $1", TEST_ACCOUNT)
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, max_tier, is_admin)
-        VALUES ($1, 4, true)
+        INSERT INTO service_accounts (name, max_tier, is_admin, repo_scope)
+        VALUES ($1, 4, true, ARRAY['*'])
         RETURNING id
         """,
         TEST_ACCOUNT,

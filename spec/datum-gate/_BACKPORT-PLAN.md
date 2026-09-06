@@ -31,7 +31,7 @@ locks the tier-4 credentials out of the only process that can read them.
 | B2 | One `audit_log` + server-minted trace id | +1 table | yes | B1 | **done** |
 | B5 | Multiple labelled tokens per principal | +1 table | yes | B1 | done 2026-09-05 |
 | B4 | Multi-key secrets (key-id byte) | `connections.secret` bytes | yes, with both keys | B1 | |
-| B3 | Single grant document | 4 columns → 1 | needs a down path | B1, B2 | |
+| B3 | Authority columns: drop the dead one, fix the asymmetry | −1 column read, `repo_scope` NOT NULL | dump taken; revert restores NULLs | B1, B2 | done 2026-09-06 |
 
 ---
 
@@ -378,6 +378,40 @@ The existing auth tests must pass unchanged against the new representation — t
 the whole safety argument for this item. Then, specifically: a principal with **no**
 vault block and a principal with **no** repo block must both be denied, which is the
 asymmetry being removed. Today one of those two is an allow.
+
+### What was built — 2026-09-06
+
+Split in two, and only the second half is the fix. The audit that preceded it found
+this section was wrong on both of its counts.
+
+**B3a — `connection_grants` removed** (`fbe16c3`). It is not one of five authority
+columns; it is not an authority column at all. No code has ever read it to decide
+anything: whether a workspace may use a connection is settled by the connection's own
+`scope`/`scope_targets` (`connections.matches_scope`) and by the publisher's
+`max_tier`. Nothing writes it either, and its ten test references are all constructor
+keywords with no assertion behind them. `migrations/008` documents a contract for it
+that was never implemented. So it was carried on every `Principal`, reading like a
+permission and enforcing nothing. Dropped from the dataclass and from every query;
+the column is left populated and unread, so the revert is `git revert` alone.
+Registered as guard AUTHZ-001 (UNPROVABLE — reinstating it means editing two files).
+
+**B3b — the NULL asymmetry fixed directly** (this change, migration 013). `repo_scope`
+is NOT NULL, defaults to `'{}'`, and the wildcard is written down as `['*']` — a
+spelling `auth._scope_matches` has accepted since the column existed. Both scope
+columns now say the same thing when nothing filled them in: no access. Guards
+AUTHZ-002 (the column default — checked against the real schema, not a patched source
+file) and AUTHZ-003 (see below).
+
+**The trap this turned up.** `api._scope_sql` compiles a scope list to
+`repository = ANY($n::text[])`, comparing literal names. Passing `['*']` through it
+asks for a repository *called* `*`, matches none, and shows an unrestricted caller an
+empty list of schedules and automations — no error and no 403. So "everything" as a
+value costs a wildcard case in the SQL path, which is guard AUTHZ-003.
+
+**Deferred, not done:** the single `grant` jsonb document, and `narrows()`/`intersect()`.
+The asymmetry was the defect; one document is a representation change. `agents.py`
+copies account authority verbatim, so nothing today narrows a grant against another
+and those two helpers would have no caller. Revisit when something needs them.
 
 ---
 

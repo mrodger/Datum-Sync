@@ -45,13 +45,15 @@ def _when(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M") if value else "-"
 
 
-def _scopes(values: list[str] | None) -> list[str] | None:
+def _scopes(values: list[str] | None) -> list[str]:
     """`--scope` repeated, or absent meaning every repository.
 
-    NULL and the empty array mean opposite things in the database -- all repos
-    and none -- so an absent flag must not collapse to `[]`.
+    An absent flag still means everything, because that is what this CLI has
+    always done and changing it would quietly narrow accounts made by scripts
+    that predate migration 013. What changed is that it is now *written down*
+    as the wildcard instead of stored as NULL, so the row says what it grants.
     """
-    return values or None
+    return values or ["*"]
 
 
 async def _connect() -> asyncpg.Connection:
@@ -269,7 +271,11 @@ async def show() -> int:
         return 0
     print(f"{'NAME':20} {'TIER':>4}  {'SCOPE':24} {'FLAGS':16} {'OAUTH':>5}  LAST USED")
     for r in rows:
-        scope = ",".join(r["repo_scope"]) if r["repo_scope"] is not None else "(all)"
+        # `*` prints as itself. It used to print as "(all)" because the value
+        # was NULL and had to be translated; now the row holds the wildcard the
+        # operator would type into --scope, so showing anything else would make
+        # the display and the input disagree.
+        scope = ",".join(r["repo_scope"]) or "(none)"
         flags = ",".join(
             f
             for f, on in (

@@ -39,7 +39,7 @@ def _principal(
         account_id=1,
         name=name,
         max_tier=max_tier,
-        repo_scope=None,
+        repo_scope=["*"],
         is_admin=False,
         vault_scope=None,
         source="agent",
@@ -103,7 +103,7 @@ def test_bare_account_token_denied():
     Guard: PROXY-001.
     """
     p = Principal(
-        account_id=1, name="acct", max_tier=4, repo_scope=None,
+        account_id=1, name="acct", max_tier=4, repo_scope=["*"],
         is_admin=True, vault_scope=None,
         source="token",
     )

@@ -1973,7 +1973,10 @@ async function screenAdmin(view) {
                     account.is_admin ? el('span', { class: 'badge-admin' }, ' admin') : null,
                     account.disabled ? el('span', { class: 'error' }, ' disabled') : null),
                 el('td', {}, account.max_tier),
-                el('td', {}, account.repo_scope ? account.repo_scope.join(', ') : 'all'),
+                // `*` is every repository and prints as itself. The empty case
+                // needs a word: an empty array joins to '', and a blank cell
+                // reads as missing data rather than as "no repositories".
+                el('td', {}, account.repo_scope.join(', ') || 'none'),
                 el('td', {}, [account.has_token ? 'token' : null,
                               account.has_password ? 'password' : null]
                              .filter(Boolean).join(' + ') || '\u2014'),

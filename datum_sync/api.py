@@ -484,7 +484,7 @@ async def list_jobs(
 
     async with db.pool().acquire() as conn:
         allowed: list[str] | None = None
-        if caller.repo_scope is not None:
+        if not caller.all_repos():
             # From the jobs themselves, not the repositories table: `repository`
             # on a job is denormalised text that outlives the repository being
             # removed, and a job in a deleted repository still must not leak.
@@ -550,7 +550,7 @@ async def job_summary(caller: Principal = Caller) -> dict[str, Any]:
     """
     async with db.pool().acquire() as conn:
         allowed: list[str] | None = None
-        if caller.repo_scope is not None:
+        if not caller.all_repos():
             names = await conn.fetch("SELECT DISTINCT repository FROM jobs")
             allowed = [r["repository"] for r in names if caller.allows_repo(r["repository"])]
             if not allowed:
@@ -1069,7 +1069,7 @@ def _require_watch_scope(caller: Principal, repository: str | None) -> None:
     if repository is not None:
         auth.require_repo(caller, repository)
         return
-    if caller.repo_scope is not None and not caller.is_admin:
+    if not caller.all_repos() and not caller.is_admin:
         raise ApiError(
             403,
             "FORBIDDEN",
@@ -1097,8 +1097,13 @@ def _scope_sql(caller: Principal, column: str, index: int) -> tuple[str, list]:
     a text[], and callers splat this with *args. Returning the bare list turned
     a two-repository scope into two placeholders where the query has one, and a
     one-repository scope into a str where asyncpg wants a sequence.
+
+    The wildcard has to be caught here rather than passed through. `*` is a
+    pattern, and everything below this line treats the list as literal names --
+    `= ANY(ARRAY['*'])` asks for a repository called `*` and finds none, so an
+    unrestricted caller would see an empty list instead of all of it.
     """
-    if caller.repo_scope is None:
+    if caller.all_repos():
         return "", []
     return f" AND {column} = ANY(${index}::text[])", [
         [s.split("/")[0] for s in caller.repo_scope]

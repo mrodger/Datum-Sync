@@ -3198,10 +3198,11 @@ async function screenAdmin(view) {
                  a.disabled ? 'disabled' : null].filter(Boolean).join(' \u00b7 ')
                 || null)),
             tierCell,
-            // null repo_scope is "every repository", which is the widest value
-            // this column takes -- so it is spelled out rather than left blank,
-            // where an empty cell would read as the narrowest.
-            el('td', {}, a.repo_scope ? a.repo_scope.join(', ') : 'all'),
+            // Since migration 013 this is always an array: `*` is every
+            // repository and prints as itself. The empty case is spelled out
+            // rather than left blank, because an empty cell reads as missing
+            // data and this one means "no repositories at all".
+            el('td', {}, a.repo_scope.join(', ') || 'none'),
             // What kind, never how much: the API returns booleans because it
             // stores sha256(token) precisely so it cannot give the token back,
             // and a prefix would undo that.

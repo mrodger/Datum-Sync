@@ -455,7 +455,7 @@ async def _drop_one() -> None:
         _DeadConn(),
         trace=audit.Trace.mint(None),
         principal=Principal(
-            account_id=1, name=ACCOUNT_NAME, max_tier=4, repo_scope=None,
+            account_id=1, name=ACCOUNT_NAME, max_tier=4, repo_scope=["*"],
             is_admin=False, source="token",
             vault_scope=None,
         ),

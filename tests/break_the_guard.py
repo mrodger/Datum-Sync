@@ -658,7 +658,7 @@ CASES = [
         "AUTO-010",
         "an unfiltered trigger requires unfiltered scope",
         "datum_sync/api.py",
-        "    if caller.repo_scope is not None and not caller.is_admin:",
+        "    if not caller.all_repos() and not caller.is_admin:",
         "    if False:",
         "tests/test_automations.py::test_a_scoped_caller_cannot_watch_every_repository",
     ),
@@ -681,7 +681,7 @@ CASES = [
         "API-003",
         "repo scope on the dashboard's job counts",
         "datum_sync/api.py",
-        "        if caller.repo_scope is not None:\n"
+        "        if not caller.all_repos():\n"
         "            names = await conn.fetch(\"SELECT DISTINCT repository FROM jobs\")\n"
         "            allowed = [r[\"repository\"] for r in names"
         " if caller.allows_repo(r[\"repository\"])]\n"
@@ -689,6 +689,18 @@ CASES = [
         "                return {\"counts\": dict.fromkeys(JOB_STATUSES, 0), \"total\": 0}\n",
         "",
         "tests/test_api.py::test_a_scoped_caller_is_not_told_how_busy_the_others_are",
+    ),
+    (
+        # Removing this does not raise and does not deny anything. It makes an
+        # unrestricted caller's scope compile to `= ANY(ARRAY['*'])`, which
+        # matches a repository literally named `*` -- so the schedule and
+        # automation lists come back empty and correct-looking.
+        "AUTHZ-003",
+        "the repo-scope wildcard never reaches SQL as a literal name",
+        "datum_sync/api.py",
+        "    if caller.all_repos():\n        return \"\", []",
+        "    if False:\n        return \"\", []",
+        "tests/test_auth.py::test_the_wildcard_is_not_passed_to_sql_as_a_repository_name",
     ),
 
     # -- connections -------------------------------------------------------
@@ -1789,6 +1801,16 @@ UNPROVABLE = {
         "harness proves a guard by removing one string from one file. Deleting "
         "the assertion and watching the test pass measures the test, not the "
         "property."
+    ),
+    "AUTHZ-002": (
+        "The guard is a column default in migration 013, and the harness "
+        "breaks guards by editing Python. Editing the migration would prove "
+        "nothing either: it has already been applied, and the schema the test "
+        "runs against comes from the database, not from re-reading the file. "
+        "The property is checked directly instead -- an INSERT that never "
+        "mentions repo_scope must produce a principal that reaches no "
+        "repository -- which is the same shape of check, run against the real "
+        "schema rather than a patched copy of the source."
     ),
 }
 

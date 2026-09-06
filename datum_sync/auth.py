@@ -115,18 +115,18 @@ class Principal:
     account_id: int
     name: str
     max_tier: int
-    repo_scope: list[str] | None
+    # The repositories this caller holds, always stated. `['*']` is everything
+    # and `[]` is nothing; there is no third form meaning "unset", because an
+    # unset scope used to mean EVERYTHING and that is the wrong direction for a
+    # column nobody filled in (migration 013).
+    repo_scope: list[str]
     is_admin: bool
     # 'token' for a service account token, 'oauth' for an OAuth access token.
     source: str
     # Vault paths this caller may reach, by action. See migration 007 for the
-    # shape and datum_sync/vault.py for how it is applied.
-    #
-    # NOTE the asymmetry with repo_scope directly above: None there means EVERY
-    # repository, None here means NO vault access. They are opposite on purpose.
-    # repo_scope's default predates any scoping and every account already relied
-    # on it; vault_scope arrives on rows that were written before the vault was
-    # reachable at all, and those accounts must not acquire it by sitting still.
+    # shape and datum_sync/vault.py for how it is applied. None is no access,
+    # the same direction as an empty repo_scope: what was never granted is not
+    # held.
     #
     # No default value, deliberately. A default would let a new construction
     # site forget this field and get a principal with no vault access -- which
@@ -144,10 +144,18 @@ class Principal:
     agent_name: str | None = None
     proxy_grants: list[str] | None = None
 
+    def all_repos(self) -> bool:
+        """Whether this caller's scope is the wildcard.
+
+        Distinct from `allows_repo`, which asks about one name. Three call
+        sites need the difference: they skip a query, or refuse an *unfiltered*
+        operation, and "holds every repository there is" is not something you
+        can conclude by asking about the repositories that happen to exist.
+        """
+        return "*" in self.repo_scope
+
     def allows_repo(self, repo: str) -> bool:
-        # NULL scope means every repository (001_core.sql).
-        if self.repo_scope is None:
-            return True
+        # `*` is handled by _scope_matches, so the wildcard needs no case here.
         return any(_scope_matches(p, repo) for p in self.repo_scope)
 
     def allows_vault_path(self, action: str, path: str) -> bool:
@@ -171,11 +179,10 @@ def principal_json(p: Principal) -> dict:
         "name": p.name,
         "is_admin": p.is_admin,
         "max_tier": p.max_tier,
-        # None means every repository (001_core.sql). Reported as null rather
-        # than as an empty list, which would read as "none".
+        # Always a list. `["*"]` is every repository and `[]` is none; the UI
+        # renders the wildcard rather than having to know that a missing value
+        # meant the widest possible one.
         "repo_scope": p.repo_scope,
-        # None here means NO vault access -- the opposite sense to repo_scope
-        # directly above. See the note on Principal.vault_scope.
         "vault_scope": p.vault_scope,
         "source": p.source,
     }
@@ -196,7 +203,7 @@ DEV_PRINCIPAL = Principal(
     account_id=0,
     name="auth-disabled",
     max_tier=4,
-    repo_scope=None,
+    repo_scope=["*"],
     is_admin=True,
     # The whole vault, matching the rest of this principal. With the flag on
     # there is no account to scope against and every other permission here is

@@ -58,7 +58,13 @@ async def client(db, token):
     await db_module.close_pool()
 
 
-async def set_scope(db, scope: list[str] | None) -> None:
+async def set_scope(db, scope: list[str]) -> None:
+    """Rescope the fixture account. `["*"]` is everything, `[]` is nothing.
+
+    Not `None`: the column is NOT NULL since migration 013, so passing it now
+    raises NotNullViolationError instead of restoring an unrestricted scope,
+    which is what it used to mean.
+    """
     await db.execute(
         "UPDATE service_accounts SET repo_scope = $2 WHERE name = $1",
         TEST_ACCOUNT,
@@ -199,7 +205,7 @@ def test_scope_patterns_are_two_literal_forms():
     assert not glob.allows_repo("SCIMAC")
 
     everything = auth.Principal(
-        account_id=1, name="x", max_tier=1, repo_scope=None,
+        account_id=1, name="x", max_tier=1, repo_scope=["*"],
         is_admin=False, vault_scope=None,
         source="token",
     )
@@ -210,8 +216,81 @@ def test_scope_patterns_are_two_literal_forms():
         is_admin=False, vault_scope=None,
         source="token",
     )
-    # An empty array is not the same as NULL, and must not mean "all".
+    # The only two ways to hold everything are `*` and naming them; an empty
+    # list is not a third.
     assert not nothing.allows_repo("SCIMAC")
+
+
+@pytest.mark.asyncio
+async def test_an_unset_scope_grants_nothing(db):
+    """A scope column nobody filled in holds no repositories.
+
+    Guard: AUTHZ-002.
+
+    This is the whole of migration 013. `repo_scope` used to default to NULL
+    and NULL meant EVERY repository, while `vault_scope` -- on the same table,
+    for the same account -- defaults to NULL meaning NO access. So "never
+    configured" was the most dangerous state one column could be in and the
+    safest state the other could be in, with nothing in either name to say
+    which way round it went.
+
+    Asserted through the database default rather than by constructing a
+    Principal, because the default is the thing that was wrong. Code that reads
+    the column can be inspected; a column that grants everything to a row
+    written by an INSERT that never mentioned it cannot.
+    """
+    await db.execute("DELETE FROM service_accounts WHERE name = $1", "_pytest_unset")
+    try:
+        row = await db.fetchrow(
+            """
+            INSERT INTO service_accounts (name, max_tier)
+            VALUES ($1, 1)
+            RETURNING repo_scope, vault_scope
+            """,
+            "_pytest_unset",
+        )
+        assert row["repo_scope"] == []
+        assert row["vault_scope"] is None
+
+        unset = auth.Principal(
+            account_id=1, name="x", max_tier=1, repo_scope=row["repo_scope"],
+            is_admin=False, vault_scope=auth.vault_scope_of(row),
+            source="token",
+        )
+        # Both directions the same: what was never granted is not held.
+        assert not unset.allows_repo("SCIMAC")
+        assert not unset.allows_vault_path("read", "anything.md")
+    finally:
+        await db.execute("DELETE FROM service_accounts WHERE name = $1", "_pytest_unset")
+
+
+def test_the_wildcard_is_not_passed_to_sql_as_a_repository_name():
+    """`*` is a pattern, and the scope filter compares literal names.
+
+    Guard: AUTHZ-003.
+
+    `_scope_sql` builds `repository = ANY($n::text[])` out of the scope list.
+    Hand it `["*"]` and it asks Postgres for a repository *called* `*`, finds
+    none, and an unrestricted caller is shown an empty list of schedules and
+    automations -- no error, no 403, just nothing. That is why the wildcard has
+    to be caught before the list is used, and why the check is `all_repos()`
+    rather than the `is None` it replaced.
+    """
+    from datum_sync import api
+
+    everything = auth.Principal(
+        account_id=1, name="x", max_tier=1, repo_scope=["*"],
+        is_admin=False, vault_scope=None, source="token",
+    )
+    assert api._scope_sql(everything, "repository", 1) == ("", [])
+
+    scoped = auth.Principal(
+        account_id=1, name="x", max_tier=1, repo_scope=["SCIMAC/*"],
+        is_admin=False, vault_scope=None, source="token",
+    )
+    fragment, args = api._scope_sql(scoped, "repository", 1)
+    assert fragment == " AND repository = ANY($1::text[])"
+    assert args == [["SCIMAC"]]
 
 
 @pytest.mark.asyncio
@@ -241,7 +320,7 @@ async def test_scope_is_enforced_on_submit_not_only_on_reads(client, db, workspa
     )
     assert r.status_code == 403
 
-    await set_scope(db, None)
+    await set_scope(db, ["*"])
     r = await client.post(
         f"/rest/v1/transformations/submit/{repo}/{ws}",
         json={"params": {"WHO": "world"}},
@@ -253,7 +332,7 @@ async def test_scope_is_enforced_on_submit_not_only_on_reads(client, db, workspa
 async def test_a_listing_hides_repositories_outside_scope(client, db, workspace):
     # Guard: AUTH-010.
     repo, _ = workspace
-    await set_scope(db, None)
+    await set_scope(db, ["*"])
     body = (await client.get("/rest/v1/repositories")).json()
     names = [r["name"] for r in body["items"]]
     assert repo in names
@@ -278,7 +357,7 @@ async def test_the_flat_catalogue_hides_workspaces_outside_scope(client, db, wor
     catalogue.
     """
     repo, ws = workspace
-    await set_scope(db, None)
+    await set_scope(db, ["*"])
     body = (await client.get("/rest/v1/workspaces")).json()
     assert ws in [w["name"] for w in body["items"] if w["repository"] == repo]
 
@@ -860,7 +939,7 @@ async def test_tools_list_offers_only_workspaces_that_publish_the_service(
     client, db, workspace
 ):
     repo, _ = workspace
-    await set_scope(db, None)
+    await set_scope(db, ["*"])
 
     # The conftest fixture publishes job_submitter only.
     names = [
@@ -891,7 +970,7 @@ async def test_tools_list_hides_a_workspace_that_could_only_fail(client, db, wor
     Guard: AUTH-012.
     """
     repo, _ = workspace
-    await set_scope(db, None)
+    await set_scope(db, ["*"])
     needs_file = dict(STREAMING, name="needsfile")
     needs_file["parameters"] = [{"name": "DATA", "type": "FILE", "required": True}]
     await publish(db, repo, "needsfile", needs_file)
@@ -916,7 +995,7 @@ async def test_tools_list_respects_repository_scope(client, db, workspace):
     repo, _ = workspace
     await publish(db, repo, "streamer", STREAMING)
 
-    await set_scope(db, None)
+    await set_scope(db, ["*"])
     names = [
         t["name"]
         for t in (await client.post("/mcp", json=rpc("tools/list", {}))).json()["result"][
