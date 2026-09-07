@@ -191,3 +191,51 @@ async def write(
         )
     except Exception:
         _dropped += 1
+
+
+async def write_anon(
+    conn,
+    *,
+    trace: Trace,
+    via: str,
+    verb: str,
+    target_kind: str | None,
+    target: str | None,
+    outcome: str,
+    error_code: int | None = None,
+    actor_name: str = "",
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Write an audit row for an event that occurred before identity was
+    established — a failed login attempt being the primary case.
+
+    `actor_id` is NULL; `actor_name` is the name the caller submitted
+    (unverified). `actor_kind` is 'anonymous' so readers can distinguish
+    these rows from rows where the id was simply omitted by mistake.
+
+    Never raises. Same failure policy as `write()`.
+    """
+    global _dropped
+    try:
+        await conn.execute(
+            """
+            INSERT INTO audit_log
+                (trace_id, client_trace_id, actor_id, actor_name, actor_kind,
+                 via, verb, target_kind, target, outcome, error_code,
+                 duration_ms, governance, detail)
+            VALUES ($1, $2, NULL, $3, 'anonymous', $4, $5, $6, $7, $8, $9,
+                    NULL, false, $10)
+            """,
+            trace.id,
+            trace.client_id,
+            actor_name,
+            via,
+            verb,
+            target_kind,
+            target,
+            outcome,
+            error_code,
+            _bounded(detail),
+        )
+    except Exception:
+        _dropped += 1

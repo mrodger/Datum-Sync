@@ -27,6 +27,7 @@ import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -40,7 +41,7 @@ from starlette.datastructures import UploadFile
 
 from datum_sync import (
     agents, audit, auth, automations, config, connections, crypto, db, errors, events,
-    execute, jobs, mcp, oauth, schedules, services, ui, uploads,
+    execute, jobs, mcp, oauth, schedules, services, tokens, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -294,18 +295,45 @@ async def _audit_row(
     that a filter added to the normal path cannot be forgotten on the crash
     path, which is the one nobody exercises by hand.
     """
-    if request.method in AUDIT_READ_METHODS:
-        return
     path = request.url.path
     if path.startswith(AUDIT_SELF_LOGGING):
         return
-    # Unauthenticated requests cannot be rows: `audit_log.actor_id` is NOT NULL,
-    # so a failed credential has no actor to record. That leaves failed auth
-    # unaudited, which is a real gap and not this change's to close -- it needs
-    # the column to be nullable. Recorded in the backport plan under C1 rather
-    # than left to be discovered from the absence of rows.
+
     principal = getattr(request.state, "principal", None)
+
+    # A refused credential is the one event someone goes to an audit log to find,
+    # and until migration 014 it could not be written at all: `actor_id` was NOT
+    # NULL, so a request that never established an identity had no row to be.
+    #
+    # Checked before the read-method filter, deliberately. Successful reads stay
+    # unaudited because of their volume, but a 401 is not a read -- it is a
+    # credential being tried -- and auditing those only when they arrive by POST
+    # would miss the shape probing actually takes.
+    #
+    # Narrowed to 401 rather than every principal-less request: an unauthenticated
+    # 200 is a public path (`/health`, the OAuth discovery documents) and a 403
+    # always has a principal, because authentication succeeded and authorisation
+    # is what refused it.
     if principal is None:
+        if status == 401:
+            try:
+                async with db.pool().acquire() as conn:
+                    await audit.write_anon(
+                        conn,
+                        trace=trace,
+                        via=_via(path),
+                        verb=f"{_via(path)}.{request.method.lower()}",
+                        target_kind="path",
+                        target=path,
+                        outcome="error",
+                        error_code=status,
+                        detail={"auth": _auth_scheme(request)},
+                    )
+            except Exception:
+                audit.drop()
+        return
+
+    if request.method in AUDIT_READ_METHODS:
         return
 
     ok = status < 400
@@ -332,6 +360,23 @@ async def _audit_row(
         # swallow, because it never gets the connection. A request must not fail
         # because it could not be recorded.
         audit.drop()
+
+
+def _auth_scheme(request: Request) -> str:
+    """The authentication scheme a refused request offered, and only that.
+
+    Returns `bearer`, `basic`, `none`, or `other` -- never the credential. The
+    whole reason this is a function rather than an inline expression is that the
+    obvious version logs `request.headers["authorization"]`, which writes the
+    token being probed into the table built to be read after a breach. Splitting
+    on whitespace and keeping element zero is the entire logic; the comment is
+    the point.
+    """
+    header = request.headers.get("authorization")
+    if not header:
+        return "none"
+    scheme = header.split(" ", 1)[0].lower()
+    return scheme if scheme in ("bearer", "basic") else "other"
 
 
 # -- helpers ---------------------------------------------------------------
@@ -1853,6 +1898,379 @@ async def serve(
         raise ApiError(status, "SERVICE_UNAVAILABLE", str(e)) from None
 
     return FileResponse(path)
+
+
+# -- account tokens -------------------------------------------------------
+
+
+@app.get("/rest/v1/accounts/{name}/tokens")
+async def list_account_tokens(name: str, caller: Principal = Caller) -> dict[str, Any]:
+    """List live tokens for an account. Admin only."""
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        account_id = await conn.fetchval(
+            "SELECT id FROM service_accounts WHERE name = $1", name
+        )
+        if account_id is None:
+            raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+        rows = await tokens.list_for_account(conn, account_id)
+    return {"items": [tokens.public(r) for r in rows]}
+
+
+@app.post("/rest/v1/accounts/{name}/tokens", status_code=201)
+async def mint_account_token(
+    name: str, body: dict = Body(), caller: Principal = Caller
+) -> dict[str, Any]:
+    """Mint a new labelled token for an account. Returns the raw token once. Admin only."""
+    auth.require_admin(caller)
+    label = str(body.get("label") or "").strip()
+    if not label:
+        raise ApiError(400, "INVALID_PARAMETER", "label is required")
+    expires_days = body.get("expires_days")
+    expires_at = None
+    if expires_days is not None:
+        # `int()` on caller-supplied JSON: unguarded this raised ValueError
+        # inside the handler and surfaced as a 500, reporting a bad parameter as
+        # a server fault. `True` is excluded because bool is an int subclass and
+        # `{"expires_days": true}` would otherwise quietly mean one day.
+        if isinstance(expires_days, bool) or not isinstance(expires_days, (int, str)):
+            raise ApiError(400, "INVALID_PARAMETER", "expires_days must be a number")
+        try:
+            days = int(expires_days)
+        except ValueError:
+            raise ApiError(400, "INVALID_PARAMETER", "expires_days must be a number")
+        if days < 1:
+            raise ApiError(400, "INVALID_PARAMETER", "expires_days must be positive")
+        expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+    async with db.pool().acquire() as conn:
+        account_id = await conn.fetchval(
+            "SELECT id FROM service_accounts WHERE name = $1", name
+        )
+        if account_id is None:
+            raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+        try:
+            row, raw = await tokens.create(conn, account_id, label, expires_at)
+        except asyncpg.UniqueViolationError:
+            # Narrow on purpose. Catching bare Exception here reported every
+            # failure -- a dropped connection, a bug in tokens.create -- as
+            # "that label is taken", which is a wrong answer that looks like a
+            # correct one and sends the caller off renaming their token.
+            raise ApiError(
+                409, "LABEL_TAKEN",
+                f"account {name!r} already has a live token labelled {label!r}"
+            )
+    return tokens.public(row, raw)
+
+
+@app.delete("/rest/v1/accounts/{name}/tokens/{label}")
+async def revoke_account_token(
+    name: str, label: str, caller: Principal = Caller
+) -> dict[str, Any]:
+    """Revoke one token by label. Admin only."""
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        account_id = await conn.fetchval(
+            "SELECT id FROM service_accounts WHERE name = $1", name
+        )
+        if account_id is None:
+            raise ApiError(404, "NOT_FOUND", f"no such account: {name}")
+        revoked = await tokens.revoke(conn, account_id, label)
+    if not revoked:
+        raise ApiError(
+            404, "NOT_FOUND",
+            f"no live token labelled {label!r} on account {name!r}"
+        )
+    return {}
+
+
+# -- analytics -------------------------------------------------------
+
+
+@app.get("/rest/v1/analytics/summary")
+async def analytics_summary(caller: Principal = Caller) -> dict[str, Any]:
+    """Platform-wide usage summary: jobs, audit trail, and MCP calls.
+
+    Admin only. The `recent` block is the last 20 `audit_log` rows across every
+    principal -- the governance record of who did what, which must not be
+    readable by the parties it governs. Narrowing rather than refusing is not
+    available here: an audit `target` is free text with no owning repository, so
+    there is nothing to filter on without inventing a per-row ownership model.
+    """
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        job_rows = await conn.fetch(
+            "SELECT status, count(*) AS n FROM jobs GROUP BY status ORDER BY n DESC"
+        )
+        audit_verbs = await conn.fetch(
+            """SELECT verb, outcome, count(*) AS n
+               FROM audit_log GROUP BY verb, outcome ORDER BY n DESC"""
+        )
+        mcp_tools = await conn.fetch(
+            """SELECT coalesce(nullif(tool_name, ''), '(other)') AS tool,
+                      count(*) AS n,
+                      count(*) FILTER (WHERE outcome = 'error') AS errors
+               FROM mcp_call_log
+               GROUP BY tool ORDER BY n DESC LIMIT 10"""
+        )
+        mcp_total = await conn.fetchval("SELECT count(*) FROM mcp_call_log")
+        recent = await conn.fetch(
+            """SELECT actor_name, verb, target, outcome, duration_ms, created_at
+               FROM audit_log ORDER BY created_at DESC LIMIT 20"""
+        )
+    return {
+        "jobs": {
+            "total": sum(r["n"] for r in job_rows),
+            "by_status": {r["status"]: r["n"] for r in job_rows},
+        },
+        "audit": {
+            "total": sum(r["n"] for r in audit_verbs),
+            "by_verb": [
+                {"verb": r["verb"], "outcome": r["outcome"], "count": r["n"]}
+                for r in audit_verbs
+            ],
+            "recent": [
+                {
+                    "actor": r["actor_name"],
+                    "verb": r["verb"],
+                    "target": r["target"],
+                    "outcome": r["outcome"],
+                    "duration_ms": r["duration_ms"],
+                    "created_at": r["created_at"].isoformat(),
+                }
+                for r in recent
+            ],
+        },
+        "mcp": {
+            "total": mcp_total,
+            "top_tools": [
+                {"tool": r["tool"], "count": r["n"], "errors": r["errors"]}
+                for r in mcp_tools
+            ],
+        },
+    }
+
+
+# -- queue control -------------------------------------------------------
+
+
+@app.get("/rest/v1/queue")
+async def queue_status(caller: Principal = Caller) -> dict[str, Any]:
+    """Active jobs: queued and running. Admin only."""
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, repository, workspace, status, submitted_by,
+                      submitted_at, started_at
+               FROM jobs
+               WHERE status IN ('queued', 'running')
+               ORDER BY submitted_at ASC"""
+        )
+    return {
+        "items": [
+            {
+                "id": str(r["id"]),
+                "repository": r["repository"],
+                "workspace": r["workspace"],
+                "status": r["status"],
+                "submitted_by": r["submitted_by"],
+                "submitted_at": r["submitted_at"].isoformat(),
+                "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+# -- system configuration -------------------------------------------------------
+
+
+@app.get("/rest/v1/system/config")
+async def system_config_view(caller: Principal = Caller) -> dict[str, Any]:
+    """Runtime configuration and applied migrations. Admin only."""
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        migrations = await conn.fetch(
+            "SELECT filename, applied_at FROM schema_migrations ORDER BY applied_at"
+        )
+    return {
+        "server": {
+            "host": config.HOST,
+            "port": config.PORT,
+            "public_url": config.PUBLIC_URL,
+            "auth_disabled": config.AUTH_DISABLED,
+            "require_https": config.REQUIRE_HTTPS,
+        },
+        "limits": {
+            "access_token_ttl_seconds": config.ACCESS_TOKEN_TTL_SECONDS,
+            "refresh_token_ttl_seconds": config.REFRESH_TOKEN_TTL_SECONDS,
+            "session_ttl_seconds": config.SESSION_TTL_SECONDS,
+            "password_max_attempts": config.PASSWORD_MAX_ATTEMPTS,
+        },
+        "paths": {
+            "repositories": str(config.REPOSITORIES_PATH),
+            "data": str(config.DATA_PATH),
+            "vault": str(config.VAULT_PATH),
+        },
+        "migrations": [
+            {"filename": r["filename"], "applied_at": r["applied_at"].isoformat()}
+            for r in migrations
+        ],
+    }
+
+
+# -- notifications -------------------------------------------------------
+
+
+@app.get("/rest/v1/notifications")
+async def list_notifications(caller: Principal = Caller) -> dict[str, Any]:
+    """Recent errors and failures derived from the audit log and jobs table.
+
+    Unlike the other dashboard reads this stays open to a non-admin, because a
+    caller seeing its own repositories fail is the point of the route. Each half
+    is narrowed separately:
+
+    `audit_errors` is admin-only -- same reasoning as `analytics/summary`, there
+    is no owning repository on an audit row. A non-admin gets an empty list
+    rather than a 403 so the other half is still reachable.
+
+    `failed_jobs` is filtered by `allows_repo`, matching what the jobs routes
+    already do. It matters more here than it looks: `jobs.error` is whatever the
+    workspace printed on its way down, which is where a connection string or a
+    filesystem path ends up.
+
+    Filtering happens in Python, after the query, for the same reason the jobs
+    routes do it that way -- `repo_scope` is a glob list and `_scope_matches` is
+    the one implementation of what a glob means. The LIMIT is applied before the
+    filter, so a caller can see fewer than 20 of its own jobs when other
+    repositories are failing; that is a display quirk, not a leak.
+    """
+    async with db.pool().acquire() as conn:
+        audit_errors = (
+            await conn.fetch(
+                """SELECT actor_name, verb, target, error_code, trace_id, created_at
+                   FROM audit_log
+                   WHERE outcome = 'error'
+                   ORDER BY created_at DESC LIMIT 50"""
+            )
+            if caller.is_admin
+            else []
+        )
+        failed_jobs = await conn.fetch(
+            """SELECT id, repository, workspace, submitted_by, completed_at, error
+               FROM jobs
+               WHERE status = 'failed'
+               ORDER BY completed_at DESC NULLS LAST LIMIT 20"""
+        )
+    failed_jobs = [r for r in failed_jobs if caller.allows_repo(r["repository"])]
+    return {
+        "audit_errors": [
+            {
+                "actor": r["actor_name"],
+                "verb": r["verb"],
+                "target": r["target"],
+                "error_code": r["error_code"],
+                "trace_id": str(r["trace_id"]),
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in audit_errors
+        ],
+        "failed_jobs": [
+            {
+                "id": str(r["id"]),
+                "repository": r["repository"],
+                "workspace": r["workspace"],
+                "submitted_by": r["submitted_by"],
+                "error": r["error"],
+                "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
+            }
+            for r in failed_jobs
+        ],
+    }
+
+
+# -- MCP servers -------------------------------------------------------
+
+
+@app.get("/rest/v1/mcp-servers")
+async def list_mcp_servers(caller: Principal = Caller) -> dict[str, Any]:
+    """MCP servers seen in the call log, with usage summary.
+
+    Admin only. `mcp_call_log.target` is a proxy destination URL, so this is a
+    list of the internal hosts the platform can reach -- reconnaissance for any
+    account that can read it. As with the analytics summary there is no owning
+    repository on the row to filter by.
+    """
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT coalesce(target, '(unknown)') AS target,
+                      count(*) AS calls,
+                      count(*) FILTER (WHERE outcome = 'error') AS errors,
+                      max(created_at) AS last_seen
+               FROM mcp_call_log
+               GROUP BY target
+               ORDER BY calls DESC"""
+        )
+    return {
+        "items": [
+            {
+                "target": r["target"],
+                "calls": r["calls"],
+                "errors": r["errors"],
+                "last_seen": r["last_seen"].isoformat(),
+            }
+            for r in rows
+        ]
+    }
+
+
+# -- authentication services -------------------------------------------------------
+
+
+@app.get("/rest/v1/auth/clients")
+async def list_auth_clients(caller: Principal = Caller) -> dict[str, Any]:
+    """Registered OAuth clients, newest first. Admin only.
+
+    Bounded, and `total` says by how much. `oauth_clients` grows on its own --
+    dynamic client registration means anything that speaks the protocol can add
+    a row without an operator involved, and this instance was holding 3056 when
+    the screen was first opened. Unbounded, the route joined all of them against
+    `oauth_tokens`, aggregated per client and rendered 390 KB into one table.
+    Every sibling read added here has a LIMIT; this one did not, and the reason
+    is only that the table was empty while it was being written.
+
+    `ORDER BY created_at` was also ascending, so the 100 a truncated list would
+    have shown were the oldest -- exactly the ones an operator does not need.
+    """
+    auth.require_admin(caller)
+    async with db.pool().acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT c.client_id, c.client_name, c.redirect_uris,
+                      c.grant_types, c.created_at,
+                      count(t.id) FILTER (
+                          WHERE t.kind = 'refresh' AND t.revoked_at IS NULL
+                            AND t.rotated_to IS NULL
+                      ) AS active_grants
+               FROM oauth_clients c
+               LEFT JOIN oauth_tokens t ON t.client_id = c.client_id
+               GROUP BY c.client_id
+               ORDER BY c.created_at DESC LIMIT 100"""
+        )
+        total = await conn.fetchval("SELECT count(*) FROM oauth_clients")
+    return {
+        "total": total,
+        "items": [
+            {
+                "client_id": r["client_id"],
+                "name": r["client_name"],
+                "redirect_uris": list(r["redirect_uris"]),
+                "grant_types": list(r["grant_types"]),
+                "active_grants": r["active_grants"],
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in rows
+        ]
+    }
 
 
 def main() -> int:

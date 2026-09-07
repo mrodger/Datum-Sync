@@ -211,21 +211,55 @@ async def test_the_challenge_header_survives_alongside_the_trace(client):
     assert r.json()["trace_id"] is not None
 
 
-async def test_a_rejected_request_carries_a_trace_it_cannot_look_up(client):
-    """An unauthenticated 401 gets an id, and it deliberately joins to nothing.
+async def test_a_rejected_request_can_be_looked_up_by_its_trace(client, db):
+    """A refused credential leaves a row, and the id in the body finds it.
 
-    The 401 is built in the `authenticate` middleware, which sits inside
-    `trace_and_audit`, so the trace exists by the time the envelope is made.
-    But `audit_log.actor_id` is NOT NULL and a rejected request has no actor, so
-    there is no row to find.
+    This replaces `test_a_rejected_request_carries_a_trace_it_cannot_look_up`,
+    which pinned the opposite behaviour while `audit_log.actor_id` was NOT NULL.
+    Deleted rather than amended, per its own docstring: it existed to keep the
+    gap visible, and once the gap is closed a test asserting only that the id is
+    a well-formed UUID would still pass while documenting something false.
 
-    Asserted rather than left implicit, because "every error id joins to a row"
-    is what this feature looks like from outside, and for the one class of
-    failure someone is most likely to be chasing -- a credential that does not
-    work -- it is false. Closing it needs the column nullable; tracked, not
-    fixed here. No guard: this pins current behaviour rather than defending a
-    decision, and it should be deleted when failed auth becomes auditable.
+    Guard: AUDIT-016.
     """
     r = await client.post(CONFLICT_ROUTE)
     assert r.status_code == 401
-    uuid.UUID(r.json()["trace_id"])  # raises if it is not a real id
+    trace_id = uuid.UUID(r.json()["trace_id"])
+
+    row = await db.fetchrow(
+        "SELECT actor_id, actor_kind, outcome, error_code, detail"
+        " FROM audit_log WHERE trace_id = $1",
+        trace_id,
+    )
+    assert row is not None, "a refused credential left no audit row"
+    assert row["actor_id"] is None
+    assert row["actor_kind"] == "anonymous"
+    assert row["outcome"] == "error"
+    assert row["error_code"] == 401
+
+
+async def test_the_audit_row_for_a_refused_request_never_holds_the_credential(
+    client, db
+):
+    """The row records which scheme was offered, never the secret.
+
+    The reflex implementation logs the `authorization` header, which writes the
+    token being probed into the table that exists to be read after a breach --
+    turning the audit log into a credential dump. A brute-force attempt would
+    file every guess.
+
+    Guard: AUDIT-017.
+    """
+    secret = "s3cret-token-value-do-not-log"
+    r = await client.post(
+        CONFLICT_ROUTE, headers={"authorization": f"Bearer {secret}"}
+    )
+    assert r.status_code == 401
+
+    row = await db.fetchrow(
+        "SELECT detail::text AS detail FROM audit_log WHERE trace_id = $1",
+        uuid.UUID(r.json()["trace_id"]),
+    )
+    assert row is not None
+    assert secret not in row["detail"]
+    assert "bearer" in row["detail"]

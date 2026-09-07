@@ -304,10 +304,17 @@ const SECTIONS = [
     { id: 'dashboard',      label: 'Dashboard' },
     { id: 'repositories',   label: 'Repositories' },
     { id: 'automations',    label: 'Automations' },
-    { id: 'notifications',  label: 'Notifications',       stub: true },
+    { id: 'notifications',  label: 'Notifications' },
     { id: 'streams',        label: 'Streams',             stub: true },
     { id: 'data-virt',      label: 'API endpoints',       stub: true },
-    { id: 'mcp',            label: 'MCP Servers',         stub: true },
+    // Admin, but outside the Admin group: `adminOnly` is what routes, `group`
+    // is only a nav heading, so these two stay filed under their subject while
+    // still being refused by hash. Both read across every account -- the MCP
+    // list is the internal hosts the platform can reach, and Analytics carries
+    // the last 20 audit rows for every principal. The API refuses them too;
+    // that is the check that matters. This one is so the nav does not offer a
+    // link that answers 403.
+    { id: 'mcp',            label: 'MCP Servers',         adminOnly: true },
     { id: 'apps',           label: 'Apps',                stub: true },
     { id: 'schedules',      label: 'Schedules' },
     { id: 'jobs',           label: 'Jobs' },
@@ -315,12 +322,12 @@ const SECTIONS = [
     { id: 'projects',       label: 'Projects',            stub: true },
     { id: 'connections',    label: 'Connections' },
     { id: 'resources',      label: 'Resources',           stub: true },
-    { id: 'analytics',      label: 'Analytics',           stub: true },
+    { id: 'analytics',      label: 'Analytics',           adminOnly: true },
     { id: 'services',       label: 'Services' },
     { id: 'admin',          label: 'Admin',               adminOnly: true, group: true },
-    { id: 'auth-services',  label: 'Authentication Services', adminOnly: true, stub: true },
-    { id: 'system-config',  label: 'System Configuration',   adminOnly: true, stub: true },
-    { id: 'queue-control',  label: 'Queue Control',           adminOnly: true, stub: true },
+    { id: 'auth-services',  label: 'Authentication Services', adminOnly: true },
+    { id: 'system-config',  label: 'System Configuration',   adminOnly: true },
+    { id: 'queue-control',  label: 'Queue Control',           adminOnly: true },
     { id: 'migration',      label: 'Backup & Restore',        adminOnly: true, stub: true },
 ];
 
@@ -382,18 +389,19 @@ const SCREENS = {
     services:         [screenServices],
     workspaces:       [screenWorkspaces],
     admin:            [screenAdmin, screenAccount],
-    // stub sections — visible in the nav, no backend
-    notifications:    [(v) => stubScreen(v, 'Notifications')],
+    // live sections
+    notifications:    [screenNotifications],
+    analytics:        [screenAnalytics],
+    mcp:              [screenMcpServers],
+    'auth-services':  [screenAuthServices],
+    'system-config':  [screenSystemConfig],
+    'queue-control':  [screenQueueControl],
+    // stub sections — visible in the nav, no backend yet
     streams:          [(v) => stubScreen(v, 'Streams')],
     'data-virt':      [(v) => stubScreen(v, 'API endpoints')],
-    mcp:              [(v) => stubScreen(v, 'MCP Servers')],
     apps:             [(v) => stubScreen(v, 'Apps')],
     projects:         [(v) => stubScreen(v, 'Projects')],
     resources:        [(v) => stubScreen(v, 'Resources')],
-    analytics:        [(v) => stubScreen(v, 'Analytics')],
-    'auth-services':  [(v) => stubScreen(v, 'Authentication Services')],
-    'system-config':  [(v) => stubScreen(v, 'System Configuration')],
-    'queue-control':  [(v) => stubScreen(v, 'Queue Control')],
     migration:        [(v) => stubScreen(v, 'Backup & Restore')],
 };
 
@@ -498,7 +506,9 @@ function stubScreen(view, label) {
             el('h2', {}, 'Not yet available'),
             el('p', {}, 'This section is not part of the current Datum-Sync build. '
                 + 'Working sections: Repositories, Jobs, Schedules, Automations, '
-                + 'Connections, Services, and Admin.')));
+                + 'Connections, Services, Analytics, Notifications, MCP Servers, '
+                + 'Queue Control, System Configuration, Authentication Services, '
+                + 'and Admin.')));
 }
 
 // ---------------------------------------------------------------------------
@@ -2947,9 +2957,10 @@ async function screenServices(view) {
 // ---------------------------------------------------------------------------
 
 async function screenAccount(view, accountName) {
-    const [acct, { items: agentList }] = await Promise.all([
+    const [acct, { items: agentList }, { items: tokenList }] = await Promise.all([
         api('/accounts/' + encodeURIComponent(accountName)),
         api('/accounts/' + encodeURIComponent(accountName) + '/agents'),
+        api('/accounts/' + encodeURIComponent(accountName) + '/tokens'),
     ]);
 
     const accountPath = '/accounts/' + encodeURIComponent(accountName);
@@ -2983,6 +2994,75 @@ async function screenAccount(view, accountName) {
             el('dt', {}, 'Last used'), el('dd', {}, when(acct.last_used_at)),
             el('dt', {}, 'Created'),   el('dd', {}, when(acct.created_at)),
             ...vaultScopeRows(acct.vault_scope)));
+
+    // Tokens table + mint form.
+    function tokenRow(t) {
+        const revokeBtn = el('button', { type: 'button', class: 'secondary',
+            onclick: async () => {
+                if (!window.confirm(`Revoke token "${t.label}"?`)) return;
+                revokeBtn.disabled = true;
+                try {
+                    await api(accountPath + '/tokens/' + encodeURIComponent(t.label),
+                        { method: 'DELETE' });
+                    row.remove();
+                } catch (err) {
+                    failure.append(banner(err));
+                    revokeBtn.disabled = false;
+                }
+            },
+        }, 'Revoke');
+        const row = el('tr', {},
+            el('td', {}, t.label),
+            el('td', {}, when(t.created_at)),
+            el('td', {}, when(t.last_used_at)),
+            el('td', {}, t.expires_at ? when(t.expires_at) : el('span', { class: 'hint' }, 'never')),
+            el('td', {}, revokeBtn));
+        return row;
+    }
+
+    const tokenLabelInput  = el('input', {
+        type: 'text',   id: 'token-label',   placeholder: 'e.g. ci-deploy', required: true });
+    const tokenExpiresInput = el('input', {
+        type: 'number', id: 'token-expires',  placeholder: 'days (blank = no expiry)', min: '1' });
+    const mintTokenErr = el('div', {});
+
+    const tokensPanel = el('div', { class: 'panel' },
+        el('h2', {}, 'Tokens'),
+        tokenList.length
+            ? table(['Label', 'Created', 'Last used', 'Expires', ''], tokenList.map(tokenRow))
+            : el('p', { class: 'hint' }, 'No tokens.'),
+        mintTokenErr,
+        el('form', { onsubmit: async (e) => {
+            e.preventDefault();
+            const label = tokenLabelInput.value.trim();
+            if (!label) return;
+            const daysRaw = tokenExpiresInput.value.trim();
+            const body = { label };
+            if (daysRaw) body.expires_days = parseInt(daysRaw, 10);
+            clear(mintTokenErr);
+            try {
+                const result = await api(accountPath + '/tokens', { method: 'POST', json: body });
+                clear(tokenDisplay);
+                tokenDisplay.append(el('div', { class: 'panel' },
+                    el('h2', {}, 'Token \u2014 ' + result.label),
+                    el('p', { class: 'hint' }, 'Shown once. Copy it now.'),
+                    el('pre', {}, result.token),
+                    el('button', { type: 'button', class: 'secondary',
+                        onclick: () => route(),
+                    }, 'Done')));
+                tokenLabelInput.value = '';
+                tokenExpiresInput.value = '';
+            } catch (err) {
+                mintTokenErr.append(banner(err));
+            }
+        } },
+            el('div', { class: 'field' },
+                el('label', { for: 'token-label' }, 'Label'), tokenLabelInput),
+            el('div', { class: 'field' },
+                el('label', { for: 'token-expires' }, 'Expires (days)'), tokenExpiresInput),
+            el('div', { class: 'action-bar' },
+                el('div', { class: 'actions' },
+                    el('button', { type: 'submit' }, 'Mint token')))));
 
     // Agents table — static render, no mountTable (small list, no search needed).
     function agentRow(a) {
@@ -3114,7 +3194,7 @@ async function screenAccount(view, accountName) {
         el('div', { class: 'page-header' }, el('h1', {}, accountName)),
         failure,
         tokenDisplay,
-        el('div', { class: 'split' }, details, el('div', {}, agentsPanel, createForm)),
+        el('div', { class: 'split' }, details, el('div', {}, tokensPanel, agentsPanel, createForm)),
     ]);
 }
 
@@ -3222,6 +3302,266 @@ async function screenAdmin(view) {
 
     view.append(pagerBar(items.length));
     mountTable(view);
+}
+
+// ---------------------------------------------------------------------------
+// analytics
+// ---------------------------------------------------------------------------
+
+async function screenAnalytics(view) {
+    const data = await api('/analytics/summary');
+
+    actionBar(view, 'Analytics', {
+        desc: 'Platform-wide usage: jobs run, audit trail, and MCP calls.',
+    });
+
+    const j = data.jobs;
+    const a = data.audit;
+    const m = data.mcp;
+
+    view.append(el('div', { class: 'counters' },
+        el('div', { class: 'counter-row' },
+            el('div', { class: 'counter complete' },
+                el('span', { class: 'label' }, 'Total jobs'),
+                el('span', { class: 'n' }, j.total)),
+            el('div', { class: 'counter running' },
+                el('span', { class: 'label' }, 'Audit events'),
+                el('span', { class: 'n' }, a.total)),
+            el('div', { class: 'counter queued' },
+                el('span', { class: 'label' }, 'MCP calls'),
+                el('span', { class: 'n' }, m.total)))));
+
+    view.append(el('h2', {}, 'Jobs by status'));
+    view.append(table(['Status', 'Count'],
+        Object.entries(j.by_status).map(([status, n]) =>
+            el('tr', {}, el('td', {}, badge(status)), el('td', {}, n)))));
+
+    view.append(el('h2', {}, 'Audit events by action'));
+    view.append(table(['Action', 'Outcome', 'Count'],
+        a.by_verb.map((r) => el('tr', {},
+            el('td', {}, r.verb),
+            el('td', {}, badge(r.outcome)),
+            el('td', {}, r.count)))));
+
+    view.append(el('h2', {}, 'Top MCP tools'));
+    view.append(table(['Tool', 'Calls', 'Errors'],
+        m.top_tools.map((t) => el('tr', {},
+            el('td', {}, t.tool),
+            el('td', {}, t.count),
+            el('td', {}, t.errors || '\u2014')))));
+
+    view.append(el('h2', {}, 'Recent audit activity'));
+    view.append(table(['When', 'Actor', 'Action', 'Target', 'Outcome'],
+        a.recent.map((r) => el('tr', {},
+            el('td', {}, when(r.created_at)),
+            el('td', {}, r.actor),
+            el('td', {}, r.verb),
+            el('td', {}, r.target || '\u2014'),
+            el('td', {}, badge(r.outcome))))));
+}
+
+// ---------------------------------------------------------------------------
+// queue control
+// ---------------------------------------------------------------------------
+
+async function screenQueueControl(view) {
+    const { items } = await api('/queue');
+
+    actionBar(view, 'Queue Control', {
+        desc: 'Jobs currently queued or running. Cancel stops a job before it completes.',
+    });
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('queue-control', 48)),
+            el('h3', {}, 'Nothing active'),
+            el('p', {}, 'No jobs are currently queued or running.')));
+        return;
+    }
+
+    function makeRow(job) {
+        const btn = el('button', { type: 'button', class: 'secondary' }, 'Cancel');
+        btn.onclick = async () => {
+            btn.disabled = true;
+            try {
+                await api('/transformations/jobs/id/' + encodeURIComponent(job.id),
+                    { method: 'DELETE' });
+                btn.textContent = 'Cancelled';
+            } catch (err) {
+                view.prepend(banner(err));
+                btn.disabled = false;
+            }
+        };
+        return el('tr', {},
+            el('td', {}, badge(job.status)),
+            el('td', {}, job.repository + '/' + job.workspace),
+            el('td', {}, job.submitted_by || '\u2014'),
+            el('td', {}, when(job.submitted_at)),
+            el('td', {}, duration(job.started_at, null)),
+            el('td', {}, btn));
+    }
+
+    const running = items.filter((j) => j.status === 'running');
+    const queued  = items.filter((j) => j.status === 'queued');
+
+    if (running.length) {
+        view.append(el('h2', {}, `Running (${running.length})`));
+        view.append(table(
+            ['Status', 'Workspace', 'Submitted by', 'Started', 'Running for', ''],
+            running.map(makeRow)));
+    }
+    if (queued.length) {
+        view.append(el('h2', {}, `Queued (${queued.length})`));
+        view.append(table(
+            ['Status', 'Workspace', 'Submitted by', 'Queued at', '', ''],
+            queued.map(makeRow)));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// system configuration
+// ---------------------------------------------------------------------------
+
+async function screenSystemConfig(view) {
+    const data = await api('/system/config');
+
+    actionBar(view, 'System Configuration', {
+        desc: 'Runtime settings and migration history. Read-only \u2014 change these in the server environment.',
+    });
+
+    view.append(el('div', { class: 'panel' },
+        el('h2', {}, 'Server'),
+        el('dl', { class: 'kv' },
+            el('dt', {}, 'Public URL'),    el('dd', {}, data.server.public_url),
+            el('dt', {}, 'Bind address'), el('dd', {}, data.server.host + ':' + data.server.port),
+            el('dt', {}, 'Auth'),         el('dd', {}, data.server.auth_disabled
+                ? el('span', { class: 'badge failed' }, 'DISABLED') : 'enabled'),
+            el('dt', {}, 'HTTPS'),        el('dd', {}, data.server.require_https ? 'required' : 'not required'))));
+
+    view.append(el('div', { class: 'panel' },
+        el('h2', {}, 'Limits'),
+        el('dl', { class: 'kv' },
+            el('dt', {}, 'Session TTL'),       el('dd', {}, data.limits.session_ttl_seconds + '\u202fs'),
+            el('dt', {}, 'Access token TTL'),  el('dd', {}, data.limits.access_token_ttl_seconds + '\u202fs'),
+            el('dt', {}, 'Refresh token TTL'), el('dd', {}, data.limits.refresh_token_ttl_seconds + '\u202fs'),
+            el('dt', {}, 'Password attempts'), el('dd', {}, data.limits.password_max_attempts))));
+
+    view.append(el('div', { class: 'panel' },
+        el('h2', {}, 'Paths'),
+        el('dl', { class: 'kv' },
+            el('dt', {}, 'Repositories'), el('dd', {}, data.paths.repositories),
+            el('dt', {}, 'Data'),         el('dd', {}, data.paths.data),
+            el('dt', {}, 'Vault'),        el('dd', {}, data.paths.vault))));
+
+    view.append(el('h2', {}, `Migrations (${data.migrations.length} applied)`));
+    view.append(table(['Migration', 'Applied at'],
+        data.migrations.map((m) => el('tr', {},
+            el('td', {}, m.filename),
+            el('td', {}, when(m.applied_at))))));
+}
+
+// ---------------------------------------------------------------------------
+// notifications
+// ---------------------------------------------------------------------------
+
+async function screenNotifications(view) {
+    const data = await api('/notifications');
+
+    actionBar(view, 'Notifications', {
+        desc: 'Recent audit errors and failed jobs, derived from the audit trail.',
+    });
+
+    if (!data.failed_jobs.length && !data.audit_errors.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('ok', 48)),
+            el('h3', {}, 'All clear'),
+            el('p', {}, 'No audit errors or failed jobs on record.')));
+        return;
+    }
+
+    if (data.failed_jobs.length) {
+        view.append(el('h2', {}, `Failed jobs (${data.failed_jobs.length})`));
+        view.append(table(['Workspace', 'Submitted by', 'Failed at', 'Error', ''],
+            data.failed_jobs.map((j) => el('tr', {},
+                el('td', {}, j.repository + '/' + j.workspace),
+                el('td', {}, j.submitted_by || '\u2014'),
+                el('td', {}, when(j.completed_at)),
+                el('td', {}, j.error || '\u2014'),
+                el('td', {}, el('a', { href: '#/jobs/' + j.id }, 'open'))))));
+    }
+
+    if (data.audit_errors.length) {
+        view.append(el('h2', {}, `Audit errors (${data.audit_errors.length})`));
+        view.append(table(['When', 'Actor', 'Action', 'Target', 'Code'],
+            data.audit_errors.map((r) => el('tr', {},
+                el('td', {}, when(r.created_at)),
+                el('td', {}, r.actor),
+                el('td', {}, r.verb),
+                el('td', {}, r.target || '\u2014'),
+                el('td', {}, r.error_code || '\u2014')))));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MCP servers
+// ---------------------------------------------------------------------------
+
+async function screenMcpServers(view) {
+    const { items } = await api('/mcp-servers');
+
+    actionBar(view, 'MCP Servers', {
+        desc: 'Servers seen in the MCP call log. Populated from usage \u2014 not a registry.',
+        search: items.length ? 'Search by target' : null,
+    });
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('mcp', 48)),
+            el('h3', {}, 'No MCP calls recorded'),
+            el('p', {}, 'Server activity appears here as calls are made.')));
+        return;
+    }
+
+    view.append(table(
+        [{ label: 'Target', sortable: true, sorted: true },
+         { label: 'Calls', sortable: true },
+         { label: 'Errors', sortable: true },
+         { label: 'Last seen', sortable: true }],
+        items.map((s) => el('tr', {},
+            el('td', {}, s.target),
+            el('td', {}, s.calls),
+            el('td', {}, s.errors || '\u2014'),
+            el('td', {}, when(s.last_seen))))));
+}
+
+// ---------------------------------------------------------------------------
+// authentication services
+// ---------------------------------------------------------------------------
+
+async function screenAuthServices(view) {
+    const { items } = await api('/auth/clients');
+
+    actionBar(view, 'Authentication Services', {
+        desc: 'Registered OAuth 2.1 clients. Register new clients via the command line.',
+    });
+
+    if (!items.length) {
+        view.append(el('div', { class: 'empty-state' },
+            el('div', { class: 'es-icon' }, icon('auth-services', 48)),
+            el('h3', {}, 'No OAuth clients'),
+            el('p', {}, 'Register a client with: python -m datum_sync.oauth register <name> <redirect-uri>')));
+        return;
+    }
+
+    view.append(table(
+        ['Client ID', 'Name', 'Redirect URIs', 'Grant types', 'Active grants', 'Registered'],
+        items.map((c) => el('tr', {},
+            el('td', {}, el('code', {}, c.client_id)),
+            el('td', {}, c.name || '\u2014'),
+            el('td', {}, c.redirect_uris.join(', ')),
+            el('td', {}, c.grant_types.join(', ')),
+            el('td', {}, c.active_grants),
+            el('td', {}, when(c.created_at))))));
 }
 
 // ---------------------------------------------------------------------------

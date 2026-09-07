@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from datum_sync import auth, config, db
+from datum_sync import audit, auth, config, db
 from datum_sync.errors import ApiError
 
 STATIC_DIR = config.REPO_ROOT / "datum_sync" / "static"
@@ -80,10 +80,17 @@ async def login(request: Request, body: dict = Body(...)) -> JSONResponse:
     if not name or not password:
         raise ApiError(400, "INVALID_PARAMETER", "name and password are required")
 
+    trace = getattr(request.state, "trace", None) or audit.Trace.mint(None)
+
     async with db.pool().acquire() as conn:
         try:
             account = await auth.authenticate_password(conn, name, password)
         except auth.TooManyAttempts as exc:
+            await audit.write_anon(conn, trace=trace, via="ui",
+                                   verb="auth.login", target_kind=None,
+                                   target=None, outcome="error",
+                                   error_code=429, actor_name=name,
+                                   detail={"reason": "too_many_attempts"})
             raise ApiError(
                 429,
                 "TOO_MANY_ATTEMPTS",
@@ -94,6 +101,11 @@ async def login(request: Request, body: dict = Body(...)) -> JSONResponse:
             # One message for a wrong name and a wrong password. The two are
             # already indistinguishable in timing (see verify_password); saying
             # "no such account" here would give back what that bought.
+            await audit.write_anon(conn, trace=trace, via="ui",
+                                   verb="auth.login", target_kind=None,
+                                   target=None, outcome="error",
+                                   error_code=401, actor_name=name,
+                                   detail={"reason": "invalid_credentials"})
             raise ApiError(401, "INVALID_CREDENTIALS", "incorrect name or password")
 
         raw = await auth.create_session(conn, account["id"])

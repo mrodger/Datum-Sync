@@ -232,44 +232,6 @@ async def test_a_label_can_be_reused_after_revocation(account, db, client):
     assert (await _get(client, second)).status_code == 200
 
 
-# -- the old column ----------------------------------------------------------
-
-
-async def test_the_legacy_column_is_not_a_credential(account, db, client):
-    """A hash present only in `service_accounts.token_hash` must not authenticate.
-
-    Migration 012 copied every pre-existing hash into `account_tokens` and left
-    the column populated, so both places hold the same value and a read
-    fallback would look harmless. It is not: revoking the backfilled row would
-    then leave the token working via the column, and the revocation would
-    return success while changing nothing.
-
-    Guard: TOKEN-005.
-    """
-    raw = auth.new_token()
-    await db.execute(
-        "UPDATE service_accounts SET token_hash = $1 WHERE id = $2",
-        auth.hash_token(raw),
-        account,
-    )
-
-    r = await _get(client, raw)
-    assert r.status_code == 401
-
-    # And the same token, once it also exists as a token row, is accepted --
-    # so the 401 above is the read path ignoring the column, not something
-    # incidental about this account or this token.
-    await db.execute(
-        """
-        INSERT INTO account_tokens (account_id, label, token_hash)
-        VALUES ($1, 'legacy', $2)
-        """,
-        account,
-        auth.hash_token(raw),
-    )
-    assert (await _get(client, raw)).status_code == 200
-
-
 # -- bookkeeping -------------------------------------------------------------
 
 

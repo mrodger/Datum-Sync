@@ -2,7 +2,15 @@
 
 Not a test module -- run it directly:
 
-    .venv/bin/python tests/break_the_guard.py
+    .venv/bin/python tests/break_the_guard.py             # every case
+    .venv/bin/python tests/break_the_guard.py DASH        # every DASH-* case
+    .venv/bin/python tests/break_the_guard.py DASH-012    # one case
+
+An argument selects by exact id or by prefix. Each case runs pytest once, so the
+whole set is slow enough that a newly added guard tends not to get re-proven
+after the source around it moves; a filter is the difference between checking
+that and not bothering. A filtered run is not a full run -- it reports how many
+it selected, and the exit code only speaks for those.
 
 A test asserting 403 passes just as well against a route that is broken for an
 unrelated reason, and a test that has never been seen to fail is not a gate.
@@ -1552,8 +1560,8 @@ CASES = [
         "AUDIT-009",
         "a failed audit write is counted, not silently swallowed",
         "datum_sync/audit.py",
-        "    except Exception:\n        _dropped += 1",
-        "    except Exception:\n        pass",
+        "            governance,\n            _bounded(detail),\n        )\n    except Exception:\n        _dropped += 1",
+        "            governance,\n            _bounded(detail),\n        )\n    except Exception:\n        pass",
         "tests/test_audit_trace.py::test_a_failed_audit_write_is_counted_not_hidden",
     ),
 
@@ -1741,32 +1749,6 @@ CASES = [
         "tests/test_account_tokens.py::"
         "test_revoking_twice_does_not_move_the_revocation_time",
     ),
-    (
-        "TOKEN-005",
-        "the pre-012 token_hash column is not a fallback read path",
-        "datum_sync/auth.py",
-        "    row = await tokens.resolve(conn, token_hash)\n"
-        "    if row is None:\n"
-        '        raise _unauthenticated("unknown or invalid token")',
-        # The tempting migration-safety measure: if the new table does not know
-        # this token, try the old column. Both hold the same hash after 012's
-        # backfill, so this makes revoking a backfilled row a no-op that
-        # reports success. Only test_account_tokens.py notices.
-        "    row = await tokens.resolve(conn, token_hash)\n"
-        "    if row is None:\n"
-        "        row = await conn.fetchrow(\n"
-        '            "SELECT sa.id AS account_id, sa.name, sa.max_tier, "\n'
-        '            "sa.repo_scope, sa.is_admin, "\n'
-        '            "sa.disabled, sa.vault_scope, NULL::int AS token_id, "\n'
-        '            "NULL::timestamptz AS revoked_at, "\n'
-        '            "sa.token_expires AS expires_at "\n'
-        '            "FROM service_accounts sa WHERE sa.token_hash = $1",\n'
-        "            token_hash,\n"
-        "        )\n"
-        "    if row is None:\n"
-        '        raise _unauthenticated("unknown or invalid token")',
-        "tests/test_account_tokens.py::test_the_legacy_column_is_not_a_credential",
-    ),
     # -- B4: multi-key secrets (key-id byte) ----------------------------------
     (
         "SECRET-005",
@@ -1917,6 +1899,193 @@ CASES = [
         # joins every request ever made to the same row.
         "            \"trace_id\": \"00000000-0000-0000-0000-000000000000\",",
         "tests/test_error_trace.py::test_two_failures_do_not_share_a_trace",
+    ),
+    # -- the failed-auth audit row, which migration 014 made writable
+    (
+        "AUDIT-016",
+        "a refused credential leaves a row that its trace id finds",
+        "datum_sync/api.py",
+        "    if principal is None:\n        if status == 401:",
+        # The behaviour before migration 014: no principal, no row. The response
+        # still carries a trace id, still well-formed, and it joins to nothing --
+        # which is why asserting the id is a UUID proves nothing here.
+        "    if principal is None:\n        if False:",
+        "tests/test_error_trace.py::"
+        "test_a_rejected_request_can_be_looked_up_by_its_trace",
+    ),
+    (
+        "AUDIT-017",
+        "the row records the scheme offered, never the credential",
+        "datum_sync/api.py",
+        "                        detail={\"auth\": _auth_scheme(request)},",
+        # The reflex version, and the reason `_auth_scheme` is a function at all:
+        # it turns the table built to be read after a breach into a list of the
+        # tokens someone was guessing.
+        "                        detail={\"auth\": request.headers.get(\"authorization\")},",
+        "tests/test_error_trace.py::"
+        "test_the_audit_row_for_a_refused_request_never_holds_the_credential",
+    ),
+    # -- the dashboard reads added alongside migrations 014/015
+    (
+        "DASH-001",
+        "a valid token is not an administrative one on the new reads",
+        "datum_sync/api.py",
+        "    \"\"\"Runtime configuration and applied migrations. Admin only.\"\"\"\n"
+        "    auth.require_admin(caller)",
+        # Every route here was written with `caller: Principal = Caller` and no
+        # second check, so it authenticates and then answers anyone. The
+        # docstring keeps saying "Admin only", which is the shape of this bug:
+        # the claim survives the check.
+        "    \"\"\"Runtime configuration and applied migrations. Admin only.\"\"\"",
+        "tests/test_dashboard_routes.py::"
+        "test_admin_routes_refuse_a_non_admin_holding_a_valid_token",
+    ),
+    (
+        "DASH-002",
+        "the platform audit trail is not readable by the accounts it governs",
+        "datum_sync/api.py",
+        "    there is nothing to filter on without inventing a per-row ownership model.\n"
+        "    \"\"\"\n"
+        "    auth.require_admin(caller)",
+        # As shipped. `recent` is the last 20 audit rows across every principal,
+        # returned to any tier-1 account holding any token.
+        "    there is nothing to filter on without inventing a per-row ownership model.\n"
+        "    \"\"\"",
+        "tests/test_dashboard_routes.py::"
+        "test_the_audit_trail_is_not_readable_by_a_scoped_account",
+    ),
+    (
+        "DASH-003",
+        "notifications filters failed jobs by repository scope",
+        "datum_sync/api.py",
+        "    failed_jobs = [r for r in failed_jobs if caller.allows_repo(r[\"repository\"])]",
+        # As shipped: every failed job on the platform, and `jobs.error` carries
+        # whatever the workspace printed on the way down.
+        "    failed_jobs = list(failed_jobs)",
+        "tests/test_dashboard_routes.py::"
+        "test_another_repositorys_failed_jobs_are_not_readable",
+    ),
+    (
+        "DASH-004",
+        "the list of reachable MCP targets is not reconnaissance for any account",
+        "datum_sync/api.py",
+        "    repository on the row to filter by.\n"
+        "    \"\"\"\n"
+        "    auth.require_admin(caller)",
+        "    repository on the row to filter by.\n"
+        "    \"\"\"",
+        "tests/test_dashboard_routes.py::"
+        "test_other_callers_mcp_targets_are_not_readable",
+    ),
+    (
+        "DASH-005",
+        "narrowing notifications did not turn it into an admin-only route",
+        "datum_sync/api.py",
+        "        failed_jobs = await conn.fetch(\n"
+        "            \"\"\"SELECT id, repository, workspace, submitted_by, completed_at, error",
+        # The over-correction, which is the easy mistake once three sibling
+        # routes have just been admin-gated: it passes every leak test in the
+        # file and silently removes the reason the route exists.
+        "        failed_jobs = [] if not caller.is_admin else await conn.fetch(\n"
+        "            \"\"\"SELECT id, repository, workspace, submitted_by, completed_at, error",
+        "tests/test_dashboard_routes.py::"
+        "test_a_scoped_account_still_sees_its_own_failed_jobs",
+    ),
+    (
+        "DASH-006",
+        "the queue is the live view: unfinished jobs only",
+        "datum_sync/api.py",
+        "               WHERE status IN ('queued', 'running')\n"
+        "               ORDER BY submitted_at ASC\"\"\"",
+        # Still a list of jobs, still ordered, still 200 -- and it now grows
+        # without bound as a queue view that never empties.
+        "               ORDER BY submitted_at ASC\"\"\"",
+        "tests/test_dashboard_routes.py::test_the_queue_shows_only_unfinished_jobs",
+    ),
+    (
+        "DASH-007",
+        "a duplicate label is a conflict, and the handler catches only that",
+        "datum_sync/api.py",
+        "            row, raw = await tokens.create(conn, account_id, label, expires_at)\n"
+        "        except asyncpg.UniqueViolationError:",
+        # Catches nothing that is raised, so the unique violation escapes as a
+        # 500. The narrowing is the guard in the other direction too -- see
+        # DASH-008, which is the half a bare `except Exception` swallows.
+        "            row, raw = await tokens.create(conn, account_id, label, expires_at)\n"
+        "        except _NeverRaised:",
+        "tests/test_dashboard_routes.py::test_a_duplicate_label_is_refused_as_a_conflict",
+    ),
+    (
+        "DASH-008",
+        "an empty label is the caller's mistake, not a collision",
+        "datum_sync/api.py",
+        "    if not label:\n"
+        "        raise ApiError(400, \"INVALID_PARAMETER\", \"label is required\")",
+        # As shipped, together with the bare `except Exception` this replaced:
+        # `tokens.create` fails on the NOT NULL, and the handler reports a
+        # missing parameter as a 409 LABEL_TAKEN naming a label of ''.
+        "    if not label:\n        pass",
+        "tests/test_dashboard_routes.py::"
+        "test_a_missing_label_is_a_parameter_error_not_a_conflict",
+    ),
+    (
+        "DASH-009",
+        "a non-numeric expiry is a 400, not a 500",
+        "datum_sync/api.py",
+        "        try:\n"
+        "            days = int(expires_days)\n"
+        "        except ValueError:\n"
+        "            raise ApiError(400, \"INVALID_PARAMETER\", "
+        "\"expires_days must be a number\")",
+        # As shipped: `int()` straight onto caller-supplied JSON, so
+        # `{"expires_days": "soon"}` is an unhandled ValueError and the caller is
+        # told the server broke.
+        "        days = int(expires_days)",
+        "tests/test_dashboard_routes.py::test_a_nonnumeric_expiry_is_refused_not_a_crash",
+    ),
+    (
+        "DASH-010",
+        "an unknown account is a 404, not an empty list",
+        "datum_sync/api.py",
+        "        if account_id is None:\n"
+        "            raise ApiError(404, \"NOT_FOUND\", f\"no such account: {name}\")\n"
+        "        rows = await tokens.list_for_account(conn, account_id)",
+        # `list_for_account(conn, None)` matches nothing, so a misspelt account
+        # answers 200 with `{"items": []}` -- indistinguishable from a real
+        # account holding no tokens.
+        "        rows = await tokens.list_for_account(conn, account_id)",
+        "tests/test_dashboard_routes.py::test_tokens_for_an_unknown_account_are_a_404",
+    ),
+    (
+        "DASH-011",
+        "revocation reports whether it revoked anything",
+        "datum_sync/api.py",
+        "    if not revoked:\n"
+        "        raise ApiError(\n"
+        "            404, \"NOT_FOUND\",\n"
+        "            f\"no live token labelled {label!r} on account {name!r}\"\n"
+        "        )",
+        # A 200 for a label that was never live, which reads to an operator
+        # rotating credentials as confirmation that the old one is dead.
+        "    if not revoked:\n        pass",
+        "tests/test_dashboard_routes.py::test_revoking_a_label_that_is_not_live_is_a_404",
+    ),
+    (
+        "DASH-012",
+        "the OAuth client list is bounded, newest first, and reports the total",
+        "datum_sync/api.py",
+        "               ORDER BY c.created_at DESC LIMIT 100\"\"\"\n"
+        "        )\n"
+        "        total = await conn.fetchval(\"SELECT count(*) FROM oauth_clients\")",
+        # As shipped, and it answers 200 either way -- which is why nothing short
+        # of opening the screen found it. Removing the LIMIT and the total in one
+        # edit is deliberate: they are one property. A bound without a count is a
+        # list that lies about being complete.
+        "               ORDER BY c.created_at\"\"\"\n"
+        "        )\n"
+        "        total = len(rows)",
+        "tests/test_dashboard_routes.py::"
+        "test_the_oauth_client_list_is_bounded_and_says_so",
     ),
 ]
 
@@ -2093,11 +2262,22 @@ def drop_bytecode(path: pathlib.Path) -> None:
     pathlib.Path(cached).unlink(missing_ok=True)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     unproven: list[str] = []
     errors: list[str] = []
 
-    for gid, label, relpath, old, new, test in CASES:
+    wanted = list(argv if argv is not None else sys.argv[1:])
+    if wanted:
+        selected = [c for c in CASES if any(
+            c[0] == w or c[0].startswith(w) for w in wanted)]
+        if not selected:
+            print(f"no case matches {' '.join(wanted)}")
+            return 2
+        print(f"{len(selected)} of {len(CASES)} case(s) selected\n")
+    else:
+        selected = list(CASES)
+
+    for gid, label, relpath, old, new, test in selected:
         path = ROOT / relpath
         original = path.read_text()
         if original.count(old) != 1:
@@ -2137,7 +2317,9 @@ def main() -> int:
             print(f"  ERROR     {gid}  {test} {outcome}")
 
     print()
-    if UNPROVABLE:
+    # Only on a full run. Under a filter this list is about guards the run did
+    # not look at, which reads as a finding and is not one.
+    if UNPROVABLE and not wanted:
         print(f"{len(UNPROVABLE)} guard(s) registered with no break case:")
         for gid, why in sorted(UNPROVABLE.items()):
             print(f"  - {gid}: {why}")
@@ -2152,7 +2334,8 @@ def main() -> int:
             print(f"  - {u}")
     if errors or unproven:
         return 1
-    print(f"All {len(CASES)} guards proven: removing each one breaks its test.")
+    scope = f"All {len(CASES)}" if not wanted else f"{len(selected)} of {len(CASES)}"
+    print(f"{scope} guards proven: removing each one breaks its test.")
     return 0
 
 
