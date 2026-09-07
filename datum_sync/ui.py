@@ -117,6 +117,7 @@ async def login(request: Request, body: dict = Body(...)) -> JSONResponse:
         repo_scope=account["repo_scope"],
         is_admin=account["is_admin"],
         vault_scope=auth.vault_scope_of(account),
+        rate_limit_per_min=account["rate_limit_per_min"],
         source="session",
     )
     response = JSONResponse(auth.principal_json(principal))

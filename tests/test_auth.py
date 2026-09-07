@@ -191,7 +191,7 @@ def test_scope_patterns_are_two_literal_forms():
     p = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["SCIMAC/*"],
         is_admin=False, vault_scope=None,
-        source="token",
+        rate_limit_per_min=None, source="token",
     )
     assert p.allows_repo("SCIMAC")
     assert not p.allows_repo("SCIMAC_OTHER")
@@ -200,21 +200,21 @@ def test_scope_patterns_are_two_literal_forms():
     glob = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["S*"],
         is_admin=False, vault_scope=None,
-        source="token",
+        rate_limit_per_min=None, source="token",
     )
     assert not glob.allows_repo("SCIMAC")
 
     everything = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["*"],
         is_admin=False, vault_scope=None,
-        source="token",
+        rate_limit_per_min=None, source="token",
     )
     assert everything.allows_repo("anything")
 
     nothing = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=[],
         is_admin=False, vault_scope=None,
-        source="token",
+        rate_limit_per_min=None, source="token",
     )
     # The only two ways to hold everything are `*` and naming them; an empty
     # list is not a third.
@@ -255,7 +255,7 @@ async def test_an_unset_scope_grants_nothing(db):
         unset = auth.Principal(
             account_id=1, name="x", max_tier=1, repo_scope=row["repo_scope"],
             is_admin=False, vault_scope=auth.vault_scope_of(row),
-            source="token",
+            rate_limit_per_min=None, source="token",
         )
         # Both directions the same: what was never granted is not held.
         assert not unset.allows_repo("SCIMAC")
@@ -280,13 +280,13 @@ def test_the_wildcard_is_not_passed_to_sql_as_a_repository_name():
 
     everything = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["*"],
-        is_admin=False, vault_scope=None, source="token",
+        is_admin=False, vault_scope=None, rate_limit_per_min=None, source="token",
     )
     assert api._scope_sql(everything, "repository", 1) == ("", [])
 
     scoped = auth.Principal(
         account_id=1, name="x", max_tier=1, repo_scope=["SCIMAC/*"],
-        is_admin=False, vault_scope=None, source="token",
+        is_admin=False, vault_scope=None, rate_limit_per_min=None, source="token",
     )
     fragment, args = api._scope_sql(scoped, "repository", 1)
     assert fragment == " AND repository = ANY($1::text[])"

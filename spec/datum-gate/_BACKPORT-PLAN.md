@@ -439,7 +439,7 @@ Two facts frame the rest:
 | C1 | Audit the REST surface: trace + audit middleware | +1 middleware, no schema | yes | B2 | **done 2026-09-06** |
 | C1a | `trace_id` in the error envelope, and a crash gets one too | response body | yes | C1 | **done 2026-09-06** |
 | C2 | `Content-Security-Policy` on `/serve/` | response headers | yes | — | **done 2026-09-07** |
-| C3 | A rate limit that exists | +1 middleware, makes a dead column real | yes | C1 | |
+| C3 | A rate limit that exists | +1 middleware, makes a dead column real | yes | C1 | **done 2026-09-07** |
 | C4 | Resolve `quarantine`/`promote`; symlink check on write | `vault.ACTIONS` or `vault_fs` | yes | — | |
 | C5 | Delivery outbox for `http_request` | +1 table | yes | — | |
 
@@ -620,6 +620,54 @@ Not done here: `frame-ancestors` (nothing in the corpus asks for it), and the
 `jobs_per_hour` and `concurrent_jobs` appear only in spec files. Login lockout exists
 (`oauth.py:422`, `ui.py:85`) and is the whole of it. Depends on C1 only because both
 are middleware and C1 settles the ordering.
+
+### What was built — 2026-09-07
+
+`datum_sync/ratelimit.py`: a sliding 60-second window keyed on `account_id`, in memory,
+plus a `rate_limit` middleware in `api.py` that answers `429 RATE_LIMITED` with a
+`Retry-After` header. `rate_limit_per_min` now rides on `Principal` and is read on all
+five resolve paths (agent, oauth, token, local, session). `python -m datum_sync.accounts
+rate-limit NAME <N|none>` sets it, and `accounts list` shows it as a `rate:N` flag.
+
+Four decisions worth naming, because each went against something:
+
+**The middleware is declared *before* `authenticate` so that it runs *after* it.** Each
+`@app.middleware` inserts at index 0, so the first one written is the last one entered.
+Declared in the position that reads correctly, it would run before the principal exists,
+`getattr` would return None, and every request would be waved through with nothing
+raising. Guard RATE-004 breaks it by replacing the `getattr` with `None` — which is
+exactly what the wrong order produces — and `test_the_limit_is_enforced_over_http` goes
+red. It is still *inside* `trace_and_audit`, so a 429 is an audit row.
+
+**Keyed on the account, not the credential.** An account with three tokens and two agents
+gets one window. Keyed per credential, an account could raise its own limit by minting
+another token — something every account holder can do unaided, which would make the
+number advisory. The consequence is intended: an account's agents compete for its budget.
+
+**Refused requests are not recorded.** Counting them lets a retrying client hold its own
+window shut past the point where the requests that filled it have aged out, so the
+`Retry-After` it was quoted becomes wrong in the direction that matters. Worth noting how
+this nearly shipped unproven: the first version of the test asserted that the quoted wait
+does not grow, which is *true under the bug* — the wait is computed from the oldest hit,
+which does not move. `break_the_guard` reported RATE-002 UNPROVEN and the test was
+rewritten to assert the user-visible property instead (honour the wait, get in).
+
+**No `rate_windows` table.** 03-authority.md §8 adds one when there is more than one
+process; `api.py` ends in `uvicorn.run(app, ...)` with no `workers` argument. The hazard
+this leaves is silent and should be stated: `--workers N` would multiply every limit by
+N with nothing failing. `test_the_window_is_per_process` asserts `workers=` does not
+appear in `api.py`, and its docstring says that if it ever fails the fix is the table,
+not the assertion.
+
+`NULL` means unlimited, and every account that exists has one — fail-open here only
+because the alternative is that deploying C3 silently throttles every caller that
+predates it. The CLI refuses `0` rather than treating it as unlimited: it reads as "no
+limit" to a person and means "refuse everything" to the code, and both intents already
+have a spelling (`none`, and `disable`).
+
+683 tests pass; 178/178 guards proven (RATE-001..004 added). The CLI was exercised
+against the live database on all five paths — set, display, reject `0`, reject
+non-numeric, clear, unknown account.
 
 ### C4 — two grant actions authorise nothing
 

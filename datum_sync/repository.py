@@ -54,6 +54,10 @@ LOCAL_PUBLISHER = Principal(
     # already read the mount -- it would only mean a publish path that carries
     # vault authority it has no use for.
     vault_scope=None,
+    # Unlimited, for the same reason max_tier is 4: this principal only exists
+    # on a shell that already has the database URL. Nothing it does passes
+    # through the HTTP middleware that enforces the limit anyway.
+    rate_limit_per_min=None,
     source="local",
 )
 

@@ -42,7 +42,7 @@ from datum_sync import auth
 # different thing and is enforced (proxy.py).
 _ACCOUNT_COLS = """
     sa.id AS account_id, sa.name, sa.max_tier, sa.repo_scope,
-    sa.is_admin, sa.disabled, sa.vault_scope
+    sa.is_admin, sa.disabled, sa.vault_scope, sa.rate_limit_per_min
 """
 
 # Never `token_hash`. There is no read path that returns it, so no route can

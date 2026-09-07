@@ -133,6 +133,16 @@ class Principal:
     # fails closed, raises nothing, and passes every existing test. Requiring it
     # turns that omission into a TypeError at the call site.
     vault_scope: dict | None
+    # Requests per minute this caller may make, or None for no limit.
+    # `service_accounts.rate_limit_per_min`, which was declared in 001_core.sql
+    # and read by nothing until C3.
+    #
+    # No default value, for the same reason as `vault_scope` above and with the
+    # hazard pointing the other way: a construction site that forgets this field
+    # would get a principal nothing rate-limits. That failure is silent, passes
+    # every test, and is invisible until someone goes looking for the 429 that
+    # never came. Requiring it makes the omission a TypeError instead.
+    rate_limit_per_min: int | None
     client_id: str | None = None
     scope: str | None = None
     # Agent identity — set when the token belongs to an agent, not the account.
@@ -210,6 +220,9 @@ DEV_PRINCIPAL = Principal(
     # already wide open, so a narrow vault_scope would not be a safety measure
     # -- it would just make the vault tools fail in a way that looks like a bug.
     vault_scope={"read": ["**"], "write": ["**"], "quarantine": ["**"], "promote": ["**"]},
+    # Unlimited, matching every other permission here. A limit with the auth
+    # flag off would rate-limit the developer who turned authentication off.
+    rate_limit_per_min=None,
     source="auth-disabled",
 )
 
@@ -310,6 +323,11 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
             repo_scope=agent_row["repo_scope"],
             is_admin=False,  # agents are never admin
             vault_scope=vault_scope_of(agent_row),
+            # The parent account's limit, not one of the agent's own. Agents
+            # have no rate_limit_per_min column, and giving each of an account's
+            # agents a fresh window would let the account raise its own limit by
+            # minting agents -- the one thing account holders can do unaided.
+            rate_limit_per_min=agent_row["rate_limit_per_min"],
             source="agent",
             agent_id=agent_row["id"],
             agent_name=agent_row["name"],
@@ -321,7 +339,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         SELECT t.id, t.client_id, t.scope, t.resource, t.expires_at,
                t.revoked_at, t.rotated_to,
                a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.is_admin, a.disabled, a.vault_scope
+               a.is_admin, a.disabled, a.vault_scope, a.rate_limit_per_min
           FROM oauth_tokens t
           JOIN service_accounts a ON a.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'access'
@@ -354,6 +372,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
             repo_scope=row["repo_scope"],
             is_admin=row["is_admin"],
             vault_scope=vault_scope_of(row),
+            rate_limit_per_min=row["rate_limit_per_min"],
             source="oauth",
             client_id=row["client_id"],
             scope=row["scope"],
@@ -386,6 +405,7 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         repo_scope=row["repo_scope"],
         is_admin=row["is_admin"],
         vault_scope=vault_scope_of(row),
+        rate_limit_per_min=row["rate_limit_per_min"],
         source="token",
     )
 
@@ -412,7 +432,7 @@ async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
     row = await conn.fetchrow(
         """
         SELECT id, name, max_tier, repo_scope, is_admin,
-               disabled, vault_scope
+               disabled, vault_scope, rate_limit_per_min
           FROM service_accounts
          WHERE name = $1
         """,
@@ -430,6 +450,7 @@ async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
         repo_scope=row["repo_scope"],
         is_admin=row["is_admin"],
         vault_scope=vault_scope_of(row),
+        rate_limit_per_min=row["rate_limit_per_min"],
         source="local",
     )
 
@@ -489,7 +510,7 @@ async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal
         """
         SELECT t.id, t.expires_at, t.revoked_at,
                a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.is_admin, a.disabled, a.vault_scope
+               a.is_admin, a.disabled, a.vault_scope, a.rate_limit_per_min
           FROM oauth_tokens t
           JOIN service_accounts a ON a.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'session'
@@ -518,6 +539,7 @@ async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal
         repo_scope=row["repo_scope"],
         is_admin=row["is_admin"],
         vault_scope=vault_scope_of(row),
+        rate_limit_per_min=row["rate_limit_per_min"],
         source="session",
     )
 

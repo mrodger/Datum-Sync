@@ -41,7 +41,7 @@ from starlette.datastructures import UploadFile
 
 from datum_sync import (
     agents, audit, auth, automations, config, connections, crypto, db, errors, events,
-    execute, jobs, mcp, oauth, schedules, services, tokens, ui, uploads,
+    execute, jobs, mcp, oauth, ratelimit, schedules, services, tokens, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -150,6 +150,46 @@ errors.install(app)
 oauth.install(app)
 ui.install(app)
 app.include_router(mcp.router)
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    """Enforce `service_accounts.rate_limit_per_min`. 429 with Retry-After.
+
+    Registered *before* `authenticate` and therefore innermost -- the opposite
+    of what the file reads like, and load-bearing rather than stylistic. Each
+    `@app.middleware` inserts at index 0, so the first one written is the last
+    one entered, and this has to be entered after `authenticate` because it
+    reads the principal that `authenticate` attaches. Move this decorator below
+    `authenticate` and `request.state.principal` is unset on every request: the
+    `getattr` below returns None, the limit is never applied, and nothing fails.
+    `test_the_limit_runs_inside_authentication` asserts the order for that
+    reason -- the defect it catches is invisible in behaviour except by the
+    absence of a 429.
+
+    Still inside `trace_and_audit`, which is outermost, so a refused request
+    gets an audit row and a trace id like any other.
+
+    Unauthenticated paths are skipped rather than limited by IP. There is no
+    account to charge, and an IP window would be a different control with
+    different failure modes (proxies, NAT) smuggled in under the same name. The
+    login form is already rate-limited by name in `auth.authenticate_password`.
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        return await call_next(request)
+
+    retry_after = ratelimit.check(principal.account_id, principal.rate_limit_per_min)
+    if retry_after:
+        return errors.envelope(
+            request,
+            429,
+            "RATE_LIMITED",
+            f"rate limit of {principal.rate_limit_per_min} requests per minute "
+            f"exceeded; retry in {retry_after} seconds",
+            headers={"Retry-After": str(retry_after)},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")

@@ -241,12 +241,42 @@ async def disable(name: str, value: bool) -> int:
     return 0
 
 
+async def rate_limit(name: str, per_min: int | None) -> int:
+    """Set `rate_limit_per_min`, or clear it with `none`.
+
+    This subcommand is the whole reason the limit is reachable. The column has
+    existed since 001_core.sql with no way to set it short of psql, which is
+    how it stayed unread for as long as it did -- a control nobody can turn on
+    is indistinguishable from one that is not implemented.
+    """
+    conn = await _connect()
+    try:
+        updated = await conn.fetchval(
+            "UPDATE service_accounts SET rate_limit_per_min = $2 "
+            "WHERE name = $1 RETURNING id",
+            name,
+            per_min,
+        )
+    finally:
+        await conn.close()
+
+    if updated is None:
+        print(f"no such account: {name}", file=sys.stderr)
+        return 1
+    if per_min is None:
+        print(f"{name} is no longer rate limited")
+    else:
+        print(f"{name} is limited to {per_min} requests per minute")
+    return 0
+
+
 async def show() -> int:
     conn = await _connect()
     try:
         rows = await conn.fetch(
             """
             SELECT a.name, a.max_tier, a.repo_scope, a.is_admin, a.disabled,
+                   a.rate_limit_per_min,
                    a.password_hash IS NOT NULL AS has_password,
                    -- From account_tokens, never a.token_hash: that column has
                    -- not been the credential since migration 012 and reading
@@ -269,7 +299,7 @@ async def show() -> int:
     if not rows:
         print("no accounts")
         return 0
-    print(f"{'NAME':20} {'TIER':>4}  {'SCOPE':24} {'FLAGS':16} {'OAUTH':>5}  LAST USED")
+    print(f"{'NAME':20} {'TIER':>4}  {'SCOPE':24} {'FLAGS':24} {'OAUTH':>5}  LAST USED")
     for r in rows:
         # `*` prints as itself. It used to print as "(all)" because the value
         # was NULL and had to be translated; now the row holds the wildcard the
@@ -286,9 +316,14 @@ async def show() -> int:
             )
             if on
         )
+        # Shown here so the limit is visible where it is set. A control that
+        # can be turned on but not read back gets set twice and trusted once.
+        if r["rate_limit_per_min"] is not None:
+            flags = f"{flags},rate:{r['rate_limit_per_min']}" if flags \
+                else f"rate:{r['rate_limit_per_min']}"
         used = r["last_used_at"].strftime("%Y-%m-%d %H:%M") if r["last_used_at"] else "never"
         print(
-            f"{r['name']:20} {r['max_tier']:>4}  {scope:24} {flags:16} "
+            f"{r['name']:20} {r['max_tier']:>4}  {scope:24} {flags:24} "
             f"{r['live_tokens']:>5}  {used}"
         )
     return 0
@@ -339,6 +374,14 @@ def main() -> int:
     p = sub.add_parser("passwd", help="set the consent-screen password")
     p.add_argument("name")
 
+    p = sub.add_parser("rate-limit", help="cap this account's requests per minute")
+    p.add_argument("name")
+    p.add_argument(
+        "per_min",
+        metavar="N|none",
+        help="requests per minute, or 'none' to remove the limit",
+    )
+
     p = sub.add_parser("disable", help="refuse this account's credentials")
     p.add_argument("name")
     p = sub.add_parser("enable", help="undo disable")
@@ -376,6 +419,23 @@ def main() -> int:
             print("refusing to set an empty password", file=sys.stderr)
             return 1
         return asyncio.run(passwd(args.name, password))
+    if args.command == "rate-limit":
+        if args.per_min.lower() in ("none", "off"):
+            return asyncio.run(rate_limit(args.name, None))
+        try:
+            n = int(args.per_min)
+        except ValueError:
+            print(f"not a number: {args.per_min}", file=sys.stderr)
+            return 1
+        if n < 1:
+            # Zero would read as "no limit" to anyone typing it and mean "refuse
+            # every request" to the code. Rejected rather than translated: an
+            # operator who means unlimited has `none`, and one who means locked
+            # out has `disable`.
+            print("rate limit must be at least 1; use 'none' to remove it "
+                  "or `disable` to lock the account out", file=sys.stderr)
+            return 1
+        return asyncio.run(rate_limit(args.name, n))
     if args.command in ("disable", "enable"):
         return asyncio.run(disable(args.name, args.command == "disable"))
     return asyncio.run(show())

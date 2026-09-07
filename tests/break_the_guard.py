@@ -1123,6 +1123,61 @@ CASES = [
         "tests/test_services.py::test_serve_sets_the_policy_for_the_services_type",
     ),
     (
+        # The classic off-by-one, written the way it gets written: `>` reads
+        # like "over the limit" in English and admits limit+1 in code.
+        "RATE-001",
+        "the limit admits exactly the number set",
+        "datum_sync/ratelimit.py",
+        "    if len(recent) >= limit:",
+        "    if len(recent) > limit:",
+        "tests/test_ratelimit.py::test_the_limit_admits_exactly_the_number_set",
+    ),
+    (
+        # "Count every request" is the obvious reading of a rate limit, and it
+        # turns retrying into a self-extending lockout.
+        "RATE-002",
+        "a refused request is not recorded",
+        "datum_sync/ratelimit.py",
+        "        _hits[account_id] = recent\n"
+        "        # Room appears when the oldest hit leaves the window.",
+        "        recent.append(now)\n"
+        "        _hits[account_id] = recent\n"
+        "        # Room appears when the oldest hit leaves the window.",
+        "tests/test_ratelimit.py::test_a_refused_request_is_not_recorded",
+    ),
+    (
+        "RATE-003",
+        "the limit is applied to real requests",
+        "datum_sync/api.py",
+        "    retry_after = ratelimit.check(principal.account_id, "
+        "principal.rate_limit_per_min)",
+        "    retry_after = 0",
+        "tests/test_ratelimit.py::test_the_limit_is_enforced_over_http",
+    ),
+    (
+        # Not a typo anyone would make -- it is what the middleware *sees* if
+        # it is registered on the wrong side of `authenticate`. Breaking it
+        # this way reproduces the ordering defect without moving a decorator,
+        # and proves the ordering is load-bearing rather than stylistic.
+        "RATE-004",
+        "the limiter runs after the principal is attached",
+        "datum_sync/api.py",
+        # Two lines, because `trace_and_audit` reads the principal the same
+        # way and a one-line anchor would break both middlewares at once --
+        # proving nothing about either.
+        "    principal = getattr(request.state, \"principal\", None)\n"
+        "    if principal is None:\n"
+        "        return await call_next(request)\n"
+        "\n"
+        "    retry_after",
+        "    principal = None\n"
+        "    if principal is None:\n"
+        "        return await call_next(request)\n"
+        "\n"
+        "    retry_after",
+        "tests/test_ratelimit.py::test_the_limit_is_enforced_over_http",
+    ),
+    (
         # Not a leak -- the opposite. The v2 assets are fetched by a page
         # nobody has signed in to yet, so gating them means an unstyled,
         # inert sign-in form, and the only symptom is in the console.

@@ -31,7 +31,7 @@ def _principal(vault_scope=SCOPE) -> Principal:
         repo_scope=["*"],
         is_admin=False,
         vault_scope=vault_scope,
-        source="test",
+        rate_limit_per_min=None, source="test",
     )
 
 

@@ -37,7 +37,7 @@ _COLUMNS_WITH_ACCOUNT = f"""
     {_COLS_A},
     sa.name AS account_name, sa.max_tier, sa.repo_scope,
     sa.is_admin, sa.disabled AS account_disabled,
-    sa.vault_scope
+    sa.vault_scope, sa.rate_limit_per_min
 """
 
 

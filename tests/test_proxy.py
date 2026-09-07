@@ -42,7 +42,7 @@ def _principal(
         repo_scope=["*"],
         is_admin=False,
         vault_scope=None,
-        source="agent",
+        rate_limit_per_min=None, source="agent",
         agent_id=agent_id,
         agent_name=agent_name,
         proxy_grants=proxy_grants or [],
@@ -105,7 +105,7 @@ def test_bare_account_token_denied():
     p = Principal(
         account_id=1, name="acct", max_tier=4, repo_scope=["*"],
         is_admin=True, vault_scope=None,
-        source="token",
+        rate_limit_per_min=None, source="token",
     )
     with pytest.raises(ApiError) as exc:
         check_proxy_access(p, _conn_row(), "openrouter")
