@@ -1897,7 +1897,12 @@ async def serve(
         status = 501 if row["type"] in services.SUPERVISED else 404
         raise ApiError(status, "SERVICE_UNAVAILABLE", str(e)) from None
 
-    return FileResponse(path)
+    # On every file, not only the ones that parse as HTML. An SVG served from
+    # this origin runs its own script when navigated to directly, and deciding
+    # "is this HTML" from a guessed media type is a branch that fails open for
+    # exactly the file whose extension is unusual. A policy on a PNG costs
+    # nothing.
+    return FileResponse(path, headers={"Content-Security-Policy": services.csp(row["type"])})
 
 
 # -- account tokens -------------------------------------------------------

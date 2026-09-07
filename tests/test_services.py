@@ -21,8 +21,11 @@ sends a service artifact to `/serve/` instead of returning a directory as a file
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
 
 import httpx
 import pytest
@@ -607,3 +610,99 @@ async def test_a_service_artifact_is_not_downloadable(client, db, served):
         f"/rest/v1/transformations/jobs/id/{job_id}/artifacts/{served}")
     assert r.status_code == 409
     assert f"/serve/{served}/" in r.json()["message"]
+
+
+# --------------------------------------------------------------------------
+# Content-Security-Policy (C2)
+# --------------------------------------------------------------------------
+
+
+def test_csp_never_permits_inline():
+    """No policy this module can emit carries 'unsafe-inline'.
+
+    Written over `_CSP` and the fallback rather than over one type, because the
+    value of the header is entirely in what it forbids: a policy allowing inline
+    script permits the injection CSP exists to stop, while still being present
+    on every response and reading as implemented.
+
+    Guard: SERVICE-016.
+    """
+    for policy in [*services._CSP.values(), services.CSP_FALLBACK]:
+        assert "unsafe-inline" not in policy
+        assert "unsafe-eval" not in policy
+
+
+def test_csp_covers_every_type_this_server_serves():
+    """A type in STATIC with no policy of its own falls back to denying everything.
+
+    The decay this catches: STATIC grows a fourth member, `_CSP` is not updated,
+    and the new type serves content under whatever `.get()` would otherwise have
+    defaulted to. Unprotected is silent; `default-src 'none'` is not.
+    """
+    assert set(services.STATIC) == set(services._CSP)
+    assert services.csp("service/newthing") == "default-src 'none'"
+
+
+def test_dashboard_policy_is_the_tighter_one():
+    """A dashboard is the type that calls /rest/v1/ with the session cookie."""
+    assert services.csp("service/dashboard") == "default-src 'self'; connect-src 'self'"
+    assert "data:" not in services.csp("service/dashboard")
+    assert "data:" in services.csp("service/static")
+
+
+async def test_serve_sets_the_policy_for_the_services_type(client, db, served):
+    """The header on the response, carrying the row's type -- not a constant.
+
+    Asserted by flipping the stored type and re-fetching the same URL: a
+    hardcoded header passes a single-type test, and this is the cheapest form of
+    the question "does it read the row at all".
+
+    Guard: SERVICE-017.
+    """
+    r = await client.get(f"/serve/{served}/")
+    assert r.headers["content-security-policy"] == "default-src 'self' data: blob:"
+
+    await db.execute(
+        "UPDATE hosted_services SET type = 'service/dashboard' WHERE name = $1",
+        served,
+    )
+    r = await client.get(f"/serve/{served}/")
+    assert r.headers["content-security-policy"] == (
+        "default-src 'self'; connect-src 'self'"
+    )
+
+
+def test_the_reference_site_complies_with_the_policy_it_is_served_under():
+    """The one hosted service in this repository obeys its own CSP.
+
+    Not a style rule. Before C2 this page was 13 inline handlers and an inline
+    <script>, and under `default-src 'self' data: blob:` a browser rendered the
+    markup, applied none of the CSS and ran none of the JS -- a page that looks
+    served and is inert, reporting itself only to the console. The fixtures are
+    two files with an external stylesheet, so every route test passed while the
+    only real site was dead.
+
+    Static, because the alternative is a browser in the unit suite. It cannot
+    see a violation from a CDN URL; it can see the one that actually happened.
+    """
+    page = (ROOT / "reference-images" / "index.html").read_text()
+    assert re.search(r"\son[a-z]+\s*=\s*[\"']", page) is None
+    assert "<style" not in page
+    assert re.search(r"\sstyle\s*=\s*[\"']", page) is None
+    assert re.search(r"<script(?![^>]*\ssrc=)", page) is None
+
+    app_js = (ROOT / "reference-images" / "assets" / "app.js").read_text()
+    assert re.search(r"\son(click|input|change|load|error)\s*=\s*\\?[\"']", app_js) is None
+
+
+async def test_serve_sets_the_policy_on_files_that_are_not_html(client, served):
+    """Deliberately not HTML-only, which is what 13-hosted-services.md §6 says.
+
+    An SVG served from this origin executes its own script when navigated to
+    directly, so an HTML-only rule leaves the one non-HTML type that can run
+    code uncovered -- and deciding "is this HTML" from a guessed media type
+    fails open for exactly the file whose extension is unusual.
+    """
+    r = await client.get(f"/serve/{served}/assets/site.css")
+    assert r.status_code == 200
+    assert r.headers["content-security-policy"] == "default-src 'self' data: blob:"

@@ -42,6 +42,41 @@ TYPES = STATIC + SUPERVISED
 
 INDEX = "index.html"
 
+# Content-Security-Policy per service type, from 13-hosted-services.md §6.
+#
+# `/serve/` returns workspace-authored content from the same origin that holds
+# the UI's SameSite=Lax session cookie. Traversal into the namespace is already
+# prevented by `resolve()`; this is the other half -- what the content may do
+# once it is legitimately served.
+#
+# A dashboard is the tighter of the two because it is the type that calls
+# `/rest/v1/` with the session cookie attached: `connect-src 'self'` is what
+# stops a compromised dashboard reading the API and POSTing the result to a
+# third-party origin. static and pwa get `data:`/`blob:` because an offline app
+# builds object URLs and inlines its own icons, and neither scheme can reach
+# another host.
+#
+# Neither policy carries 'unsafe-inline'. That is the whole substance of the
+# header -- a policy that permits inline script permits the injection class CSP
+# exists to stop, and would leave this a header that scans well and defends
+# nothing.
+_CSP = {
+    "service/dashboard": "default-src 'self'; connect-src 'self'",
+    "service/static": "default-src 'self' data: blob:",
+    "service/pwa": "default-src 'self' data: blob:",
+}
+
+# The policy for a type this table does not name. Reached only if STATIC grows a
+# member without a policy being chosen for it, so it denies everything rather
+# than defaulting to the laxest entry: a new service type appearing unprotected
+# is silent, and appearing broken is not.
+CSP_FALLBACK = "default-src 'none'"
+
+
+def csp(type_: str) -> str:
+    """The Content-Security-Policy header value for a hosted service type."""
+    return _CSP.get(type_, CSP_FALLBACK)
+
 _COLUMNS = (
     "id, name, type, repository, workspace, source_job, path, command, port, "
     "status, pid, started_at, last_health, updated_at"

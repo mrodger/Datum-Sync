@@ -1103,6 +1103,26 @@ CASES = [
         "tests/test_services.py::test_a_service_artifact_is_not_downloadable",
     ),
     (
+        # The break is the version someone would actually write: keep the
+        # header, relax it until the page in front of you works again. A test
+        # asserting only that the header is *present* passes against this.
+        "SERVICE-016",
+        "no hosted-service CSP permits inline script",
+        "datum_sync/services.py",
+        "    \"service/static\": \"default-src 'self' data: blob:\",",
+        "    \"service/static\": \"default-src 'self' data: blob: 'unsafe-inline'\",",
+        "tests/test_services.py::test_csp_never_permits_inline",
+    ),
+    (
+        "SERVICE-017",
+        "/serve/ sends the policy for the row's own type",
+        "datum_sync/api.py",
+        "    return FileResponse(path, headers={\"Content-Security-Policy\": "
+        "services.csp(row[\"type\"])})",
+        "    return FileResponse(path)",
+        "tests/test_services.py::test_serve_sets_the_policy_for_the_services_type",
+    ),
+    (
         # Not a leak -- the opposite. The v2 assets are fetched by a page
         # nobody has signed in to yet, so gating them means an unstyled,
         # inert sign-in form, and the only symptom is in the console.

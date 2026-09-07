@@ -438,7 +438,7 @@ Two facts frame the rest:
 |---|---|---|---|---|---|
 | C1 | Audit the REST surface: trace + audit middleware | +1 middleware, no schema | yes | B2 | **done 2026-09-06** |
 | C1a | `trace_id` in the error envelope, and a crash gets one too | response body | yes | C1 | **done 2026-09-06** |
-| C2 | `Content-Security-Policy` on `/serve/` | response headers | yes | — | |
+| C2 | `Content-Security-Policy` on `/serve/` | response headers | yes | — | **done 2026-09-07** |
 | C3 | A rate limit that exists | +1 middleware, makes a dead column real | yes | C1 | |
 | C4 | Resolve `quarantine`/`promote`; symlink check on write | `vault.ACTIONS` or `vault_fs` | yes | — | |
 | C5 | Delivery outbox for `http_request` | +1 table | yes | — | |
@@ -571,6 +571,48 @@ repository is `13-hosted-services.md:114` specifying one. `/serve/{name}/` retur
 workspace-authored HTML from the same origin that holds the `SameSite=Lax` session
 cookie. Path traversal into `/serve/` is already prevented (`is_relative_to`) — this is
 the other half, the content once it is legitimately served.
+
+### What was built — 2026-09-07
+
+`services.csp(type_)` and one header on the `/serve/` response. 671 tests pass,
+174 guards proven, registry 13/13. Guards SERVICE-016 (no policy permits inline)
+and SERVICE-017 (the header carries the row's own type).
+
+The header itself was four lines. The finding was what it did to the content:
+
+- **The policy killed the only real hosted service, and every test passed.**
+  `reference-images` is a registered `service/static` and a working app — 13
+  inline `on*=` handlers, an inline `<style>`, an inline `<script>`. Under
+  `default-src 'self' data: blob:` a browser rendered its markup, applied none
+  of the CSS and ran none of the JS. The test fixture is two files with an
+  external stylesheet, so it complies by accident: **the fixture was not
+  representative of the content the feature governs**, and no unit test could
+  have found this. A browser, an ephemeral static server sending the real
+  header, and one `evaluate()` found it in a minute.
+- **Fixed by de-inlining rather than by relaxing the policy.** `assets/app.css`,
+  `assets/app.js`, `data-action` attributes and two delegated listeners on
+  `document`. Delegation rather than per-node listeners because `render()`
+  replaces the gallery's `innerHTML`, which would drop them. A policy that ships
+  with `'unsafe-inline'` on day one to keep one page working is a policy that
+  permits the injection class it exists to stop, and does not get tightened
+  later.
+- **`test_the_reference_site_complies_with_the_policy_it_is_served_under`** is
+  static, and asserts the absence of inline handlers in both the page and the
+  generated markup inside `app.js` — the templated `onclick="${...}"` is the
+  half that a check reading only the HTML would miss. Verified it fails by
+  putting one handler back.
+- **Deviation from `13-hosted-services.md` §6, deliberate.** The doc says the
+  header goes on HTML responses. It goes on every response instead: an SVG
+  served from this origin runs its own script when navigated to directly, so
+  HTML-only leaves the one non-HTML type that can execute uncovered — and
+  deciding "is this HTML" from a guessed media type fails *open* for the file
+  whose extension is unusual. The header on a PNG costs nothing.
+- **An unknown type gets `default-src 'none'`, not the laxest entry.** If
+  `STATIC` grows a member and `_CSP` is not updated, a `.get()` default would
+  serve it unprotected and silently. A test asserts the two sets are equal.
+
+Not done here: `frame-ancestors` (nothing in the corpus asks for it), and the
+`serve.read` audit row from §5 — that is C1's `via` column and a separate item.
 
 ### C3 — nothing is rate limited except the login form
 

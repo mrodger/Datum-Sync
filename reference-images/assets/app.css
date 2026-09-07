@@ -1,0 +1,351 @@
+/* Datum-Sync design system — dark/light zone split, brand colours, type scale.
+ * Self-contained: no external CSS dependency so the hosted service works standalone. */
+
+:root {
+  --navy:   #1D3A5C;
+  --amber:  #C89632;
+  --bg:     #0F1923;
+  --panel:  #16232F;
+  --surface:#1B2C3D;
+  --border: #27394B;
+  --text:   #E8EEF4;
+  --muted:  #8FA3B5;
+
+  --body:    "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --heading: "Space Grotesk", var(--body);
+  --mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --nav-width: 250px;
+  --topbar: 56px;
+  --gutter: 32px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; background: var(--bg); color: var(--text);
+  font-family: var(--body); font-size: 14px; line-height: 1.5; }
+
+h1, h2, h3 { font-family: var(--heading); font-weight: 600; }
+
+/* ── Chrome: sidebar + topbar + content ─────────────────────────────── */
+
+.chrome {
+  display: grid;
+  grid-template-columns: var(--nav-width) 1fr;
+  grid-template-rows: var(--topbar) 1fr;
+  height: 100%;
+}
+
+.sidebar {
+  grid-row: 1 / -1;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 16px 0;
+  overflow-y: auto;
+}
+
+.brand {
+  padding: 0 16px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.brand h2 { font-size: 15px; color: var(--amber); letter-spacing: -0.02em; }
+.brand .subtitle { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.nav-section {
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  height: 36px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: all 0.12s;
+  user-select: none;
+}
+.nav-item:hover { color: var(--text); background: var(--surface); }
+.nav-item.active {
+  color: var(--text);
+  border-left-color: var(--amber);
+  background: var(--surface);
+}
+.nav-item .count {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--muted);
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.topbar {
+  background: #ffffff;
+  border-bottom: 1px solid #e2e2e2;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--gutter);
+  gap: 16px;
+}
+.topbar h1 { font-size: 17px; color: #0d0d0c; }
+.topbar .stats {
+  margin-left: auto;
+  display: flex;
+  gap: 20px;
+  font-size: 12px;
+  color: #5e5e5e;
+}
+.topbar .stat-val { font-weight: 600; color: var(--navy); font-family: var(--mono); }
+
+/* ── Content: light zone ────────────────────────────────────────────── */
+
+.content {
+  background: #f5f5f5;
+  overflow-y: auto;
+  padding: var(--gutter);
+}
+
+/* ── Filter bar ─────────────────────────────────────────────────────── */
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.chip {
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid #e2e2e2;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: #5e5e5e;
+  transition: all 0.12s;
+  font-family: var(--body);
+}
+.chip:hover { background: #f0f1f3; color: #0d0d0c; }
+.chip.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+/* ── Gallery grid ───────────────────────────────────────────────────── */
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e2e2e2;
+  overflow: hidden;
+  transition: box-shadow 0.15s, transform 0.15s, border-color 0.15s;
+}
+.card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); transform: translateY(-1px); }
+.card.starred { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(200,150,50,0.2); }
+
+.card .img-wrap {
+  cursor: pointer;
+  background: #e8eaed;
+  position: relative;
+  overflow: hidden;
+}
+.card .img-wrap img {
+  width: 100%;
+  display: block;
+  object-fit: contain;
+  max-height: 260px;
+  transition: transform 0.2s;
+}
+.card:hover .img-wrap img { transform: scale(1.02); }
+
+.card .badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(15,25,35,0.75);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  backdrop-filter: blur(4px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.card .meta {
+  padding: 12px 14px;
+}
+.card .top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.card .name { font-weight: 600; font-size: 13px; color: #0d0d0c; }
+
+.star-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: #d1d5db;
+  transition: color 0.12s, transform 0.12s;
+  padding: 0 2px;
+}
+.star-btn:hover { transform: scale(1.2); }
+.star-btn.on { color: var(--amber); }
+
+.card textarea {
+  width: 100%;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: var(--body);
+  font-size: 12px;
+  resize: vertical;
+  min-height: 34px;
+  color: #0d0d0c;
+  transition: border-color 0.15s;
+}
+.card textarea:focus { outline: none; border-color: var(--amber); }
+.card textarea::placeholder { color: #aaa; }
+
+/* ── Lightbox ───────────────────────────────────────────────────────── */
+
+.lightbox {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15,25,35,0.92);
+  z-index: 200;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  padding: 24px;
+}
+.lightbox.open { display: flex; }
+.lightbox img {
+  max-width: 92vw;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+}
+.lb-caption {
+  color: #fff;
+  font-size: 15px;
+  font-family: var(--heading);
+  font-weight: 600;
+  margin-top: 16px;
+}
+.lb-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+  max-width: 640px;
+  text-align: center;
+}
+.lb-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  border: none;
+  font-size: 26px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s;
+}
+.lb-nav:hover { background: rgba(255,255,255,0.22); }
+.lb-prev { left: 16px; }
+.lb-next { right: 16px; }
+.lb-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  border: none;
+  font-size: 20px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.lb-close:hover { background: rgba(255,255,255,0.22); }
+
+/* ── Action buttons (topbar style) ──────────────────────────────────── */
+
+.action-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #e2e2e2;
+  background: #fff;
+  color: #0d0d0c;
+  font-size: 12px;
+  font-family: var(--body);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.action-btn:hover { background: #f0f1f3; }
+.action-btn.primary {
+  background: var(--amber);
+  color: var(--navy);
+  border-color: var(--amber);
+  font-weight: 600;
+}
+.action-btn.primary:hover { filter: brightness(1.08); }
+
+/* ── Toast ──────────────────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--navy);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.3s;
+  z-index: 300;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+
+/* ── Empty state ────────────────────────────────────────────────────── */
+
+.empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: #5e5e5e;
+}
+.empty h3 { font-size: 16px; color: #0d0d0c; margin-bottom: 4px; }
+
+/* Utility classes replacing inline style attributes. The hosted-service CSP
+ * (default-src 'self' data: blob:) forbids inline style, so a `style="..."`
+ * attribute here is silently dropped by the browser. */
+.action-group { display: flex; gap: 8px; margin-left: 16px; }
+.hidden { display: none; }
+.count-star { color: var(--amber); }
