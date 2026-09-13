@@ -330,8 +330,12 @@ async def test_an_approval_gated_tool_is_held(fed):
     h = await _session(c, fed["agent"])
     mock.CALLS.clear()
     out = await _call(c, h, "vm__restart_service", {"host": "vm102", "service": "x"})
-    assert out["result"]["structuredContent"]["code"] == "APPROVAL_REQUIRED"
+    # Parked, not refused (spec 05 §5): a wait for a person, with a handle.
+    assert out["result"]["isError"] is False
+    assert out["result"]["structuredContent"]["status"] == "pending_approval"
+    assert out["result"]["structuredContent"]["pending_id"]
     assert mock.CALLS == []
+    await fed["db"].execute("DELETE FROM pending_calls WHERE requested_by = $1", fed["agent_id"])
 
 
 async def test_drive_files_resolve_to_their_folder_and_failures_deny(fed):

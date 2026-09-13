@@ -458,6 +458,11 @@ async def daily(conn: asyncpg.Connection) -> dict[str, Any]:
     pruned_last_run = len(pruned)
     out["pruned_clients"] = pruned_last_run
 
+    # Approval-gated calls nobody decided (spec 05 §5).
+    from datum_sync import pending
+
+    out["expired_calls"] = await pending.expire(conn)
+
     out["reviews_overdue"] = await reviews_overdue(conn)
     return out
 

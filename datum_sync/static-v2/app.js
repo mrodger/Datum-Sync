@@ -331,6 +331,7 @@ const SECTIONS = [
     { id: 'admin',          label: 'Principals',          minTier: 3, group: true },
     { id: 'enrolment',      label: 'Enrolment',           minTier: 3 },
     { id: 'approvals',      label: 'Approvals',           minTier: 3 },
+    { id: 'review',         label: 'Review',              minTier: 3 },
     { id: 'auth-services',  label: 'Authentication Services', adminOnly: true },
     { id: 'system-config',  label: 'System Configuration',   adminOnly: true },
     { id: 'queue-control',  label: 'Queue Control',           adminOnly: true },
@@ -408,6 +409,7 @@ const SCREENS = {
     admin:            [screenPrincipals, screenPrincipal],
     enrolment:        [screenEnrolment],
     approvals:        [screenApprovals],
+    review:           [screenReview],
     // live sections
     notifications:    [screenNotifications],
     analytics:        [screenAnalytics],
@@ -918,6 +920,20 @@ async function screenDashboard(view) {
     // stubScreen with no backend, so the card would be a claim about content
     // the screen behind it then contradicts. Same reason the ring is computed
     // rather than drawn from the mockup's numbers.
+    // Needs review (spec 08 §7): the queue's count, for anyone who holds a
+    // slice of it. Fetched after the rest so a slow queue never delays
+    // the jobs.
+    if (me.effective_tier >= 3) {
+        const card = el('div', { class: 'rail-card' }, el('h3', {}, 'Needs review'));
+        rail.append(card);
+        api('/review').then((r) => card.append(
+            el('a', { class: 'link-card', href: '#/review', id: 'needs-review' },
+                el('span', { class: 'lc-text' },
+                    el('b', {}, r.total + ' waiting'),
+                    el('span', {}, Object.entries(r.counts).map(([k, n]) => n + ' ' + (REVIEW_KINDS[k] || k).toLowerCase()).join(' · ') || 'nothing needs a person')),
+                el('span', { class: 'lc-arrow' }, '\u2192')))).catch((err) => card.append(banner(err)));
+    }
+
     rail.append(el('div', { class: 'rail-card' },
         el('h3', {}, 'Reference'),
         el('a', { class: 'link-card', href: '/docs', target: '_blank', rel: 'noopener' },
@@ -3376,13 +3392,39 @@ async function screenPrincipal(view, name) {
         })));
     }).catch((err) => sessionsPanel.append(banner(err)));
 
+    // -- activity (spec 08 §4): counts from the audit log ----------------------
+    const activityPanel = el('div', { class: 'panel' }, el('h2', {}, 'Activity'));
+    function loadActivity(window_) {
+        clear(activityPanel).append(el('h2', {}, 'Activity'));
+        api(path + '/activity?window=' + window_).then((a) => {
+            append(activityPanel, [
+                el('div', { class: 'actions' },
+                    ...['7d', '30d'].map((w) => el('button', { type: 'button', class: w === window_ ? '' : 'secondary',
+                        onclick: () => loadActivity(w) }, w))),
+                el('dl', { class: 'kv' },
+                    el('dt', {}, 'Calls'), el('dd', {}, String(a.total)),
+                    el('dt', {}, 'Denied'), el('dd', {}, String(a.denied)),
+                    el('dt', {}, 'Governance'), el('dd', {}, String(a.governance)),
+                    el('dt', {}, 'Sessions'), el('dd', {}, String(a.sessions)),
+                    el('dt', {}, 'Last seen'), el('dd', {}, a.last_seen ? when(a.last_seen) : '\u2014')),
+                a.by_surface.length ? table(['Surface', 'Calls', 'Denied', 'Errors'], a.by_surface.map((r) => el('tr', {},
+                    el('td', {}, r.via), el('td', {}, r.count), el('td', {}, r.denied), el('td', {}, r.errors)))) : null,
+                a.by_kind.length ? table(['Resource kind', 'Calls', 'Denied'], a.by_kind.map((r) => el('tr', {},
+                    el('td', {}, r.kind), el('td', {}, r.count), el('td', {}, r.denied)))) : null,
+                a.top_targets && a.top_targets.length ? table(['Target', 'Calls'], a.top_targets.map((r) => el('tr', {},
+                    el('td', {}, el('code', {}, (r.kind ? r.kind + ' ' : '') + r.target)), el('td', {}, r.count)))) : null,
+            ]);
+        }).catch((err) => activityPanel.append(banner(err)));
+    }
+    loadActivity('7d');
+
     append(view, [
         crumbs(['Principals', '#/admin'], [name]),
         el('div', { class: 'page-header' }, el('h1', {}, name), stateBadge(p.state)),
         failure,
         tokenDisplay,
         el('div', { class: 'split' },
-            el('div', {}, details, effective, tokensPanel, sessionsPanel, connectPanel(null)),
+            el('div', {}, details, effective, tokensPanel, sessionsPanel, activityPanel, connectPanel(null)),
             editor),
     ]);
 }
@@ -3871,13 +3913,112 @@ async function screenApprovals(view) {
         { id: 'elevations', label: 'Elevations', href: '#/approvals' },
         { id: 'calls',      label: 'Calls',      href: '#/approvals?tab=calls' },
     ], tab));
-    if (tab === 'calls') {
-        view.append(el('div', { class: 'panel' },
-            el('h2', {}, 'Calls'),
-            el('p', { class: 'hint' }, 'Federated calls a guard holds for approval arrive here once federation is built (spec 05 §6).')));
-        return;
-    }
+    if (tab === 'calls') return approvalsCalls(view);
     return approvalsElevations(view, (q.get('code') || '').trim().toUpperCase());
+}
+
+/* Approval-gated federated calls (spec 05 §5). The one place argument
+ * values are shown: an approver must see what they approve. Approval
+ * forwards the call once under the requester's snapshot. */
+async function approvalsCalls(view) {
+    const [pending, decided] = await Promise.all([api('/pending-calls'), api('/pending-calls?status=decided')]);
+    const failure = el('div', {});
+    function argsBox(x) {
+        return el('pre', { class: 'yaml' }, JSON.stringify(x.args, null, 2));
+    }
+    function pendingRow(x) {
+        const approve = el('button', { type: 'button', id: 'pc-approve-' + x.id, onclick: async () => {
+            approve.disabled = true;
+            clear(failure);
+            try { await api('/pending-calls/' + x.id + '/approve', { method: 'POST' }); route(); }
+            catch (err) { failure.append(banner(err)); approve.disabled = false; }
+        } }, 'Approve and run');
+        const reject = el('button', { type: 'button', class: 'secondary', id: 'pc-reject-' + x.id, onclick: async () => {
+            const reason = window.prompt('Reject ' + x.requested_by + '’s ' + x.tool + '. Reason:');
+            if (reason == null || !reason.trim()) return;
+            clear(failure);
+            try { await api('/pending-calls/' + x.id + '/reject', { method: 'POST', json: { reason } }); route(); }
+            catch (err) { failure.append(banner(err)); }
+        } }, 'Reject');
+        return el('tr', {},
+            el('td', {}, '#' + x.id),
+            el('td', {}, cellName('engine', el('a', { href: '#/admin/' + encodeURIComponent(x.requested_by) }, x.requested_by),
+                'tier ' + x.requester_tier + ' at request')),
+            el('td', {}, el('code', {}, x.connection + ':' + x.tool), el('div', { class: 'hint' }, 'label ' + x.label)),
+            el('td', {}, argsBox(x)),
+            el('td', {}, when(x.requested_at), el('div', { class: 'hint' }, 'expires ' + when(x.expires_at))),
+            el('td', {}, approve, ' ', reject));
+    }
+    function decidedRow(x) {
+        const cls = x.status === 'executed' ? 'badge complete' : x.status === 'approved' ? 'badge running' : 'badge failed';
+        return el('tr', {},
+            el('td', {}, '#' + x.id),
+            el('td', {}, el('a', { href: '#/admin/' + encodeURIComponent(x.requested_by) }, x.requested_by)),
+            el('td', {}, el('code', {}, x.connection + ':' + x.tool)),
+            el('td', {}, el('span', { class: cls }, x.status)),
+            el('td', {}, (x.decided_by || '\u2014') + (x.reason ? ' · ' + x.reason : '')),
+            el('td', {}, when(x.decided_at || x.expires_at)));
+    }
+    append(view, [
+        failure,
+        el('div', { class: 'panel' },
+            el('h2', {}, 'Pending'),
+            pending.items.length
+                ? table(['', 'Requested by', 'Tool', 'Arguments', 'Requested', ''], pending.items.map(pendingRow))
+                : el('p', { class: 'hint' }, 'Nothing waiting. A call held by a guard with an approval label appears here.')),
+        el('div', { class: 'panel' },
+            el('h2', {}, 'Recent decisions'),
+            decided.items.length
+                ? table(['', 'Requested by', 'Tool', 'Outcome', 'Decided by', 'When'], decided.items.slice(0, 20).map(decidedRow))
+                : el('p', { class: 'hint' }, 'No decisions yet.')),
+    ]);
+}
+
+// ---------------------------------------------------------------------------
+// review
+// ---------------------------------------------------------------------------
+//
+// spec/agent-auth-plane/08 §7: one queue, oldest first, each row linking to
+// the screen that resolves it. The dashboard tile counts it.
+
+const REVIEW_KINDS = {
+    enrolment: 'Enrolment', elevation: 'Elevation', call: 'Call', review: 'Review due',
+    inactive: 'Inactive', upstream: 'Upstream', clash: 'Name clash',
+};
+
+function ageText(seconds) {
+    if (!seconds) return '\u2014';
+    if (seconds < 3600) return Math.round(seconds / 60) + ' min';
+    if (seconds < 86400) return Math.round(seconds / 3600) + ' h';
+    return Math.round(seconds / 86400) + ' d';
+}
+
+async function screenReview(view) {
+    const q = hashQuery();
+    const kind = q.get('kind') || '';
+    const data = await api('/review');
+    actionBar(view, 'Review', {
+        desc: 'Everything waiting for a person, oldest first: enrolments, elevations, held calls, overdue reviews, '
+            + 'agents restricted for inactivity, upstreams that are stale or clashing.',
+    });
+    const chips = el('div', { class: 'actions' },
+        el('a', { class: kind ? 'button secondary' : 'button', href: '#/review' }, 'All (' + data.total + ')'),
+        ...Object.entries(REVIEW_KINDS).filter(([k]) => data.counts[k]).map(([k, label]) =>
+            el('a', { class: kind === k ? 'button' : 'button secondary', href: '#/review?kind=' + k },
+                label + ' (' + data.counts[k] + ')')));
+    const items = kind ? data.items.filter((x) => x.kind === kind) : data.items;
+    append(view, [
+        el('div', { class: 'panel' }, chips),
+        el('div', { class: 'panel' },
+            items.length
+                ? table(['Kind', 'What', 'Principal', 'Waiting', ''], items.map((x) => el('tr', {},
+                    el('td', {}, el('span', { class: 'badge queued' }, REVIEW_KINDS[x.kind] || x.kind)),
+                    el('td', {}, x.label),
+                    el('td', {}, x.principal ? el('a', { href: '#/admin/' + encodeURIComponent(x.principal) }, x.principal) : '\u2014'),
+                    el('td', {}, ageText(x.age)),
+                    el('td', {}, el('a', { class: 'button secondary', href: x.link }, 'Open')))))
+                : el('p', { class: 'hint', id: 'review-empty' }, 'Nothing needs review.')),
+    ]);
 }
 
 async function approvalsElevations(view, highlight) {

@@ -41,7 +41,7 @@ from starlette.datastructures import UploadFile
 
 from datum_sync import (
     agents, audit, auth, automations, config, connections, crypto, db, device, enrol, errors,
-    events, execute, jobs, lifecycle, mcp, oauth, principals, ratelimit, schedules,
+    events, execute, jobs, lifecycle, mcp, oauth, pending, principals, ratelimit, review, schedules,
     services, sessions, tokens, ui, uploads,
 )
 from datum_sync.auth import Principal
@@ -162,6 +162,8 @@ app.include_router(enrol.router)
 app.include_router(sessions.router)
 app.include_router(device.router)
 app.include_router(federation_routes.router)
+app.include_router(pending.router)
+app.include_router(review.router)
 
 
 @app.middleware("http")
@@ -499,8 +501,13 @@ async def health() -> dict[str, Any]:
             await conn.fetchval("SELECT 1")
             worker = await execute.worker_is_running(conn)
             overdue = await lifecycle.reviews_overdue(conn)
-            pending = await lifecycle.pending_count(conn)
+            enrolments = await lifecycle.pending_count(conn)
             federation = [fedcat.health(r) for r in await fedcat.mcp_connections(conn)]
+            approvals = await pending.pending_count(conn) + await conn.fetchval(
+                "SELECT count(*) FROM oauth_device_codes WHERE decision IS NULL AND expires_at > now()")
+            sessions_live = await conn.fetchval(
+                "SELECT count(*) FROM mcp_sessions WHERE ended_at IS NULL "
+                "AND last_seen_at > now() - make_interval(secs => $1)", config.SESSION_IDLE_SECONDS)
     except Exception as e:
         raise ApiError(
             503, "SERVICE_UNAVAILABLE", f"database unreachable: {e}"
@@ -519,9 +526,11 @@ async def health() -> dict[str, Any]:
         # Review obligations (spec 03 §4.3): counts, so a monitor can alert on
         # them without reading the Review screen.
         "reviews_overdue": overdue,
-        "pending_enrolments": pending,
+        "pending_enrolments": enrolments,
         # Per upstream (spec 05 §6): ok, stale or down, with the cached count.
         "federation": federation,
+        "pending_approvals": approvals,
+        "sessions_live": sessions_live,
     }
 
 

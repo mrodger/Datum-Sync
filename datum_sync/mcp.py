@@ -36,7 +36,7 @@ from fastapi.responses import JSONResponse
 import dataclasses
 import hashlib
 
-from datum_sync import audit, auth, config, db, execute, proxy, sessions, vault_fs
+from datum_sync import audit, auth, config, db, execute, pending, proxy, sessions, vault_fs
 from datum_sync import jobs as jobs_mod
 from datum_sync.federation import catalogue as fedcat, client as fedclient, guards as guards_mod
 from datum_sync.auth import Principal
@@ -549,8 +549,25 @@ ELEVATE_TOOL = {
         "required": ["scope"]},
     "annotations": {"datumMinTier": 1},
 }
+PENDING_STATUS_TOOL = {
+    "name": "pending_status",
+    "title": "Pending call status",
+    "description": "Whether a federated call you made that was held for approval has been decided.",
+    "inputSchema": {"type": "object", "properties": {"pending_id": {"type": "integer"}},
+                    "required": ["pending_id"]},
+    "annotations": {"readOnlyHint": True, "datumMinTier": 1},
+}
+PENDING_RESULT_TOOL = {
+    "name": "pending_result",
+    "title": "Pending call result",
+    "description": "The result of an approved and executed call you made; access_denied if it was rejected.",
+    "inputSchema": {"type": "object", "properties": {"pending_id": {"type": "integer"}},
+                    "required": ["pending_id"]},
+    "annotations": {"readOnlyHint": True, "datumMinTier": 1},
+}
 _BUILTIN_TOOL_NAMES = frozenset({
     "whoami", "session_info", "job_status", "job_result", "job_list", "job_cancel", "elevate",
+    "pending_status", "pending_result",
 })
 
 
@@ -584,6 +601,7 @@ async def _tools_list(
     if principal.federation_scope:
         async with db.pool().acquire() as conn:
             tools += await fedcat.visible_tools(conn, principal, exclude={t["name"] for t in tools})
+        tools += [PENDING_STATUS_TOOL, PENDING_RESULT_TOOL]
     # The proxy needs tier 3 and a grant; without either it can only refuse.
     if tier >= 3 and principal.proxy_grants:
         tools.append(PROXY_TOOL)
@@ -813,15 +831,12 @@ async def _federated_call(
             return _tool_error("FEDERATION_DENIED", str(exc), guard=exc.guard, field=exc.field)
         held = [a for a in approvals if a in (block.get("approval_required") or [])]
         if held:
-            # Approval-gated calls are WP6 (spec 05 §5); until then the
-            # honest answer is a refusal that names the label.
-            await audit.write(
-                conn, trace=trace, principal=principal, via="mcp", verb="federate.denied",
-                target_kind="tool", target=target, outcome="denied", session_id=trace.session_id,
-                detail={"approval": held[0]},
+            # Parked for a person (spec 05 §5): the guards passed, the label
+            # is one the block says needs approval, nothing is forwarded.
+            parked = await pending.request(
+                conn, principal, connection["name"], upstream_name, args, held[0], trace,
             )
-            return _tool_error("APPROVAL_REQUIRED", f"{upstream_name} needs approval ({held[0]})",
-                               label=held[0])
+            return pending.handle(parked)
         # Audited BEFORE forwarding, with the guarded values only (FED-013):
         # the arguments themselves may be a file body or a command.
         await audit.write(
@@ -845,6 +860,48 @@ async def _federated_call(
             duration_ms=int((time.monotonic() - t0) * 1000), session_id=trace.session_id,
         )
     return result
+
+
+async def execute_approved(
+    conn: asyncpg.Connection, requester: Principal, connection_name: str, upstream_name: str,
+    args: dict[str, Any], trace: audit.Trace,
+) -> dict[str, Any]:
+    """Forward an approved pending call under the requester's snapshot.
+
+    The guards run again against the snapshot's block -- the approver saw
+    the call as it was -- with the approval requirement now satisfied.
+    """
+    connection = await conn.fetchrow(
+        f"SELECT {fedcat.connections._COLUMNS} FROM connections WHERE name = $1 AND type = 'mcp'", connection_name
+    )
+    if connection is None:
+        return _tool_error("UPSTREAM_UNAVAILABLE", f"connection {connection_name!r} is gone")
+    found = fedcat.block_for(requester, connection)
+    if found is None:
+        return _tool_error("FEDERATION_DENIED", "the snapshot no longer covers the connection")
+    _, block = found
+    cfg = json.loads(connection["config"])
+    compiled = guards_mod.compile_guards(cfg.get("guards"))
+    matching = [g for g in compiled if g.matches(upstream_name)]
+    upstream = await fedcat.upstream_for(conn, connection)
+    try:
+        guarded, _ = await guards_mod.evaluate(
+            matching, block, requester.effective_tier, args,
+            resolver=await _drive_resolver(upstream, connection_name),
+        )
+    except guards_mod.Denied as exc:
+        return _tool_error("FEDERATION_DENIED", str(exc), guard=exc.guard, field=exc.field)
+    target = f"{connection_name}:{upstream_name}"
+    await audit.write(
+        conn, trace=trace, principal=requester, via="mcp", verb="federate.call", target_kind="tool",
+        target=target, outcome="ok", detail={**(guarded or {"guard": "none"}), "approved": True},
+    )
+    try:
+        return await upstream.tools_call(upstream_name, args)
+    except fedclient.UpstreamError as exc:  # approved: same answer, no session
+        return _tool_error(exc.code, exc.message)
+    except fedclient.ToolError as exc:
+        return _tool_error("UPSTREAM_ERROR", f"{exc.code}: {exc.message}")
 
 
 async def _resources_list(principal: Principal, _: dict[str, Any], __: audit.Trace) -> dict[str, Any]:
@@ -1031,6 +1088,19 @@ async def _builtin_call(
             body.pop("elevation_id", None)
             return {"content": [{"type": "text", "text": text}],
                     "structuredContent": body, "isError": False}
+        if name in ("pending_status", "pending_result"):
+            async with db.pool().acquire() as conn:
+                row = await pending.for_requester(conn, principal, args.get("pending_id"))
+            body = pending.public(row)
+            if name == "pending_status" or row["status"] in ("pending", "approved"):
+                return {"content": [{"type": "text", "text": f"pending call {row['id']}: {row['status']}"}],
+                        "structuredContent": body, "isError": False}
+            if row["status"] in ("rejected", "expired"):
+                return {"content": [{"type": "text", "text": f"access_denied: {row['status']}"
+                                     + (f": {row['reason']}" if row["reason"] else "")}],
+                        "structuredContent": {"code": "access_denied", **body}, "isError": True}
+            result = auth.json_of(row, "result") or {}
+            return {**result, "structuredContent": {**(result.get("structuredContent") or {}), "pending_id": row["id"]}}
         if name == "job_list":
             auth.require_tier(principal, 2, "job_list")
             limit = args.get("limit", 10)

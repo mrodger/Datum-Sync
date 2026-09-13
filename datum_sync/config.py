@@ -219,6 +219,8 @@ FEDERATION_LIST_TIMEOUT_SECONDS = float(os.getenv("FEDERATION_LIST_TIMEOUT_SECON
 FEDERATION_CALL_TIMEOUT_SECONDS = float(os.getenv("FEDERATION_CALL_TIMEOUT_SECONDS", "60"))
 FEDERATION_MAX_RESULT_BYTES = int(os.getenv("FEDERATION_MAX_RESULT_BYTES", str(1024 * 1024)))
 DRIVE_RESOLVE_TTL_SECONDS = int(os.getenv("DRIVE_RESOLVE_TTL_SECONDS", "600"))
+# Approval-gated federated calls wait this long for a person (spec 05 §5).
+POLICY_PENDING_CALL_TTL_HOURS = int(os.getenv("POLICY_PENDING_CALL_TTL_HOURS", "72"))
 # How often the worker runs the lifecycle housekeeping. Daily by design; the
 # tests set it low.
 LIFECYCLE_TICK_SECONDS = int(os.getenv("LIFECYCLE_TICK_SECONDS", str(24 * 3600)))

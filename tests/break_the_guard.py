@@ -2691,6 +2691,50 @@ CASES = [
         "    if False:\n",
         "tests/test_federation.py::test_arguments_over_the_cap_are_refused_before_evaluation",
     ),
+    # -- Approval-gated calls and the review queue (WP6, spec 05 §5, 09 WP6).
+    (
+        "FED-009",
+        "an approval-gated call is forwarded only once a person approved it, and only once",
+        "datum_sync/pending.py",
+        "    if row[\"status\"] != \"pending\":\n"
+        "        # Decided, executed or expired: never forwarded twice (FED-009).\n",
+        "    if False:\n"
+        "        # Decided, executed or expired: never forwarded twice (FED-009).\n",
+        "tests/test_pending.py::test_a_held_call_is_not_forwarded_until_approved_and_then_once",
+    ),
+    (
+        "FED-010",
+        "an approved call runs under the requester's snapshot, not its live grant",
+        "datum_sync/pending.py",
+        "    requester = snapshot_principal(auth.json_of(row, \"grant_snapshot\") or {})\n",
+        "    requester = await _live(conn, row[\"requested_by\"])\n",
+        "tests/test_pending.py::test_an_approved_call_runs_under_the_requesters_snapshot",
+    ),
+    (
+        "REV-001",
+        "activity is visible to the principal, its sponsor and tier 4 only",
+        "datum_sync/review.py",
+        "        if not (caller.account_id == row[\"account_id\"] or row[\"parent_id\"] == caller.account_id\n"
+        "                or caller.effective_tier >= 4):\n",
+        "        if False:\n",
+        "tests/test_pending.py::test_activity_is_visible_to_self_sponsor_and_tier_4_only",
+    ),
+    (
+        "REV-002",
+        "deciding a pending call needs tier 4 or the requester's sponsor",
+        "datum_sync/pending.py",
+        "    if caller.effective_tier >= 3 and snap.get(\"parent_id\") == caller.account_id:\n",
+        "    if caller.effective_tier >= 3:\n",
+        "tests/test_pending.py::test_deciding_needs_tier_4_or_the_requesters_sponsor",
+    ),
+    (
+        "REV-003",
+        "an expired pending call cannot be approved",
+        "datum_sync/pending.py",
+        "    if row[\"expires_at\"] < await conn.fetchval(\"SELECT now()\"):\n",
+        "    if False:\n",
+        "tests/test_pending.py::test_an_expired_call_cannot_be_approved",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

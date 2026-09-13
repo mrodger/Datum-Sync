@@ -147,6 +147,7 @@ def main() -> int:
             workspaces(page)
             principals(page)
             federation(page)
+            review(page)
         except Exception as exc:            # noqa: BLE001 - recorded, not raised
             # Recorded rather than propagated, because cleanup has to run and a
             # `finally` that calls cleanup will throw away this exception the
@@ -572,6 +573,21 @@ def principals(page) -> None:
     r = api("delete", f"/rest/v1/principals/{name}")
     print(f"  {'ok  ' if r.status == 200 else 'note'} {name} "
           f"{'deleted' if r.status == 200 else 'left retired (delete is tier 5: ' + str(r.status) + ')'}")
+
+
+def review(page) -> None:
+    """The Review screen and the dashboard's Needs-review tile render
+    (spec/agent-auth-plane/08 §7). What they count is asserted by
+    tests/test_pending.py; here the point is that both screens reach
+    `data-ready` for this account."""
+    print("\nreview (v2 only)")
+    page.goto(BASE + "/ui/v2#/review")
+    page.wait_for_selector("#view > [data-ready='review']")
+    check("review renders", page.locator("#view h1").first.inner_text() == "Review")
+    page.goto(BASE + "/ui/v2#/dashboard")
+    page.wait_for_selector("#view > [data-ready='dashboard']")
+    page.wait_for_selector("#needs-review")
+    check("the dashboard counts the queue", "waiting" in page.locator("#needs-review").inner_text())
 
 
 def federation(page) -> None:
