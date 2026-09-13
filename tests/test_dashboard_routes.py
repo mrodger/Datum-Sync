@@ -13,7 +13,7 @@ fail against the code as first written, which is the only reason to trust them.
 
 Scoping note: `analytics/summary` and `mcp-servers` are admin-gated rather than
 filtered, because neither has a repository to filter on -- an audit row's
-`target` is a free-text string and `mcp_call_log.target` is a URL. Filtering
+`target` is a free-text string, and for a proxied call it is a URL. Filtering
 them would mean inventing an ownership model per row. `notifications` does have
 a repository per failed job, so that half is filtered by `allows_repo` and the
 audit half is admin-gated, which keeps the route useful to a non-admin without
@@ -123,10 +123,11 @@ async def foreign_rows(db, accounts):
     )
     await db.execute(
         """
-        INSERT INTO mcp_call_log (account_id, account_name, method, tool_name,
-                                  target, is_governance, outcome)
-        VALUES ($1, $2, 'tools/call', 'proxy_request',
-                'https://LEAKCANARY.internal/api', false, 'ok')
+        INSERT INTO audit_log (trace_id, actor_id, actor_name, actor_kind, via,
+                               verb, target_kind, target, outcome, detail)
+        VALUES (gen_random_uuid(), $1, $2, 'account', 'mcp', 'mcp.tools.call',
+                'connection', 'https://LEAKCANARY.internal/api', 'ok',
+                '{"tool": "proxy_request"}')
         """,
         accounts["admin_id"],
         ADMIN,
@@ -140,7 +141,7 @@ async def foreign_rows(db, accounts):
             "DELETE FROM audit_log WHERE target = 'LEAKCANARY-connection'"
         )
         await db.execute(
-            "DELETE FROM mcp_call_log WHERE target LIKE '%LEAKCANARY%'"
+            "DELETE FROM audit_log WHERE target LIKE '%LEAKCANARY%'"
         )
 
 

@@ -78,7 +78,6 @@ async def tier_setup():
     # every later test -- which the guard harness then reports as UNPROVEN in
     # bulk (CLAUDE.md, "a skipped test reads as a passing one"). It happened.
     await conn.execute("DELETE FROM jobs WHERE repository = $1", REPO)
-    await conn.execute("DELETE FROM mcp_call_log WHERE account_name = $1", ACCOUNT)
     await conn.execute("DELETE FROM audit_log WHERE actor_name = $1", ACCOUNT)
     await conn.execute("DELETE FROM repositories WHERE name = $1", REPO)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT)

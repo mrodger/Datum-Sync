@@ -1,8 +1,9 @@
 """The audit spine: one row per authorised action, joined by a server trace id.
 
-Written alongside the existing per-surface logs (`mcp_call_log`, `proxy_log`),
-not instead of them. See migrations/011_audit_log.sql for why, and
-spec/datum-gate/14-audit.md for the shape.
+The only log since migration 023: the per-surface tables it was written
+beside (`mcp_call_log`, `proxy_log`) were verified against it and dropped
+(spec/agent-auth-plane/_verify-audit-mirror.md). See migrations/011_audit_log.sql
+for why it was introduced this way, and spec/datum-gate/14-audit.md for the shape.
 
 The one idea here
 -----------------
@@ -33,10 +34,9 @@ one coarse row (`via` of `rest`, `ui` or `oauth`), alongside the richer rows the
 left as it was -- it was true when it was applied, and an applied migration is a
 record of what happened, not a description of the present. This is the present.
 
-`/mcp` is excluded from the middleware row on purpose. That migration states
-that `audit_log` and `mcp_call_log` agreeing row for row is the check on phase
-one, and a second row per `/mcp` post would end that check without failing
-anything.
+`/mcp` is excluded from the middleware row on purpose: the endpoint writes
+its own row per JSON-RPC message, with the verb, tool and target a middleware
+cannot see, and a second row per post would double-count every call.
 
 Not implemented here (deliberately): the spec's bounded queue and background
 batch drain, its retention sweeper, and its export CLI. `write()` awaits the

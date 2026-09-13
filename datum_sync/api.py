@@ -260,10 +260,10 @@ async def authenticate(request: Request, call_next):
 # being read.
 AUDIT_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
-# Surfaces that write their own, richer audit rows. `011_audit_log.sql` states
-# that `audit_log` and `mcp_call_log` agreeing row for row is the check on B2's
-# phase one -- so adding a second row per `/mcp` post would not merely duplicate,
-# it would retire that check silently while every existing test still passed.
+# Surfaces that write their own, richer audit rows: one per JSON-RPC message,
+# with the verb, tool, target and session that a middleware row could not
+# know. A second row per `/mcp` post would double-count every call
+# (AUDIT-013), and the analytics that read `via = 'mcp'` would lie by two.
 AUDIT_SELF_LOGGING = ("/mcp",)
 
 
@@ -2108,14 +2108,17 @@ async def analytics_summary(caller: Principal = Caller) -> dict[str, Any]:
             """SELECT verb, outcome, count(*) AS n
                FROM audit_log GROUP BY verb, outcome ORDER BY n DESC"""
         )
+        # From audit_log since 023 (the mirror is gone): the tool is in
+        # `detail.tool`, written by mcp._log_call for every tools/call.
         mcp_tools = await conn.fetch(
-            """SELECT coalesce(nullif(tool_name, ''), '(other)') AS tool,
+            """SELECT coalesce(nullif(detail->>'tool', ''), '(other)') AS tool,
                       count(*) AS n,
-                      count(*) FILTER (WHERE outcome = 'error') AS errors
-               FROM mcp_call_log
+                      count(*) FILTER (WHERE outcome <> 'ok') AS errors
+               FROM audit_log WHERE via = 'mcp' AND verb = 'mcp.tools.call'
                GROUP BY tool ORDER BY n DESC LIMIT 10"""
         )
-        mcp_total = await conn.fetchval("SELECT count(*) FROM mcp_call_log")
+        mcp_total = await conn.fetchval(
+            "SELECT count(*) FROM audit_log WHERE via = 'mcp' AND verb LIKE 'mcp.%'")
         recent = await conn.fetch(
             """SELECT actor_name, verb, target, outcome, duration_ms, created_at
                FROM audit_log ORDER BY created_at DESC LIMIT 20"""
@@ -2296,23 +2299,26 @@ async def list_notifications(caller: Principal = Caller) -> dict[str, Any]:
 
 @app.get("/rest/v1/mcp-servers")
 async def list_mcp_servers(caller: Principal = Caller) -> dict[str, Any]:
-    """MCP servers seen in the call log, with usage summary.
+    """Targets seen in MCP tool calls, with usage summary.
 
-    Admin only. `mcp_call_log.target` is a proxy destination URL, so this is a
-    list of the internal hosts the platform can reach -- reconnaissance for any
-    account that can read it. As with the analytics summary there is no owning
-    repository on the row to filter by.
+    Admin only. A target is a connection and path (proxy), a vault path, or
+    a federated `{connection}:{tool}` -- the internal hosts the platform can
+    reach, which is reconnaissance for any account that can read it. As with
+    the analytics summary there is no owning repository on the row to filter
+    by. Read from `audit_log` since 023; the v2 MCP Servers screen is the
+    federation catalogue and does not use this route.
     """
     auth.require_admin(caller)
     async with db.pool().acquire() as conn:
         rows = await conn.fetch(
             """SELECT coalesce(target, '(unknown)') AS target,
                       count(*) AS calls,
-                      count(*) FILTER (WHERE outcome = 'error') AS errors,
+                      count(*) FILTER (WHERE outcome <> 'ok') AS errors,
                       max(created_at) AS last_seen
-               FROM mcp_call_log
+               FROM audit_log
+               WHERE via = 'mcp' AND verb = 'mcp.tools.call'
                GROUP BY target
-               ORDER BY calls DESC"""
+               ORDER BY calls DESC LIMIT 100"""
         )
     return {
         "items": [

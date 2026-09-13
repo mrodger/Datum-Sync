@@ -140,8 +140,6 @@ async def db():
     yield conn
     await conn.execute("DELETE FROM audit_log WHERE actor_name = $1", AGENT_NAME)
     await conn.execute("DELETE FROM audit_log WHERE actor_name = $1", ACCOUNT_NAME)
-    await conn.execute("DELETE FROM mcp_call_log WHERE account_name = $1", ACCOUNT_NAME)
-    await conn.execute("DELETE FROM proxy_log WHERE agent_name = $1", AGENT_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", AGENT_NAME)
     await conn.execute("DELETE FROM connections WHERE name = $1", CONN_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
@@ -393,15 +391,16 @@ async def test_a_client_cannot_splice_itself_into_another_trace(client, setup, d
     assert forged and all(str(r["trace_id"]) != victim_trace for r in forged)
 
 
-# -- dual-write: the new table must agree with the old ------------------------
+# -- the /mcp row carries what the retired mirror carried -----------------------
 
 
-async def test_the_audit_row_agrees_with_the_mcp_call_log_row(client, setup, db):
-    """Phase one mirrors the existing writer, so the two tables must match.
+async def test_the_audit_row_carries_the_call_shape(client, setup, db):
+    """Everything `mcp_call_log` recorded is on the audit row.
 
-    That agreement is the check on the new table before anything is retired.
-    It is only a valid check because this change deliberately reproduced the
-    old classification instead of improving it -- see `_log_call`.
+    Phase one mirrored the old writer and the mirror was verified against
+    this table before migration 023 dropped it; this is what that check
+    asserted, kept so the fields cannot quietly go missing now that nothing
+    else records them.
 
     Guard: AUDIT-006.
     """
@@ -410,18 +409,14 @@ async def test_the_audit_row_agrees_with_the_mcp_call_log_row(client, setup, db)
         "/mcp", json=_proxy_call(),
         headers=await _session(client, agent_token),
     )
-    old = dict(await db.fetchrow(
-        "SELECT * FROM mcp_call_log WHERE account_name = $1 ORDER BY id DESC LIMIT 1",
-        ACCOUNT_NAME,
-    ))
     new = next(r for r in await _rows(db) if r["verb"] == "mcp.tools.call")
 
-    assert new["target"] == old["target"]
-    assert new["outcome"] == old["outcome"]
-    assert new["error_code"] == old["error_code"]
-    assert new["duration_ms"] == old["duration_ms"]
-    assert new["governance"] == old["is_governance"]
-    assert new["client_trace_id"] == old["client_trace_id"]
+    assert new["target"] == f"{CONN_NAME}:GET:/v1/test"
+    assert new["outcome"] == "ok"
+    assert new["error_code"] is None
+    assert new["duration_ms"] is not None and new["duration_ms"] >= 0
+    assert new["governance"] is False
+    assert json.loads(new["detail"])["tool"] == "proxy_request"
 
 
 async def test_no_audit_row_carries_the_injected_secret(client, setup, db):

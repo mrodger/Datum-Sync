@@ -81,7 +81,7 @@ SESSION_LIMIT = -32000
 
 # -- governance path classification ----------------------------------------
 #
-# Writes to these paths are flagged is_governance=true in mcp_call_log.
+# Writes to these paths are flagged governance=true on the audit row.
 # The classification is server-side (post-normalisation) so a client cannot
 # dodge it by encoding tricks. This constant should itself eventually be
 # vault-resident so changes to it are observable, but a hardcoded set is the
@@ -160,44 +160,17 @@ async def _log_call(
     trace: audit.Trace,
     session_id: str | None = None,
 ) -> None:
-    """Write one row to mcp_call_log and one to audit_log. Never raises.
+    """Write the request's audit row. Never raises.
 
-    Both, not one. `mcp_call_log` keeps its exact existing behaviour so that
-    the two tables should agree row for row -- and that agreement is how the
-    new table gets checked before anything is retired. In particular the
-    `outcome` written here is the old classification, warts and all: a tool
-    call refused by an access check returns an `isError` result rather than
-    raising RpcError, so it is recorded as 'ok' in *both* tables. Correcting
-    that is a separate change; doing it here would mean any disagreement
-    between the tables had two possible causes instead of one.
-
-    One connection, two inserts. Acquiring twice would double this path's
-    hold on the pool for no gain.
+    One row since migration 023 retired `mcp_call_log`; the verification
+    that let it go is spec/agent-auth-plane/_verify-audit-mirror.md. The
+    `outcome` here is the protocol's: a tool call refused by an access
+    check returns an `isError` result rather than raising RpcError, so it
+    is `ok` -- the federated guards write their own `denied` row beside it
+    (`federate.denied`), which is the classification the mirror could not.
     """
     try:
         async with db.pool().acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO mcp_call_log
-                    (account_id, account_name, method, tool_name, target,
-                     is_governance, outcome, error_code, duration_ms, client_trace_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                """,
-                # The *account*: for an agent, its sponsor. This table predates
-                # agents being rows and has no agent column; audit_log carries
-                # the actor. Keeping the old meaning is what lets the two be
-                # compared before this one is retired (WP7).
-                principal.parent_id if principal.kind == "agent" else principal.account_id,
-                principal.parent_name if principal.kind == "agent" else principal.name,
-                method,
-                tool_name_val,
-                target,
-                _is_governance(target),
-                outcome,
-                error_code,
-                duration_ms,
-                trace.client_id,
-            )
             await audit.write(
                 conn,
                 trace=trace,

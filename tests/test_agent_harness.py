@@ -3,7 +3,7 @@
 Runs 8 concurrent synthetic agents — each a real service account with a
 scoped vault — and verifies five correctness properties:
 
-1. Log completeness   — every call the harness makes appears in mcp_call_log.
+1. Log completeness   — every call the harness makes appears in audit_log.
 2. Attribution        — each log row carries the account_name of the agent
                         that made it, not any other harness account's name.
 3. Containment        — a scoped agent that reads outside its path gets a
@@ -260,8 +260,11 @@ async def harness(tmp_path, monkeypatch):
     except Exception:
         pytest.skip("database unavailable")
 
-    # Create one service account per character.
+    # Create one service account per character. Audit rows from an earlier
+    # run that died before teardown would inflate the completeness count,
+    # so they go first.
     accounts: dict[str, HarnessAccount] = {}
+    await conn.execute("DELETE FROM audit_log WHERE actor_name LIKE $1", f"{_ACCT_PREFIX}%")
     for char in CHARACTERS:
         acct_name = f"{_ACCT_PREFIX}{char['name']}"
         await conn.execute(
@@ -329,7 +332,7 @@ async def harness(tmp_path, monkeypatch):
     # Teardown: remove call log rows and accounts.
     account_names = [a.name for a in accounts.values()]
     await conn.execute(
-        "DELETE FROM mcp_call_log WHERE account_name = ANY($1::text[])",
+        "DELETE FROM audit_log WHERE actor_name = ANY($1::text[])",
         account_names,
     )
     await conn.execute(
@@ -345,13 +348,14 @@ async def harness(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 async def test_harness_log_completeness(harness):
-    """Every call the harness makes has a row in mcp_call_log."""
+    """Every call the harness makes has a row in audit_log."""
     conn = harness["conn"]
     calls = harness["calls"]
 
     account_names = list({c.account_name for c in calls})
     logged = await conn.fetchval(
-        "SELECT count(*) FROM mcp_call_log WHERE account_name = ANY($1::text[])",
+        "SELECT count(*) FROM audit_log WHERE via = 'mcp' AND verb = 'mcp.tools.call' "
+        "AND actor_name = ANY($1::text[])",
         account_names,
     )
     assert logged == len(calls), (
@@ -360,16 +364,16 @@ async def test_harness_log_completeness(harness):
 
 
 async def test_harness_attribution(harness):
-    """Every log row's account_name belongs to the harness; no cross-account rows."""
+    """Every log row's actor belongs to the harness; no cross-account rows."""
     conn = harness["conn"]
     accounts = harness["accounts"]
     known = {a.name for a in accounts.values()}
 
     rows = await conn.fetch(
-        "SELECT DISTINCT account_name FROM mcp_call_log WHERE account_name LIKE $1",
+        "SELECT DISTINCT actor_name FROM audit_log WHERE via = 'mcp' AND actor_name LIKE $1",
         f"{_ACCT_PREFIX}%",
     )
-    logged_names = {r["account_name"] for r in rows}
+    logged_names = {r["actor_name"] for r in rows}
     unexpected = logged_names - known
     assert not unexpected, f"unexpected account names in log: {unexpected}"
 
@@ -382,7 +386,7 @@ async def test_harness_containment(harness):
     We assert two things:
 
     1. The tool response carries isError=True (the vault actually refused the read).
-    2. The call appears in mcp_call_log (the refusal was observed by the audit trail).
+    2. The call appears in audit_log (the refusal was observed by the audit trail).
     """
     conn = harness["conn"]
     dev_account = harness["accounts"]["dev"].name
@@ -399,9 +403,9 @@ async def test_harness_containment(harness):
     row = await conn.fetchrow(
         """
         SELECT outcome
-          FROM mcp_call_log
-         WHERE account_name = $1
-           AND tool_name = 'vault_read'
+          FROM audit_log
+         WHERE actor_name = $1 AND via = 'mcp'
+           AND detail->>'tool' = 'vault_read'
            AND target = $2
          ORDER BY created_at DESC
          LIMIT 1
@@ -409,29 +413,29 @@ async def test_harness_containment(harness):
         dev_account,
         path,
     )
-    assert row is not None, "containment probe not found in mcp_call_log"
+    assert row is not None, "containment probe not found in audit_log"
 
 
 async def test_harness_governance_flag(harness):
-    """A write to skills/ is logged with is_governance=true."""
+    """A write to skills/ is logged with governance=true."""
     conn = harness["conn"]
     sec_account = harness["accounts"]["sec"].name
 
     row = await conn.fetchrow(
         """
-        SELECT is_governance, target
-          FROM mcp_call_log
-         WHERE account_name = $1
-           AND tool_name = 'vault_write'
+        SELECT governance, target
+          FROM audit_log
+         WHERE actor_name = $1 AND via = 'mcp'
+           AND detail->>'tool' = 'vault_write'
            AND target LIKE 'skills/%'
          ORDER BY created_at DESC
          LIMIT 1
         """,
         sec_account,
     )
-    assert row is not None, "no skills/ write found in mcp_call_log for sec account"
-    assert row["is_governance"] is True, (
-        f"skills/ write logged with is_governance={row['is_governance']!r}"
+    assert row is not None, "no skills/ write found in audit_log for sec account"
+    assert row["governance"] is True, (
+        f"skills/ write logged with governance={row['governance']!r}"
     )
 
 

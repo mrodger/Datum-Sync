@@ -162,9 +162,9 @@ class Principal:
     # would, which is what every pre-existing construction site meant.
     kind: str = "human"
     parent_id: int | None = None
-    # The sponsor's name, filled in by `effective()` from the ancestor walk so
-    # the mirror tables (`mcp_call_log`, `proxy_log`) can keep recording the
-    # *account* an agent belongs to, as they did before agents were rows.
+    # The sponsor's name, filled in by `effective()` from the ancestor walk;
+    # the audit writer records it in `detail.account` so an agent row can be
+    # traced back to its sponsor.
     parent_name: str | None = None
     state: str = "active"
     # The credential's own ceiling (account_tokens.max_tier), or None. Folded

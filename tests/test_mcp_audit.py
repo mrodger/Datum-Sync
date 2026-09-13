@@ -1,10 +1,10 @@
-"""mcp_call_log — unit and e2e tests.
+"""The /mcp audit rows — unit and e2e tests.
 
 Unit tests cover the pure helper functions (_is_governance, _call_target)
 with no database.
 
-E2e tests POST to /mcp through the real app and query mcp_call_log to verify
-rows were written with the correct shape.
+E2e tests POST to /mcp through the real app and query audit_log (the only
+log since migration 023 retired mcp_call_log) to verify the row's shape.
 """
 from __future__ import annotations
 
@@ -132,7 +132,7 @@ async def log_setup(tmp_path, monkeypatch):
     yield {"token": raw, "client": client, "conn": conn}
 
     await client.aclose()
-    await conn.execute("DELETE FROM mcp_call_log WHERE account_name = $1", ACCOUNT_NAME)
+    await conn.execute("DELETE FROM audit_log WHERE actor_name = $1", ACCOUNT_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
     await conn.close()
     await db_module.close_pool()
@@ -143,12 +143,19 @@ def _rpc(method, params=None, id_=1):
 
 
 async def _last_log_row(conn, account_name: str) -> dict:
+    """The newest /mcp audit row, in the shape the old mirror had: the tool
+    is lifted out of `detail`, `governance` is the flag."""
     row = await conn.fetchrow(
-        "SELECT * FROM mcp_call_log WHERE account_name = $1 ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM audit_log WHERE actor_name = $1 AND via = 'mcp' ORDER BY id DESC LIMIT 1",
         account_name,
     )
-    assert row is not None, "no mcp_call_log row found"
-    return dict(row)
+    assert row is not None, "no /mcp audit row found"
+    out = dict(row)
+    detail = json.loads(row["detail"]) if row["detail"] else {}
+    out["tool_name"] = detail.get("tool")
+    out["method"] = row["verb"].removeprefix("mcp.").replace(".", "/")
+    out["is_governance"] = row["governance"]
+    return out
 
 
 # tools/list is logged

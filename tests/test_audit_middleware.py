@@ -54,7 +54,6 @@ async def db():
         pytest.skip("database unavailable")
     yield conn
     await conn.execute("DELETE FROM audit_log WHERE actor_name = $1", ACCOUNT_NAME)
-    await conn.execute("DELETE FROM mcp_call_log WHERE account_name = $1", ACCOUNT_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
     await conn.close()
 
@@ -214,10 +213,10 @@ async def test_a_failed_request_is_recorded_as_error(client, token, db):
 async def test_mcp_writes_its_own_rows_and_gains_no_duplicate(client, token, db):
     """`/mcp` keeps writing its rich rows, and the middleware adds none.
 
-    `011_audit_log.sql` states that `audit_log` and `mcp_call_log` agreeing row
-    for row is the check on phase one of the audit spine. A middleware row per
-    `/mcp` post would break that agreement -- and would do it silently, by
-    retiring a check rather than failing a test.
+    `/mcp` writes one row per JSON-RPC message with the verb, tool and target
+    a middleware cannot see. A middleware row per `/mcp` post would double-
+    count every call -- silently, since every analytics query that reads
+    `via = 'mcp'` would still return a number.
 
     Guard: AUDIT-013.
     """

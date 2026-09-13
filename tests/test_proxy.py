@@ -48,6 +48,7 @@ def _principal(
         proxy_grants=proxy_grants or [],
         kind="agent",
         parent_id=2,
+        parent_name=name,
     )
 
 
@@ -320,27 +321,19 @@ async def test_proxy_rejects_invalid_method():
 
 
 async def test_audit_log_written(db):
-    """_audit_log writes a row to proxy_log AND one to audit_log.
+    """_audit_log writes the proxied request's audit row.
 
-    Both are asserted. Checking only proxy_log would keep passing against a
-    version that had stopped writing the trace-carrying row altogether, which
-    is the row the rest of B2 depends on.
-
-    Guard: PROXY-006.
+    The one row since migration 023 retired `proxy_log`; everything that
+    table carried (connection, method, status, the sponsoring account) is
+    asserted on this one.
     """
+    import json
+
     from datum_sync.proxy import _audit_log
 
     p = _principal(agent_name="audit-agent")
     trace = audit.Trace.mint("client-supplied")
     await _audit_log(db, p, "test-conn", "GET", "/api/test", 200, trace)
-
-    row = await db.fetchrow(
-        "SELECT * FROM proxy_log WHERE agent_name = 'audit-agent' ORDER BY id DESC LIMIT 1"
-    )
-    assert row is not None
-    assert row["connection_name"] == "test-conn"
-    assert row["method"] == "GET"
-    assert row["upstream_status"] == 200
 
     audited = await db.fetchrow(
         "SELECT * FROM audit_log WHERE trace_id = $1", trace.id
@@ -350,9 +343,12 @@ async def test_audit_log_written(db):
     assert audited["actor_kind"] == "agent"
     assert audited["actor_name"] == "audit-agent"
     assert audited["outcome"] == "ok"
+    assert audited["target"] == "test-conn:GET:/api/test"
+    detail = json.loads(audited["detail"])
+    assert detail["upstream_status"] == 200
+    assert detail["account"] == "test-account"
     # The client string is kept, and kept apart from the id we minted.
     assert audited["client_trace_id"] == "client-supplied"
     assert str(audited["trace_id"]) != audited["client_trace_id"]
-    assert row["account_name"] == "test-account"
 
-    await db.execute("DELETE FROM proxy_log WHERE agent_name = 'audit-agent'")
+    await db.execute("DELETE FROM audit_log WHERE trace_id = $1", trace.id)

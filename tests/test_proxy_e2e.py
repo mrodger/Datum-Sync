@@ -8,7 +8,7 @@ Verifies:
   1. Agent token authenticates through /mcp
   2. proxy_request routes correctly via tools/call
   3. Auth injection puts the secret into the outgoing headers
-  4. The audit log row is written
+  4. The audit_log row is written (the only log since migration 023)
   5. An account token (not agent) is rejected for proxy
   6. An agent without the grant is rejected
 """
@@ -48,7 +48,6 @@ async def db():
         pytest.skip("database unavailable")
     yield conn
     # cleanup in reverse dependency order
-    await conn.execute("DELETE FROM proxy_log WHERE agent_name = $1", AGENT_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", AGENT_NAME)
     await conn.execute("DELETE FROM connections WHERE name = $1", CONN_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
@@ -217,15 +216,14 @@ async def test_full_proxy_via_mcp(client, setup, db, monkeypatch):
 
     # Audit log was written
     row = await db.fetchrow(
-        "SELECT * FROM proxy_log WHERE agent_name = $1 ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM audit_log WHERE actor_name = $1 AND verb = 'proxy.request' ORDER BY id DESC LIMIT 1",
         AGENT_NAME,
     )
     assert row is not None
-    assert row["connection_name"] == CONN_NAME
-    assert row["method"] == "GET"
-    assert row["path"] == "/v1/test"
-    assert row["upstream_status"] == 200
-    assert row["account_name"] == ACCOUNT_NAME
+    assert row["target"] == f"{CONN_NAME}:GET:/v1/test"
+    detail = json.loads(row["detail"])
+    assert detail["upstream_status"] == 200
+    assert detail["account"] == ACCOUNT_NAME
 
 
 async def test_account_token_rejected_for_proxy(client, setup, db):

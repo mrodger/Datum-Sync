@@ -324,35 +324,11 @@ async def _audit_log(
     upstream_status: int,
     trace: audit.Trace,
 ) -> None:
-    """Write one row to proxy_log and one to audit_log. Never raises.
+    """Write the proxied request's audit row. Never raises.
 
-    Both, not one: `proxy_log` keeps being written unchanged so that this
-    change cannot lose a record that something already reads, and `audit_log`
-    is the copy that carries the trace. Retiring `proxy_log` is a later
-    migration, once the new row has been shown to answer what the old one does.
+    One row since migration 023 retired `proxy_log`. The row carries the
+    trace, which is what joins it to the `/mcp` row for the same request.
     """
-    try:
-        await conn.execute(
-            """
-            INSERT INTO proxy_log
-                (agent_id, agent_name, account_name, connection_name,
-                 method, path, upstream_status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            """,
-            principal.agent_id,
-            principal.agent_name or "",
-            # The account column is the sponsor for an agent, as it was when
-            # agents borrowed their account's principal; the agent is the
-            # row's own agent_name.
-            principal.parent_name or principal.name,
-            connection_name,
-            method,
-            path[:2000],
-            upstream_status,
-        )
-    except Exception:
-        pass
-
     await audit.write(
         conn,
         trace=trace,
@@ -360,8 +336,9 @@ async def _audit_log(
         via="mcp",
         verb="proxy.request",
         target_kind="connection",
-        # Same shape as mcp_call_log.target for a proxy call, so the pair of
-        # rows for one request are recognisably about the same thing.
+        # `{connection}:{method}:{path}`, the same shape `_call_target` gives
+        # the /mcp row for the proxy_request call, so the pair of rows for
+        # one request are recognisably about the same thing.
         target=f"{connection_name}:{method}:{path}"[:2000],
         # The proxy has never measured its own duration and this change does
         # not start: an invented number would be worse than an absent one.

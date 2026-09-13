@@ -1514,22 +1514,12 @@ CASES = [
         "        if False:",
         "tests/test_proxy.py::test_proxy_rejects_non_http_connection",
     ),
-    (
-        "PROXY-006",
-        "the proxy still writes proxy_log alongside the new audit_log",
-        "datum_sync/proxy.py",
-        "            INSERT INTO proxy_log\n",
-        "            INSERT INTO proxy_log_retired\n",
-        "tests/test_proxy.py::test_audit_log_written",
-    ),
+    # PROXY-006 ("the proxy still writes proxy_log alongside audit_log") was
+    # retired with the table in migration 023; its test now asserts the one
+    # row. The verification that let the mirror go is
+    # spec/agent-auth-plane/_verify-audit-mirror.md.
 
     # -- audit spine guards -----------------------------------------------------
-    #
-    # PROXY-006's break points the insert at a table that does not exist. It is
-    # wrapped in `try/except: pass`, so nothing is raised and nothing is written
-    # -- which is precisely why its test asserts on the proxy_log row as well as
-    # the audit_log one. Adding the second writer is exactly the kind of change
-    # that quietly costs you the first.
 
     (
         "AUDIT-001",
@@ -1596,13 +1586,13 @@ CASES = [
     ),
     (
         "AUDIT-006",
-        "the audit row mirrors the mcp_call_log row it is written beside",
+        "the /mcp audit row carries the duration and the governance flag",
         "datum_sync/mcp.py",
         "                duration_ms=duration_ms,\n"
         "                governance=_is_governance(target),",
         "                duration_ms=None,\n"
         "                governance=_is_governance(target),",
-        "tests/test_audit_trace.py::test_the_audit_row_agrees_with_the_mcp_call_log_row",
+        "tests/test_audit_trace.py::test_the_audit_row_carries_the_call_shape",
     ),
     (
         "AUDIT-008",
@@ -1720,7 +1710,7 @@ CASES = [
         "tests/test_vault_fs.py::test_mcp_vault_tools_hidden_without_scope",
     ),
 
-    # -- mcp_call_log guards ---------------------------------------------------
+    # -- /mcp audit row guards (formerly mcp_call_log) ---------------------------
 
     (
         "MCPLOG-001",
@@ -1730,7 +1720,7 @@ CASES = [
         '        target.startswith(p) for p in _GOVERNANCE_PREFIXES\n'
         '    )',
         '    return False',
-        "tests/test_mcp_call_log.py::test_log_governance_skill_write",
+        "tests/test_mcp_audit.py::test_log_governance_skill_write",
     ),
     (
         "MCPLOG-002",
@@ -1740,19 +1730,18 @@ CASES = [
         '        return args.get("path")',
         '    if tool_name in _VAULT_TOOL_NAMES:\n'
         '        return None',
-        "tests/test_mcp_call_log.py::test_log_vault_read",
+        "tests/test_mcp_audit.py::test_log_vault_read",
     ),
     (
         "MCPLOG-003",
         "X-Trace-Id stored as client_trace_id",
-        "datum_sync/mcp.py",
-        # Re-anchored when the trace refactor replaced the `client_trace_id`
-        # local with `Trace.client_id`. The anchor is the column write rather
-        # than the header read: that is what the guard is actually about, and
-        # the header read now also anchors AUDIT-004 and AUDIT-005.
-        "                trace.client_id,",
-        "                None,",
-        "tests/test_mcp_call_log.py::test_log_trace_id",
+        "datum_sync/audit.py",
+        # Re-anchored twice: once when the trace refactor replaced the
+        # `client_trace_id` local with `Trace.client_id`, and again when 023
+        # retired mcp_call_log and the only column write left is audit.write's.
+        "            trace.client_id,\n            actor_id,\n",
+        "            None,\n            actor_id,\n",
+        "tests/test_mcp_audit.py::test_log_trace_id",
     ),
     (
         "MCPLOG-004",
@@ -1763,7 +1752,7 @@ CASES = [
         '            "error", exc.code, duration_ms, trace, session_id,\n'
         '        )',
         '        pass  # log removed',
-        "tests/test_mcp_call_log.py::test_log_error_outcome",
+        "tests/test_mcp_audit.py::test_log_error_outcome",
     ),
     (
         "TOKEN-001",
@@ -1874,7 +1863,7 @@ CASES = [
     ),
     (
         "AUDIT-013",
-        "/mcp is not double-counted, so audit_log still mirrors mcp_call_log",
+        "/mcp is not double-counted: the endpoint writes its own row, the middleware none",
         "datum_sync/api.py",
         "    if path.startswith(AUDIT_SELF_LOGGING):\n        return",
         "    if path.startswith(()):\n        return",
@@ -2026,10 +2015,10 @@ CASES = [
         "DASH-004",
         "the list of reachable MCP targets is not reconnaissance for any account",
         "datum_sync/api.py",
-        "    repository on the row to filter by.\n"
+        "    federation catalogue and does not use this route.\n"
         "    \"\"\"\n"
         "    auth.require_admin(caller)",
-        "    repository on the row to filter by.\n"
+        "    federation catalogue and does not use this route.\n"
         "    \"\"\"",
         "tests/test_dashboard_routes.py::"
         "test_other_callers_mcp_targets_are_not_readable",
