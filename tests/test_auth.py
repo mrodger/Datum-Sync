@@ -1425,8 +1425,10 @@ async def test_an_expired_session_is_refused(browser, db, account_password):
 
 @pytest.mark.asyncio
 async def test_the_shell_is_public_but_the_data_behind_it_is_not(browser):
-    """The shell has to be reachable signed-out or there is nowhere to sign in."""
-    assert (await browser.get("/ui")).status_code == 200
+    """The shell has to be reachable signed-out or there is nowhere to sign in.
+    `/ui` is the old address and redirects; `/ui/v2` is the shell."""
+    assert (await browser.get("/ui")).status_code == 307
+    assert (await browser.get("/ui/v2")).status_code == 200
     assert (await browser.get("/rest/v1/whoami")).status_code == 401
 
 

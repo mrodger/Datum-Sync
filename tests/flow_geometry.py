@@ -75,7 +75,7 @@ def main() -> int:
         browser = pw.chromium.launch()
         page = browser.new_context(viewport=VIEWPORT).new_page()
 
-        page.goto(f"{BASE}/ui")
+        page.goto(f"{BASE}/ui/v2")
         page.wait_for_selector("#signin-form")
         page.fill("#signin-name", USER)
         page.fill("#signin-password", PASSWORD)
@@ -118,10 +118,10 @@ def main() -> int:
         check("ws-card min-height", box(page, ".ws-card", "height"), 90, tol=10)
 
         print("\ncontrols")
-        page.goto(f"{BASE}/ui#/schedules")
+        page.goto(f"{BASE}/ui/v2#/schedules")
         page.wait_for_selector("#view > [data-ready='schedules']")
-        check("action button height", box(page, ".listbar .actions .button", "height"), 35)
-        check("search field height", box(page, ".listbar .search input", "height"), 40)
+        check("action button height", box(page, ".action-bar .actions .button", "height"), 35)
+        check("search field height", box(page, ".action-bar .search input", "height"), 40)
 
         browser.close()
 

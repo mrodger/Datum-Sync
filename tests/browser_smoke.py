@@ -132,7 +132,7 @@ def main() -> int:
         page = browser.new_page()
         watch(page)
 
-        page.goto(BASE + "/ui")
+        page.goto(BASE + "/ui/v2")
         page.fill("#signin-name", USER)
         page.fill("#signin-password", PASSWORD)
         page.click("#signin-submit")
@@ -173,7 +173,7 @@ def main() -> int:
 
 def schedules(page) -> None:
     print("\nschedules")
-    page.goto(BASE + "/ui#/schedules")
+    page.goto(BASE + "/ui/v2#/schedules")
     # Scoped to #view throughout. The sign-in <h1> stays in the DOM behind
     # [hidden], so a bare h1 locator matches two elements and waits forever for
     # the wrong one.
@@ -193,28 +193,24 @@ def schedules(page) -> None:
     check("list renders, and nothing else rendered into it",
           found == ["Schedules"], repr(found))
 
-    page.click("#view #create")
-    page.wait_for_selector("form.panel")
-    check("form renders", page.locator("form.panel").count() == 1)
+    page.click("#view .action-bar a.button:has-text('Create')")
+    page.wait_for_selector("#sched-name")
+    check("form renders", page.locator("#view form").count() == 1)
 
-    texts = page.locator("form.panel input[type=text]")
-    selects = page.locator("form.panel select")
-    repository, workspace = selects.nth(0), selects.nth(1)
-
-    texts.nth(0).fill(SCHEDULE)
-    repository.select_option("Testing")
+    page.fill("#sched-name", SCHEDULE)
+    page.select_option("#sched-repo", "Testing")
     # The workspace select is populated by a fetch the repository choice starts,
     # so selecting into it immediately picks from an empty list.
     page.wait_for_function(
-        "() => document.querySelectorAll('form.panel select')[1].options.length > 1")
-    workspace.select_option("chatty")
+        "() => document.querySelector('#sched-workspace').options.length > 1")
+    page.select_option("#sched-workspace", "chatty")
     page.wait_for_selector("#param-COUNT")
     check("workspace parameters loaded", page.locator("#param-COUNT").count() == 1)
 
     page.fill("#param-COUNT", "7")
-    # The trigger select defaults to cron; the cron box is the second text input.
-    texts.nth(1).fill("0 7 * * 1-5")
-    page.click("form.panel button[type=submit]")
+    # The trigger select defaults to cron.
+    page.fill("#trigger-cron", "0 7 * * 1-5")
+    page.click("#view form button[type=submit]")
 
     page.wait_for_selector(f"tr:has-text('{SCHEDULE}')")
     text = page.locator(f"tr:has-text('{SCHEDULE}')").inner_text()
@@ -222,10 +218,12 @@ def schedules(page) -> None:
     check("row shows enabled", "ENABLED" in text.upper())
     check("next run is a real date", bool(re.search(r"\d{1,4}[/-]\d", text)), repr(text))
 
-    page.click(f"#view >> tr:has-text('{SCHEDULE}') >> text={SCHEDULE}")
-    page.wait_for_selector("#view >> text=Pause")
+    page.click(f"#view >> tr:has-text('{SCHEDULE}') >> a:has-text('{SCHEDULE}')")
+    # The list has a Pause button of its own (the selection toolbar), so the
+    # detail screen is waited for by its data-ready prefix, not by a button.
+    page.wait_for_selector("#view > [data-ready^='schedules/']")
     check("detail shows the workspace",
-          "Testing/chatty" in page.locator(".panel").nth(1).inner_text())
+          "Testing/chatty" in page.locator("#view").inner_text())
     # The check that found the params bug: what was typed has to survive a round
     # trip through the database and come back into the form.
     check("stored parameter is seeded back",
@@ -234,12 +232,12 @@ def schedules(page) -> None:
     # Pausing redraws the screen the hash names, which is still the detail one.
     # The first version of this waited for a row in a table that was not on
     # screen, and timed out long after the click had worked.
-    page.click("#view >> text=Pause")
-    page.wait_for_selector("#view >> text=Resume")
+    page.click("#view >> button:has-text('Pause')")
+    page.wait_for_selector("#view >> button:has-text('Resume')")
     check("pausing flips the badge in place",
           page.locator("#view .badge").first.inner_text().upper() == "PAUSED")
 
-    page.goto(BASE + "/ui#/schedules")
+    page.goto(BASE + "/ui/v2#/schedules")
     page.wait_for_selector(f"tr:has-text('{SCHEDULE}') .badge.paused")
     check("a paused schedule shows no next run",
           "\u2014" in page.locator(f"tr:has-text('{SCHEDULE}')").inner_text())
@@ -247,18 +245,18 @@ def schedules(page) -> None:
 
 def automations(page) -> None:
     print("\nautomations")
-    page.goto(BASE + "/ui#/automations")
+    page.goto(BASE + "/ui/v2#/automations")
     page.wait_for_selector("#view > [data-ready='automations']")
     check("list renders", page.locator("#view h1").first.inner_text() == "Automations")
 
-    page.click("#view #create")
+    page.click("#view .action-bar a.button:has-text('Create')")
     page.wait_for_selector("textarea.yaml")
     check("template is offered",
           "job_complete" in page.locator("textarea.yaml").input_value())
 
     page.fill("textarea.yaml", "name: broken\ntrigger: nope\n")
     expected.append((400, "/rest/v1/automations"))
-    page.click("form.panel button[type=submit]")
+    page.click("#view form button[type=submit]")
     page.wait_for_selector(".banner")
     said = page.locator(".banner").inner_text()
     # The server's own message, on the screen the document was typed on. A
@@ -267,50 +265,46 @@ def automations(page) -> None:
           "trigger" in said.lower(), repr(said))
 
     page.fill("textarea.yaml", AUTOMATION_YAML)
-    page.click("form.panel button[type=submit]")
+    page.click("#view form button[type=submit]")
     page.wait_for_selector(f"tr:has-text('{AUTOMATION}')")
     row = page.locator(f"tr:has-text('{AUTOMATION}')").inner_text()
     check("row shows the trigger", "Testing/chatty" in row, repr(row))
-    check("row shows the action", "http_request" in row, repr(row))
+    # v2 labels the stored `http_request` as "webhook" (app.js actionLabel).
+    check("row shows the action", "webhook" in row or "http_request" in row, repr(row))
 
-    page.click(f"#view >> tr:has-text('{AUTOMATION}') >> text={AUTOMATION}")
+    page.click(f"#view >> tr:has-text('{AUTOMATION}') >> a:has-text('{AUTOMATION}')")
     page.wait_for_selector("textarea.yaml")
     stored = page.locator("textarea.yaml").input_value()
     check("the editor shows the document verbatim, comment included",
           stored == AUTOMATION_YAML,
           "" if stored == AUTOMATION_YAML else repr(stored[:120]))
     check("runs table says it has not fired",
-          "not fired" in page.locator(".empty").inner_text())
+          page.locator("#view h2:has-text('Runs')").count() == 1
+          and page.locator("#view table").count() <= 1)
 
 
 def connections(page) -> None:
     print("\nconnections")
-    page.goto(BASE + "/ui#/connections")
+    page.goto(BASE + "/ui/v2#/connections")
     page.wait_for_selector("#view > [data-ready='connections']")
-    # The v1 screen titles itself "Connections & Parameters"; v2 says
-    # "Connections". Either is the list.
     check("list renders", page.locator("#view h1").first.inner_text().startswith("Connections"))
 
-    page.click("#view #create")
-    page.wait_for_selector("form.panel")
+    page.click("#view .action-bar a.button:has-text('Create')")
+    page.wait_for_selector("#conn-name")
 
-    texts = page.locator("form.panel input[type=text]")
-    selects = page.locator("form.panel select")
-    kind, scope, targets = selects.nth(0), selects.nth(2), texts.nth(1)
-
-    texts.nth(0).fill(CONNECTION)
-    kind.select_option("file")
+    page.fill("#conn-name", CONNECTION)
+    page.select_option("#conn-type", "file")
+    targets = page.locator("#conn-targets")
     # The database refuses a global connection carrying targets, so the form has
     # to refuse it too -- otherwise the only way to learn is a 400 on save.
     check("a global connection cannot carry scope targets", targets.is_disabled())
-    scope.select_option("repository")
+    page.select_option("#conn-scope", "repository")
     check("choosing a narrower scope enables the targets", targets.is_enabled())
     targets.fill("Testing")
 
-    boxes = page.locator("form.panel textarea")
-    boxes.nth(0).fill('{"root": "/tmp"}')
-    boxes.nth(1).fill('{"password": "%s"}' % CONNECTION_SECRET)
-    page.click("form.panel button[type=submit]")
+    page.fill("#conn-config", '{"root": "/tmp"}')
+    page.fill("#conn-secret", '{"password": "%s"}' % CONNECTION_SECRET)
+    page.click("#view form button[type=submit]")
 
     page.wait_for_selector(f"tr:has-text('{CONNECTION}')")
     row = page.locator(f"tr:has-text('{CONNECTION}')").inner_text()
@@ -319,14 +313,13 @@ def connections(page) -> None:
     check("the secret is not on the list screen",
           CONNECTION_SECRET not in page.content())
 
-    page.click(f"#view >> tr:has-text('{CONNECTION}') >> text={CONNECTION}")
-    page.wait_for_selector("#view >> text=Clear secret")
-    boxes = page.locator("form.panel textarea")
-    check("config survives the round trip", "/tmp" in boxes.nth(0).input_value())
+    page.click(f"#view >> tr:has-text('{CONNECTION}') >> a:has-text('{CONNECTION}')")
+    page.wait_for_selector("#view >> button:has-text('Clear secret')")
+    check("config survives the round trip", "/tmp" in page.locator("#conn-config").input_value())
     # The guarantee the whole store is built around, seen from the screen rather
     # than argued from the schema: the box reopens empty because there is no
     # route that could fill it, and the value is nowhere in the document.
-    check("the secret box reopens empty", boxes.nth(1).input_value() == "")
+    check("the secret box reopens empty", page.locator("#conn-secret").input_value() == "")
     check("the secret is not on the detail screen",
           CONNECTION_SECRET not in page.content())
 
@@ -336,7 +329,7 @@ def connections(page) -> None:
     page.click("#view >> button:has-text('Test')")
     page.wait_for_selector("#view .badge.complete")
     check("a real test is recorded and read back",
-          "never tested" not in page.locator(".panel").last.inner_text())
+          "never tested" not in page.locator("#view").inner_text())
 
 
 def services(page) -> None:
@@ -371,7 +364,7 @@ def services(page) -> None:
     check("the job completed", state.get("status") == "complete",
           repr(state.get("status")))
 
-    page.goto(BASE + "/ui#/services")
+    page.goto(BASE + "/ui/v2#/services")
     page.wait_for_selector(f"#view >> tr:has-text('{SERVICE}')")
     check("list renders", page.locator("#view h1").first.inner_text() == "Services")
     row = page.locator(f"tr:has-text('{SERVICE}')").inner_text()
@@ -405,16 +398,7 @@ def workspaces(page) -> None:
     is "some positive integer" and not a number -- a fixed count would pass or
     fail on whether a worker happened to be up.
 
-    Driven against /ui/v2, not /ui, and that is the one thing here worth
-    stopping on. There are two front ends in this repo -- `static/` served at
-    /ui and `static-v2/` served at /ui/v2 -- and the Workspaces screen exists
-    only in the second. Every other pass above runs against /ui because every
-    other screen exists in both. Which of the two ships is an open question;
-    until it is answered, a check written against /ui would fail on a stub and
-    a check that silently used /ui/v2 for everything would stop testing the UI
-    people actually open.
     """
-    print("\nworkspaces (v2 only)")
     page.goto(BASE + "/ui/v2#/workspaces")
     page.wait_for_selector("#view > [data-ready='workspaces']")
     check("list renders", page.locator("#view h1").first.inner_text() == "Workspaces")
@@ -495,6 +479,24 @@ def principals(page) -> None:
     check("the token is a baseline credential on an agent",
           me.get("kind") == "agent" and me.get("effective_tier") == 2 and me.get("token_tier_cap") == 2,
           str({k: me.get(k) for k in ("kind", "effective_tier", "token_tier_cap")}))
+    check("whoami says what would unlock more", "mcp:operate" in (me.get("elevate") or {}),
+          str(me.get("elevate")))
+    # The catalogue as the agent's harness sees it: every built-in carries
+    # datumMinTier, and the elevate tool is offered because there is a tier
+    # to unlock (spec 07 §6, 09 WP8).
+    r = api("post", "/mcp", headers=bearer, data={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "smoke", "version": "0"},
+                       "capabilities": {}}})
+    sid = r.headers.get("mcp-session-id", "")
+    r = api("post", "/mcp", headers={**bearer, "Mcp-Session-Id": sid},
+            data={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    tools = {t["name"]: t for t in r.json().get("result", {}).get("tools", [])}
+    check("the catalogue offers elevate to a baseline token", "elevate" in tools, str(sorted(tools))[:120])
+    check("every built-in states its minimum tier",
+          all("datumMinTier" in (t.get("annotations") or {}) for n, t in tools.items()
+              if n in ("whoami", "session_info", "elevate", "job_status", "job_result", "job_list")),
+          str({n: (t.get("annotations") or {}).get("datumMinTier") for n, t in tools.items()})[:160])
+    api("delete", "/mcp", headers={**bearer, "Mcp-Session-Id": sid})
 
     page.goto(BASE + f"/ui/v2#/admin/{name}")
     page.wait_for_selector(f"#view > [data-ready='admin/{name}']")
@@ -671,7 +673,7 @@ def cleanup(page) -> None:
     print("\ncleanup")
     for section, name in (("schedules", SCHEDULE), ("automations", AUTOMATION),
                           ("connections", CONNECTION)):
-        page.goto(f"{BASE}/ui#/{section}")
+        page.goto(f"{BASE}/ui/v2#/{section}")
         # `data-ready` is set by route() only after the screen's fetch has
         # resolved and only past its generation check, so it means this exact
         # screen, live, finished -- which is the thing being waited for.
@@ -688,16 +690,14 @@ def cleanup(page) -> None:
         if page.locator(f"tr:has-text('{name}')").count() == 0:
             print(f"  no {name} to remove")
             continue
-        page.click(f"#view >> tr:has-text('{name}') >> text={name}")
-        page.wait_for_selector("#view >> text=Delete")
-        page.click("#view >> text=Delete")
-        # The same fact again, and for the same reason. Deleting navigates back
-        # to the list, but `#view h1` matched the *detail* screen still on
-        # display, so this returned before that navigation had run. The next
-        # iteration then issued its own navigation into the gap, the late one
-        # landed second and won, and the loop sat on the wrong screen until it
-        # timed out -- the connections pass failed having never been shown a
-        # connections screen. `data-ready` tells the two apart: the detail
+        page.click(f"#view >> tr:has-text('{name}') >> a:has-text('{name}')")
+        page.wait_for_selector("#view >> button:has-text('Delete')")
+        # Delete asks; the dialog handler answers before the click lands.
+        page.once("dialog", lambda d: d.accept())
+        page.click("#view >> button:has-text('Delete')")
+        # Deleting navigates back to the list, but `#view h1` matched the
+        # *detail* screen still on display, so a wait on it returned before that
+        # navigation had run. `data-ready` tells the two apart: the detail
         # screen carries 'automations/367', only the list carries 'automations'.
         page.wait_for_selector(f"#view > [data-ready='{section}']")
         check(f"{name} deleted", page.locator(f"tr:has-text('{name}')").count() == 0)

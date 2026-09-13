@@ -14,9 +14,30 @@ Full design spec: `spec/` directory. Read `spec/overview.md` first.
 **Deployed.** Steps 1–10 of the build order are done and the app is running on
 the Stratum VM (192.168.88.112:8201). Build order is in `spec/overview.md`.
 
+**The agent auth plane is built** (`spec/agent-auth-plane/`, WP0–WP8, reports
+in `_report-WP*.md`): one principal table with grants that narrow down the
+delegation tree, tier as a verb ceiling, lifecycle states and enrolment, MCP
+sessions with a per-credential limit, OAuth elevation (consent scope picker,
+`on_behalf_of`, the device flow), federation of upstream MCP servers behind
+argument guards, approval-gated calls, the review queue, and one audit table.
+Migrations 016–023 carry it; the deployed instance needs `python -m
+datum_sync.migrate` and, before 023, `tools/verify_audit_mirror.py` run against
+its own database. There is one web shell, at `/ui/v2` (`/ui` redirects).
+
+**One process holds no authority state.** Rate windows, the login lockout, the
+registration limiter and the drive-folder cache are in-memory by design (D-09):
+this deployment runs one API process and one worker. Do not add a second API
+process, a thread pool or a background task that keeps grant, session or
+approval state outside the database; every such fact is a row, read on the
+request that needs it.
+
 Four gates, all of which must pass before a step is called done:
 `pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`
-· `python tests/flow_geometry.py` (the last two need a running server).
+· `python tests/flow_geometry.py` (the last two need a running server, and the
+smoke's federation pass needs a tier-5 account or it prints a note and moves
+on: the mock upstream is on loopback, which only tier 5 may point the gateway
+at). The harness takes a family prefix (`break_the_guard.py FED ELEV`) for the
+package being worked on; the whole registry is the gate.
 Stop the worker before running the suite — a live worker claims the tests' jobs,
 and a job left queued afterwards silently *skips* the UI tests rather than
 failing them, which looks like a clean run.
@@ -298,7 +319,7 @@ component: if SCIMAC can run their workflows end-to-end, the component is workin
 - DB access via asyncpg only. No ORM.
 - Match existing style. Don't clean up adjacent code you weren't asked to touch.
 
-## Key file map (to be populated as build progresses)
+## Key file map
 
 | File | Purpose |
 |---|---|
@@ -306,3 +327,24 @@ component: if SCIMAC can run their workflows end-to-end, the component is workin
 | `spec/components.md` | All 12 components — schemas, API surface, data shapes |
 | `spec/workspace-contract.md` | Workspace interface, manifest schema, publish gate |
 | `spec/case-study-scimac.md` | Reference implementation |
+| `spec/agent-auth-plane/` | The auth plane and MCP gateway delta spec; `11-decision-log.md` records every deviation; `_report-WP*.md` what each package built |
+| `datum_sync/auth.py` | `Principal`, `effective()` (state, ancestors, token cap, scope cap), `require_tier`, `SCOPE_TIERS`, `elevation_hints` |
+| `datum_sync/grants.py` | pure: `narrows`, `intersect`, `restricted`, the glob rules |
+| `datum_sync/principals.py` | `/rest/v1/principals*`: one table, grants that narrow, effective authority |
+| `datum_sync/lifecycle.py` | pending → active → restricted / disabled / retired; `daily()` housekeeping |
+| `datum_sync/enrol.py` | registration codes, `/enrol`, `/enrol/claim` |
+| `datum_sync/sessions.py` | `mcp_sessions`: the per-credential limit and supersession |
+| `datum_sync/oauth.py`, `device.py` | PKCE with the consent scope picker and `on_behalf_of`; the RFC 8628 device flow and `/rest/v1/elevations` |
+| `datum_sync/mcp.py` | `/mcp`: sessions, built-ins, workspace tools, federated dispatch, resources |
+| `datum_sync/federation/` | `client.py` (the gateway as MCP client), `guards.py` (argument-guard grammar), `catalogue.py` (cached tools), `routes.py`, `profiles/` |
+| `datum_sync/pending.py` | approval-gated calls, run once under the requester's snapshot |
+| `datum_sync/review.py` | `/rest/v1/review` and the activity rollup |
+| `datum_sync/audit.py` | the one audit table; `Trace`; `write` / `write_anon` |
+| `datum_sync/connections.py`, `proxy.py` | the credential store (type `mcp` since WP5) and the HTTP credential proxy |
+| `datum_sync/static-v2/` | the web shell (`app.js`, no build step, no innerHTML) |
+| `tests/break_the_guard.py` | the guard registry: every load-bearing check has a break case |
+| `tests/mock_mcp_server.py` | the upstream the federation tests and the smoke run against |
+| `tools/verify_audit_mirror.py`, `tools/audit_tier_report.py` | one-off reports run against a live database |
+
+Not built, on purpose: teams (`11 D-14`, the delegation tree is the fence), a
+memory provider (`D-15`), OAuth to upstreams (`D-13`), stdio upstreams.

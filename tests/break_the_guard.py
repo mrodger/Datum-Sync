@@ -331,10 +331,10 @@ CASES = [
         # conspicuous. The test greps, so the guard is the absence itself.
         "UI-001",
         "the UI never assigns markup (innerHTML ban)",
-        "datum_sync/static/app.js",
+        "datum_sync/static-v2/app.js",
         "    node.replaceChildren();",
         "    node.innerHTML = '';",
-        "tests/test_ui.py::test_the_ui_never_assigns_markup",
+        "tests/test_ui.py::test_the_v2_ui_never_assigns_markup",
     ),
     (
         # Not the whole of safe_name: `.name` alone. _SAFE would still replace
@@ -1084,8 +1084,8 @@ CASES = [
         "SERVICE-014",
         "/serve/ is not public",
         "datum_sync/api.py",
-        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\")",
-        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\", \"/serve/\")",
+        "PUBLIC_PREFIXES = (\"/v2/\",)",
+        "PUBLIC_PREFIXES = (\"/v2/\", \"/serve/\")",
         "tests/test_services.py::test_serve_needs_a_credential",
     ),
     (
@@ -1181,8 +1181,8 @@ CASES = [
         "UI-005",
         "the v2 assets are public",
         "datum_sync/api.py",
-        "PUBLIC_PREFIXES = (\"/ui/static/\", \"/v2/\")",
-        "PUBLIC_PREFIXES = (\"/ui/static/\",)",
+        "PUBLIC_PREFIXES = (\"/v2/\",)",
+        "PUBLIC_PREFIXES = ()",
         "tests/test_ui.py::test_every_asset_the_v2_shell_names_is_served",
     ),
     (

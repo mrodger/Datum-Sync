@@ -11,13 +11,15 @@ only mean serving a 401 page instead of a sign-in page.
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from datum_sync import audit, auth, config, db
 from datum_sync.errors import ApiError
 
-STATIC_DIR = config.REPO_ROOT / "datum_sync" / "static"
+# One shell since WP8 (spec/agent-auth-plane/09). The directory keeps its
+# `-v2` name: it is what every `<link>`, `<script>` and import inside it
+# already says, and renaming a URL prefix buys nothing.
 STATIC_V2_DIR = config.REPO_ROOT / "datum_sync" / "static-v2"
 
 router = APIRouter(tags=["ui"])
@@ -49,21 +51,22 @@ class _RevalidatedStatics(StaticFiles):
 
 def install(app: FastAPI) -> None:
     app.include_router(router)
-    app.mount("/ui/static", _RevalidatedStatics(directory=STATIC_DIR), name="ui-static")
-    # The v2 reskin, served alongside v1 rather than over it, so the two can be
-    # opened side by side while the port runs. `/v2` is the prefix static-v2's
-    # markup already names in its <link> and <script> tags.
+    # `/v2` is the prefix static-v2's markup names in its <link> and <script>
+    # tags and its module imports.
     app.mount("/v2", _RevalidatedStatics(directory=STATIC_V2_DIR), name="ui-static-v2")
 
 
 @router.get("/ui", include_in_schema=False)
-async def shell() -> FileResponse:
-    # The shell names the assets, so caching it hides a change to any of them.
-    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+async def shell() -> RedirectResponse:
+    """The old shell's address. A bookmark or a `claude mcp` hint that says
+    `/ui` lands on the one shell; the fragment (`#/schedules`) survives a
+    redirect whose Location carries none."""
+    return RedirectResponse("/ui/v2", status_code=307, headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/ui/v2", include_in_schema=False)
 async def shell_v2() -> FileResponse:
+    # The shell names the assets, so caching it hides a change to any of them.
     return FileResponse(STATIC_V2_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 

@@ -43,12 +43,15 @@
     /* Layout — pixel-matched from Flow 2026.2 */
     --nav-width:           250px;
     --nav-width-collapsed: 3.5rem;
-    --topbar:  56px;
+    /* The chrome numbers are FME Flow 2026.2's, measured (tests/flow_geometry.py);
+       they moved here from the retired v1 stylesheet in WP8. Change them only
+       if Flow is re-scanned. */
+    --topbar:  64px;
     --nav-item: 36px;
     --nav-pitch: 44px;   /* measured off reference-images/repositories.png */
-    --gutter: 32px;
+    --gutter: 40px;
     --control: 35px;
-    --search:  38px;
+    --search:  40px;
 }
 
 /* ── Light zone ──────────────────────────────────────────────────────── */
@@ -333,7 +336,7 @@ code, pre, .mono { font-family: var(--mono); font-size: .85em; }
     flex-direction: column;
     background: var(--panel);
     box-shadow: inset -1px 0 0 var(--border);
-    padding: 12px 8px 0;
+    padding: 18px 8px 0;
 
     /* Flow's nav scrolls but shows no scrollbar. Hiding it also stops a
        classic scrollbar's gutter stealing width from the 250px column,
@@ -872,9 +875,9 @@ td.empty-row {
 .tile {
     display: flex;
     align-items: center;
-    gap: .45rem;
-    height: 50px;
-    padding: 0 1rem;
+    gap: .5rem;
+    height: 56px;
+    padding: 0 1.1rem;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: .35rem;
@@ -894,10 +897,10 @@ td.empty-row {
 .ws-card {
     display: flex;
     flex-direction: column;
-    gap: .3rem;
-    width: 190px;
-    min-height: 82px;
-    padding: .75rem;
+    gap: .35rem;
+    width: 210px;
+    min-height: 90px;
+    padding: .85rem;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: .35rem;
@@ -924,7 +927,7 @@ td.empty-row {
 
 /* Job counters */
 .counters { max-width: 854px; }
-.counter-row { display: grid; gap: 8px; margin-bottom: 8px; }
+.counter-row { display: grid; gap: 10px; margin-bottom: 10px; }
 .counter-row:nth-child(1) { grid-template-columns: repeat(3, 1fr); }
 .counter-row:nth-child(2) { grid-template-columns: repeat(2, 1fr); }
 
@@ -932,8 +935,8 @@ td.empty-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 64px;
-    padding: 0 1rem;
+    height: 72px;
+    padding: 0 1.25rem;
     background: var(--panel);
     border: 1px solid var(--border);
     border-left: 4px solid var(--queued);

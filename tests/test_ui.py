@@ -1,7 +1,7 @@
 """The web UI: its shell, its assets, and the routes only the browser uses.
 
 Two kinds of test live here. The HTTP ones drive the app through an ASGI
-transport, as everywhere else. The rest read `static/app.js` as text and assert
+transport, as everywhere else. The rest read `static-v2/app.js` as text and assert
 properties of the source, which is unusual enough to say why: the UI is vanilla
 JavaScript with no build step and no test runner, so there is nothing between
 what is written and what a browser executes. A property that must hold of every
@@ -24,10 +24,10 @@ import pytest_asyncio
 from datum_sync import config, uploads
 from datum_sync import db as db_module
 from datum_sync.api import app
-from datum_sync.ui import STATIC_DIR, STATIC_V2_DIR
+from datum_sync.ui import STATIC_V2_DIR
 
-APP_JS = (STATIC_DIR / "app.js").read_text()
-ROOT = STATIC_DIR.parents[1]
+APP_JS = (STATIC_V2_DIR / "app.js").read_text()
+ROOT = STATIC_V2_DIR.parents[1]
 
 
 @pytest_asyncio.fixture
@@ -60,23 +60,23 @@ async def anon(db):
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_the_shell_is_served_without_a_credential(anon):
-    """Gating it would only mean serving a 401 page instead of a sign-in page.
-
-    It carries no data: the markup is empty chrome, and the first thing the
-    script does is ask /whoami who the viewer is.
+async def test_the_old_shell_address_redirects_to_the_one_shell(anon):
+    """`/ui` was the first shell; since WP8 there is one, at `/ui/v2`, and the
+    old address is a redirect rather than a 404 so that bookmarks, the
+    verification URL in an old device-code response and `claude mcp` hints
+    still land. 307, not 301: nothing should cache the old address away.
     """
     r = await anon.get("/ui")
-    assert r.status_code == 200
-    assert "text/html" in r.headers["content-type"]
-    assert "signin-form" in r.text
+    assert r.status_code == 307
+    assert r.headers["location"] == "/ui/v2"
+    assert "no-cache" in r.headers.get("cache-control", "")
 
 
 @pytest.mark.asyncio
 async def test_the_shell_contains_no_data(anon):
     """The markup names no account, repository or job. If it ever did, the
     public shell would be leaking whatever it named."""
-    body = (await anon.get("/ui")).text
+    body = (await anon.get("/ui/v2")).text
     assert "_pytest" not in body
 
 
@@ -85,13 +85,13 @@ async def test_the_shell_contains_no_data(anon):
 async def test_the_static_assets_are_served_without_a_credential(anon, asset):
     """They are fetched by a <script>/<link> on a page nobody has signed in to
     yet, so a 401 here means the sign-in form cannot be styled or submitted."""
-    r = await anon.get(f"/ui/static/{asset}")
+    r = await anon.get(f"/v2/{asset}")
     assert r.status_code == 200
     assert r.content
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["/ui", "/ui/static/app.js", "/ui/static/style.css"])
+@pytest.mark.parametrize("path", ["/ui/v2", "/v2/app.js", "/v2/style.css"])
 async def test_the_ui_is_revalidated_rather_than_assumed_fresh(anon, path):
     """A response carrying neither Cache-Control nor Expires may be cached on a
     *guess* -- roughly a tenth of its age -- and served without asking. That is
@@ -113,37 +113,10 @@ async def test_revalidation_of_an_unchanged_asset_costs_nothing(anon):
     conditional request is that the answer is usually an empty 304. If this
     starts returning 200 with a body, every page load is re-downloading the UI.
     """
-    etag = (await anon.get("/ui/static/style.css")).headers["etag"]
-    r = await anon.get("/ui/static/style.css", headers={"If-None-Match": etag})
+    etag = (await anon.get("/v2/style.css")).headers["etag"]
+    r = await anon.get("/v2/style.css", headers={"If-None-Match": etag})
     assert r.status_code == 304
     assert not r.content
-
-
-@pytest.mark.asyncio
-async def test_the_static_mount_does_not_escape_its_directory(anon):
-    """The mount is a filesystem path joined with user input, which is the
-    shape of every traversal bug, and the consequence here is reading the
-    server's own source.
-
-    Two spellings, refused by two different things, which is why the assertion
-    admits two codes:
-
-    - `../ui.py` never leaves as a traversal. httpx resolves the dots before
-      sending, so what arrives is `/ui/ui.py` -- an ordinary path, not under
-      the public prefix, refused by the auth middleware with 401. This proves
-      the middleware fails closed; it says nothing about the mount.
-    - `..%2Fui.py` is one path segment as far as any URL parser is concerned,
-      so it arrives intact at `/ui/static/../ui.py`. This is the one that
-      reaches StaticFiles, and 404 is StaticFiles refusing to leave its root.
-
-    Keeping both is deliberate: the first is what a browser sends, the second
-    is what an attacker sends.
-    """
-    for attempt in ("../ui.py", "..%2Fui.py", "%2e%2e%2fui.py",
-                    "../../migrations/001_core.sql"):
-        r = await anon.get(f"/ui/static/{attempt}")
-        assert r.status_code in (401, 404), (attempt, r.status_code)
-        assert "STATIC_DIR" not in r.text, attempt
 
 
 # --------------------------------------------------------------------------
@@ -152,9 +125,8 @@ async def test_the_static_mount_does_not_escape_its_directory(anon):
 
 @pytest.mark.asyncio
 async def test_the_v2_shell_is_served_without_a_credential(anon):
-    """v2 is a second shell beside v1, not a replacement, so the two can be
-    opened side by side while the port runs. It is public for the same reason
-    v1 is: it contains no data and draws a sign-in form off a 401.
+    """Gating it would only mean serving a 401 page instead of a sign-in page:
+    it contains no data and draws a sign-in form off a 401.
     Guard: UI-006.
 """
     r = await anon.get("/ui/v2")
@@ -800,9 +772,17 @@ def test_the_v2_disabled_button_rule_outranks_every_button_variant():
 
 @pytest.mark.asyncio
 async def test_the_v2_mount_does_not_escape_its_directory(anon):
-    """Same property as the v1 mount, and it has to be asserted separately:
-    the two are separate StaticFiles instances under separate prefixes, and
-    `/v2/` is a public prefix, so nothing else refuses these.
+    """The mount is a filesystem path joined with user input, which is the
+    shape of every traversal bug, and the consequence here is reading the
+    server's own source.
+
+    Two spellings, refused by two different things, which is why the assertion
+    admits two codes: `../ui.py` is resolved by httpx before sending and
+    arrives as an ordinary path outside the public prefix, refused by the auth
+    middleware with 401; `..%2Fui.py` is one path segment as far as any URL
+    parser is concerned, reaches StaticFiles intact, and 404 is StaticFiles
+    refusing to leave its root. The first is what a browser sends, the second
+    is what an attacker sends.
     """
     for attempt in ("../ui.py", "..%2Fui.py", "%2e%2e%2fui.py",
                     "../../migrations/001_core.sql"):
@@ -814,39 +794,6 @@ async def test_the_v2_mount_does_not_escape_its_directory(anon):
 # --------------------------------------------------------------------------
 # the one invariant of app.js
 # --------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_the_ui_never_assigns_markup():
-    """Every sink that parses a string as HTML, refused in one place.
-
-    The UI builds the whole page out of API data: repository names, workspace
-    descriptions, job errors, account names. A runner exists to execute code
-    other people published, so "it is only our own data" is false here by
-    design, and one interpolation into innerHTML is stored XSS against every
-    signed-in user. The HttpOnly cookie means the injected script could not
-    read the credential -- but it would not need to, since it runs on the page
-    and can drive the admin routes as the viewer.
-
-    A grep is a blunt instrument and would flag a legitimate use. There is no
-    legitimate use in this file: el() covers the cases.
-
-    Comment lines are dropped first, because the first run of this test failed
-    on app.js's own comment explaining the rule. Stripping them narrows the
-    check to what a browser executes -- at the cost that a trailing comment
-    naming a sink still fails. That is the right trade: prose about the rule
-    belongs in a block comment, and a full JS parser to allow otherwise would
-    be more machinery than the property is worth.
-
-    Guard: UI-001.
-    """
-    sinks = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
-    code = "\n".join(
-        line for line in APP_JS.splitlines()
-        if not line.lstrip().startswith(("//", "/*", "*"))
-    )
-    found = [s for s in sinks if s in code]
-    assert found == [], f"app.js reaches for {found}; build nodes with el()"
-
 
 @pytest.mark.asyncio
 async def test_the_v2_ui_never_assigns_markup():
@@ -864,7 +811,7 @@ async def test_the_v2_ui_never_assigns_markup():
     icons.js itself is not scanned: it is vendored, generated, and never sees
     API data. This asserts the property over the file that renders it.
 
-    Guard: UI-010.
+    Guard: UI-001, UI-010.
     """
     sinks = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
     code = "\n".join(

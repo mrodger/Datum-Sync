@@ -1,7 +1,7 @@
 # Agent Auth Plane + MCP Gateway — delta specification
 
 **Date:** 2026-09-13
-**Status:** draft for review, not yet handed to a worker
+**Status:** implemented — WP0–WP8 built on branch `claude/datum-sync-agent-auth-arch-0a7y5z`; deviations in `11-decision-log.md` (D-28 onward), per-package reports in `_report-WP*.md`
 **Applies to:** `mrodger/Datum-Sync` at commit `d2d1b2c` (C3, rate limit)
 
 ## What this is

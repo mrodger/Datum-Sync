@@ -6,9 +6,9 @@ Multi-tenant agent gateway. Human operators and AI agents authenticate the same 
 
 ## Status
 
-**Built — 10 implementation steps complete, 680+ tests, 178 guards.** Deployed on VM112 at `:8201` (see `CLAUDE.md` for the layout, services and redeploy steps).
+**Built — 10 implementation steps plus the agent auth plane (`spec/agent-auth-plane/`), 800+ tests, 240+ guards.** Deployed on VM112 at `:8201` (see `CLAUDE.md` for the layout, services and redeploy steps).
 
-Three registered principals: `Marcus` (tier 4 admin), `superuser` (tier 5), `harness-researcher` (tier 2 agent). Agents register the same way humans do — just a different tier of auth.
+Humans and agents are rows in one table. An agent is enrolled by a sponsor's code, runs in a **baseline** configuration on its own token (one session, a narrow grant, tier 2), and reaches more by connecting over MCP and elevating through OAuth with a person in the loop: the consent page for Claude Code and Codex, the device flow for anything headless. Upstream MCP servers (GitHub, SSH, Drive, anything streamable-HTTP) are connections whose tools are federated into the one catalogue behind argument guards.
 
 ## What it does
 
@@ -36,8 +36,11 @@ Accounts and agents are managed via the Admin panel or REST API. Revoke drops a 
 - **Hosted services** — publish a workspace output as a persistent web service at `/serve/{name}/`
 - **MCP endpoint** — expose workspaces as tools callable from any MCP-compatible AI client
 - **Vault gate** — path-scoped NFS vault access with full audit log, pySHACL coherence validation
-- **MCP call log** — uniform audit spine for all MCP requests across all principals
+- **Audit log** — one table, one row per authorised action, joined by a server-minted trace id and grouped by MCP session
 - **Credential proxy** — two-level identity with auth injection and SSRF guard
+- **Principals** — one table for humans and agents; grants narrow down the delegation tree; lifecycle states; enrolment by code; review queue
+- **Elevation** — OAuth scopes cap the effective tier; consent scope picker, `on_behalf_of`, RFC 8628 device flow; approvals screen
+- **Federation** — upstream MCP servers as connections; cached catalogue; argument guards (`owner/repo`, hosts, commands, folders); approval-gated calls
 
 ## Architecture
 
@@ -45,7 +48,7 @@ Accounts and agents are managed via the Admin panel or REST API. Revoke drops a 
 - MCP Streamable HTTP transport with OAuth 2.0 PKCE
 - No scheduler object: the worker polls `schedules.next_run` in the database, so a restart loses nothing
 - `pg_notify` for durable SSE streaming
-- Vanilla JS web UI with account/agent management
+- Vanilla JS web UI (one shell at `/ui/v2`, no build step) with principals, enrolment, approvals, review and federation screens
 - pySHACL for vault_scope coherence validation at account write time
 
 ## Holonic design
