@@ -560,7 +560,13 @@ async def _tools_call(
     submitted = {k: _as_param(v) for k, v in arguments.items()}
 
     try:
-        row, _ = await execute.run_sync(repo, ws, submitted, MCP_SERVICE)
+        # `submitted_by` is the job row's own record of who asked. The audit
+        # row written by `_log_call` already names the principal, but the Jobs
+        # screen and the automations engine read `jobs.submitted_by`, and for
+        # every MCP-submitted job it was NULL until this argument was passed.
+        row, _ = await execute.run_sync(
+            repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name
+        )
     except ApiError as exc:
         # A workspace that fails is a *tool* error, not a protocol error: the
         # call was well-formed and the model is the one that needs to read the

@@ -2162,6 +2162,19 @@ CASES = [
         "tests/test_dashboard_routes.py::"
         "test_the_oauth_client_list_is_bounded_and_says_so",
     ),
+    (
+        "TIER-011",
+        "an MCP tool call records who submitted the job",
+        "datum_sync/mcp.py",
+        "        row, _ = await execute.run_sync(\n"
+        "            repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name\n"
+        "        )\n",
+        "        row, _ = await execute.run_sync(\n"
+        "            repo, ws, submitted, MCP_SERVICE\n"
+        "        )\n",
+        "tests/test_tier.py::"
+        "test_an_mcp_tool_call_records_who_submitted_the_job",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

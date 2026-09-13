@@ -8,8 +8,14 @@ A new agent gets zero proxy_grants. Proxy is opt-in: the admin assigns
 connections individually. The account's max_tier is the ceiling — an agent
 cannot proxy a tier-3 connection if its parent account is tier-2.
 
-Agent tokens are separate from account tokens. Account tokens work for
-everything except proxy. Agent tokens work only for proxy.
+Agent tokens are separate from account tokens, but they are NOT narrower:
+`auth.resolve` builds a Principal for an agent token from the parent
+account's `max_tier`, `repo_scope`, `vault_scope` and `rate_limit_per_min`,
+with `is_admin=False`. Only `proxy.check_proxy_access` asks whether the
+caller is an agent; every other route treats an agent token as its account.
+An earlier version of this docstring said agent tokens "work only for
+proxy". They never did. The gap is closed by folding agents into principals
+with their own narrowing grant -- spec/agent-auth-plane/03 §1.1.
 """
 from __future__ import annotations
 

@@ -6,7 +6,7 @@ Multi-tenant agent gateway. Human operators and AI agents authenticate the same 
 
 ## Status
 
-**Built — 10 implementation steps complete, 406+ tests, 112 guards.** Running on VM112 at `:8200`.
+**Built — 10 implementation steps complete, 680+ tests, 178 guards.** Deployed on VM112 at `:8201` (see `CLAUDE.md` for the layout, services and redeploy steps).
 
 Three registered principals: `Marcus` (tier 4 admin), `superuser` (tier 5), `harness-researcher` (tier 2 agent). Agents register the same way humans do — just a different tier of auth.
 
@@ -41,9 +41,9 @@ Accounts and agents are managed via the Admin panel or REST API. Revoke drops a 
 
 ## Architecture
 
-- FastAPI backend, PostgreSQL + PostGIS (`:5435`)
+- FastAPI backend, PostgreSQL + PostGIS (`:5432` native on the VM; `:5435` in the dev `docker-compose.yml`)
 - MCP Streamable HTTP transport with OAuth 2.0 PKCE
-- APScheduler for cron-based triggers
+- No scheduler object: the worker polls `schedules.next_run` in the database, so a restart loses nothing
 - `pg_notify` for durable SSE streaming
 - Vanilla JS web UI with account/agent management
 - pySHACL for vault_scope coherence validation at account write time
@@ -65,4 +65,4 @@ uvicorn datum_sync.api:app --host 0.0.0.0 --port 8200
 `datum_sync.runner` is the job runner, not the server — it is imported by the
 worker and has no `__main__`.
 
-Database: PostgreSQL + PostGIS on `:5435`. Apply migrations in order: `migrations/001_*.sql` → `migrations/006_*.sql`.
+Database: PostgreSQL + PostGIS (`docker-compose up -d` gives one on `:5435`). Apply every migration in order with `python -m datum_sync.migrate`; `--status` lists what is applied. Migrations are checksummed and `tests/test_schema_drift.py` proves the live schema matches them.
