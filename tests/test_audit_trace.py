@@ -26,6 +26,7 @@ import pytest
 import pytest_asyncio
 
 from datum_sync import (
+    agents,
     audit, auth, connections as conn_mod, crypto, db as db_module, mcp, proxy,
     tokens,
 )
@@ -138,7 +139,7 @@ async def db():
     await conn.execute("DELETE FROM audit_log WHERE actor_name = $1", ACCOUNT_NAME)
     await conn.execute("DELETE FROM mcp_call_log WHERE account_name = $1", ACCOUNT_NAME)
     await conn.execute("DELETE FROM proxy_log WHERE agent_name = $1", AGENT_NAME)
-    await conn.execute("DELETE FROM agents WHERE name = $1", AGENT_NAME)
+    await conn.execute("DELETE FROM service_accounts WHERE name = $1", AGENT_NAME)
     await conn.execute("DELETE FROM connections WHERE name = $1", CONN_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
     await conn.close()
@@ -158,14 +159,10 @@ async def setup(db, monkeypatch):
     )
     _, account_token = await tokens.create(db, account_id, "fixture")
 
-    agent_token = auth.new_token()
-    await db.execute(
-        """
-        INSERT INTO agents (account_id, name, token_hash, proxy_grants)
-        VALUES ($1, $2, $3, $4)
-        """,
-        account_id, AGENT_NAME, auth.hash_token(agent_token), [CONN_NAME],
-    )
+    # Through the module rather than an INSERT: since migration 017 an agent
+    # is a principal row plus an account_tokens row, and `agents.create` is
+    # the one place that shape is written.
+    _, agent_token = await agents.create(db, account_id, AGENT_NAME, [CONN_NAME])
 
     await conn_mod.create(
         db,

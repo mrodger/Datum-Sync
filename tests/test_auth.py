@@ -1527,8 +1527,10 @@ async def test_the_accounts_listing_requires_admin(client, db):
     """
     assert (await client.get("/rest/v1/accounts")).status_code == 200
 
+    # Tier 3, not `is_admin = false`: since migration 016 the flag is derived
+    # from the tier and a write to it alone is undone by the trigger.
     await db.execute(
-        "UPDATE service_accounts SET is_admin = false WHERE name = $1", TEST_ACCOUNT
+        "UPDATE service_accounts SET max_tier = 3 WHERE name = $1", TEST_ACCOUNT
     )
     r = await client.get("/rest/v1/accounts")
     assert r.status_code == 403

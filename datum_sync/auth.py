@@ -31,7 +31,8 @@ import hashlib
 import json
 import secrets
 import time
-from dataclasses import dataclass
+import dataclasses
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import asyncpg
@@ -39,8 +40,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import Request
 
-from datum_sync import agents as agents_mod
-from datum_sync import config, db, tokens, vault
+from datum_sync import config, db, grants, tokens, vault
 from datum_sync.errors import ApiError
 
 _hasher = PasswordHasher()
@@ -153,6 +153,55 @@ class Principal:
     agent_id: int | None = None
     agent_name: str | None = None
     proxy_grants: list[str] | None = None
+    # -- spec/agent-auth-plane/03 --------------------------------------------
+    # Descriptive fields default; enforced values do not. `kind`, `parent_id`
+    # and `state` describe the row and are read for labelling and for the
+    # lifecycle checks in `_effective`, which raise before a Principal with a
+    # non-active state is ever returned -- so a construction site that leaves
+    # them at their defaults gets a principal that behaves as an active human
+    # would, which is what every pre-existing construction site meant.
+    kind: str = "human"
+    parent_id: int | None = None
+    # The sponsor's name, filled in by `effective()` from the ancestor walk so
+    # the mirror tables (`mcp_call_log`, `proxy_log`) can keep recording the
+    # *account* an agent belongs to, as they did before agents were rows.
+    parent_name: str | None = None
+    state: str = "active"
+    # The credential's own ceiling (account_tokens.max_tier), or None. Folded
+    # into `effective_tier`, which is the only tier `require_tier` reads.
+    token_tier_cap: int | None = None
+    limits: dict = field(default_factory=dict)
+    federation_scope: dict | None = None
+
+    @property
+    def effective_tier(self) -> int:
+        """The tier this credential may act at. Never above `max_tier`.
+
+        The minimum of the principal's tier and the credential's cap. A scope
+        cap (OAuth, spec 04 §2) folds in here too once it exists. Everything
+        that asks "may this caller do X" asks this and not `max_tier`, so a
+        baseline token on a tier-4 principal is a tier-2 caller everywhere at
+        once rather than at the call sites someone remembered.
+        """
+        tier = self.max_tier
+        if self.token_tier_cap is not None:
+            tier = min(tier, self.token_tier_cap)
+        cap = scope_tier(self.scope)
+        if cap is not None:
+            tier = min(tier, cap)
+        return tier
+
+    def authority(self) -> dict:
+        """The authority tuple, in the shape grants.py works on."""
+        return {
+            "max_tier": self.max_tier,
+            "repo_scope": list(self.repo_scope),
+            "vault_scope": self.vault_scope,
+            "proxy_grants": list(self.proxy_grants or []),
+            "federation_scope": self.federation_scope,
+            "limits": dict(self.limits or {}),
+            "rate_limit_per_min": self.rate_limit_per_min,
+        }
 
     def all_repos(self) -> bool:
         """Whether this caller's scope is the wildcard.
@@ -195,7 +244,53 @@ def principal_json(p: Principal) -> dict:
         "repo_scope": p.repo_scope,
         "vault_scope": p.vault_scope,
         "source": p.source,
+        "kind": p.kind,
+        "state": p.state,
+        "parent_id": p.parent_id,
+        "effective_tier": p.effective_tier,
+        "token_tier_cap": p.token_tier_cap,
+        "scope": p.scope,
+        "limits": p.limits,
+        "proxy_grants": list(p.proxy_grants or []),
+        "federation_scope": p.federation_scope,
+        # What a caller below the ceiling could ask for. Computed from the
+        # tier table so an agent can tell its operator which scope to request
+        # without parsing the grant (spec 03 §8).
+        "elevate": elevation_hints(p),
     }
+
+
+# Scope vocabulary (spec 04 §2). A scope caps the tier; it never raises one.
+# `None` for an absent or unknown scope means no cap: an OAuth token minted
+# before scopes meant anything must keep working, and refusing unknown scopes
+# belongs at the authorize endpoint where the client can be told (WP4).
+SCOPE_TIERS = {"mcp": 2, "mcp:operate": 3, "mcp:admin": 4}
+
+# What each tier unlocks, for `elevate` hints and the TIER_REQUIRED detail.
+TIER_VERBS = {
+    1: "read: whoami, list repositories and workspaces, vault read",
+    2: "read jobs, logs and artifacts; job_status and job_result",
+    3: "operate: submit jobs, vault write, proxy, schedules, federated writes",
+    4: "administer: principals, connections, approvals, publish",
+    5: "superuser: tier-5 principals, key rotation, delete",
+}
+
+
+def scope_tier(scope: str | None) -> int | None:
+    """The tier ceiling a scope string imposes, or None for no cap."""
+    if not scope:
+        return None
+    tiers = [SCOPE_TIERS[s] for s in scope.split() if s in SCOPE_TIERS]
+    return max(tiers) if tiers else None
+
+
+def elevation_hints(p: Principal) -> dict[str, str]:
+    """Scopes that would raise this credential's effective tier, and to what."""
+    out = {}
+    for scope, tier in SCOPE_TIERS.items():
+        if p.effective_tier < tier <= p.max_tier:
+            out[scope] = f"unlocks tier {tier}: {TIER_VERBS[tier]}"
+    return out
 
 
 # The caller every request gets when `DATUM_SYNC_AUTH=off`. Synthetic rather
@@ -235,10 +330,133 @@ def vault_scope_of(row: asyncpg.Record) -> dict | None:
     would mean `scope.get` on a str, and the failure would surface far from the
     query that caused it. Decoded in one place so no query site can forget.
     """
-    raw = row["vault_scope"]
+    return json_of(row, "vault_scope")
+
+
+def json_of(row: asyncpg.Record, column: str):
+    """A JSONB column as Python, or None. See `vault_scope_of`."""
+    try:
+        raw = row[column]
+    except KeyError:
+        return None
     if raw is None:
         return None
     return json.loads(raw) if isinstance(raw, str) else raw
+
+
+# The columns a Principal is built from, aliased for a `service_accounts sa`
+# join. One list so that a permission column added here is added to every
+# credential path at once. Defined in tokens.py (imported here) and
+# re-exported, because tokens.py cannot import from this module at load time.
+PRINCIPAL_COLS = tokens._ACCOUNT_COLS
+
+
+def principal_from_row(row: asyncpg.Record, source: str, **extra) -> Principal:
+    """Build a Principal from a row carrying PRINCIPAL_COLS.
+
+    Not yet effective: the caller passes it through `effective()` so that the
+    lifecycle state and the ancestors are applied. Split in two so the tests
+    for `grants` can build principals without a database, and so there is one
+    place the row-to-field mapping lives.
+    """
+    kind = row["kind"]
+    return Principal(
+        account_id=row["account_id"],
+        name=row["name"],
+        max_tier=row["max_tier"],
+        repo_scope=list(row["repo_scope"]),
+        is_admin=row["is_admin"],
+        vault_scope=json_of(row, "vault_scope"),
+        rate_limit_per_min=row["rate_limit_per_min"],
+        source=source,
+        # An agent is its own principal now; these two fields keep the shape
+        # the proxy and the audit writer already read.
+        agent_id=row["account_id"] if kind == "agent" else None,
+        agent_name=row["name"] if kind == "agent" else None,
+        proxy_grants=list(row["proxy_grants"] or []),
+        kind=kind,
+        parent_id=row["parent_id"],
+        state=row["state"],
+        limits=json_of(row, "limits") or {},
+        federation_scope=json_of(row, "federation_scope"),
+        **extra,
+    )
+
+
+_ANCESTORS_SQL = """
+    WITH RECURSIVE chain AS (
+        SELECT sa.id, sa.parent_id, sa.name, sa.state, sa.max_tier, sa.repo_scope,
+               sa.vault_scope, sa.proxy_grants, sa.federation_scope, sa.limits,
+               sa.rate_limit_per_min, 0 AS depth
+          FROM service_accounts sa WHERE sa.id = $1
+        UNION ALL
+        SELECT p.id, p.parent_id, p.name, p.state, p.max_tier, p.repo_scope,
+               p.vault_scope, p.proxy_grants, p.federation_scope, p.limits,
+               p.rate_limit_per_min, chain.depth + 1
+          FROM service_accounts p JOIN chain ON p.id = chain.parent_id
+         WHERE chain.depth < 16
+    )
+    SELECT * FROM chain WHERE depth > 0 ORDER BY depth
+"""
+
+
+def _row_authority(row: asyncpg.Record) -> dict:
+    return {
+        "max_tier": row["max_tier"],
+        "repo_scope": list(row["repo_scope"] or []),
+        "vault_scope": json_of(row, "vault_scope"),
+        "proxy_grants": list(row["proxy_grants"] or []),
+        "federation_scope": json_of(row, "federation_scope"),
+        "limits": json_of(row, "limits") or {},
+        "rate_limit_per_min": row["rate_limit_per_min"],
+    }
+
+
+async def effective(conn: asyncpg.Connection, p: Principal) -> Principal:
+    """Apply the lifecycle state and fold in every ancestor (spec 03 §2, §4).
+
+    Raises 401 for a state that does not authenticate, on the principal or on
+    any ancestor -- disabling a sponsor disables its agents at their next
+    request without a tree walk at write time. Returns a Principal whose
+    authority is the meet of its own and its ancestors'. Because `narrows`
+    held at every write, the meet is normally the identity.
+    """
+    state = p.state
+    if state in ("pending", "retired", "rejected"):
+        raise _unauthenticated(f"principal is {state}", f"PRINCIPAL_{state.upper()}")
+    # On every request, for every credential kind (AUTH-022): disabling an
+    # account must end sessions and tokens already in flight.
+    if state == "disabled":
+        raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
+
+    authority = p.authority()
+    if state == "restricted":
+        authority = grants.restricted(authority)
+
+    parent_name = None
+    if p.parent_id is not None:
+        for anc in await conn.fetch(_ANCESTORS_SQL, p.account_id):
+            if parent_name is None:
+                parent_name = anc["name"]
+            if anc["state"] != "active":
+                raise _unauthenticated(
+                    f"sponsor {anc['name']!r} is {anc['state']}",
+                    f"ANCESTOR_{anc['state'].upper()}",
+                )
+            authority = grants.intersect(authority, _row_authority(anc))
+
+    return dataclasses.replace(
+        p,
+        parent_name=parent_name,
+        max_tier=authority["max_tier"],
+        is_admin=authority["max_tier"] >= 4,
+        repo_scope=authority["repo_scope"],
+        vault_scope=authority["vault_scope"],
+        proxy_grants=authority["proxy_grants"],
+        federation_scope=authority["federation_scope"],
+        limits=authority["limits"],
+        rate_limit_per_min=authority["rate_limit_per_min"],
+    )
 
 
 def _scope_matches(pattern: str, repo: str) -> bool:
@@ -266,8 +484,38 @@ def require_repo(principal: Principal, repo: str) -> None:
         )
 
 
+def require_tier(principal: Principal, tier: int, verb: str) -> None:
+    """Refuse a verb the caller's effective tier does not reach.
+
+    The one function every verb ceiling goes through (spec 03 §6). The
+    detail names the tier required, the tier held, and the scope that would
+    close the gap -- which is what an agent's operator needs to read.
+    """
+    held = principal.effective_tier
+    if held >= tier:
+        return
+    elevate = {s: t for s, t in SCOPE_TIERS.items() if t >= tier and t <= principal.max_tier}
+    raise ApiError(
+        403,
+        "TIER_REQUIRED",
+        f"{verb} requires tier {tier}; {principal.name} is acting at tier {held}",
+        {
+            "required": tier,
+            "effective": held,
+            "max_tier": principal.max_tier,
+            "elevate": min(elevate, key=elevate.get) if elevate else None,
+        },
+    )
+
+
 def require_admin(principal: Principal) -> None:
-    if not principal.is_admin:
+    """Tier 4, by the credential's effective tier rather than the row's flag.
+
+    `is_admin` is derived from `max_tier` (migration 016), so the flag and the
+    tier agree on the row; what the flag cannot see is the credential's cap.
+    A baseline token on an administrator's principal is not an administrator.
+    """
+    if principal.effective_tier < 4:
         raise ApiError(403, "FORBIDDEN", "administrator access required")
 
 
@@ -303,45 +551,13 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
     """
     token_hash = hash_token(raw_token)
 
-    # Agent tokens — checked first because they are the most specific
-    # credential: a sub-identity of a service account, with its own proxy
-    # grants. Falls through to the broader token paths if not found.
-    agent_row = await agents_mod.resolve_token(conn, token_hash)
-    if agent_row is not None:
-        if agent_row["disabled"]:
-            raise _unauthenticated("agent is disabled", "AGENT_DISABLED")
-        if agent_row["account_disabled"]:
-            raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
-        await conn.execute(
-            "UPDATE agents SET last_used_at = now() WHERE id = $1",
-            agent_row["id"],
-        )
-        return Principal(
-            account_id=agent_row["account_id"],
-            name=agent_row["account_name"],
-            max_tier=agent_row["max_tier"],
-            repo_scope=agent_row["repo_scope"],
-            is_admin=False,  # agents are never admin
-            vault_scope=vault_scope_of(agent_row),
-            # The parent account's limit, not one of the agent's own. Agents
-            # have no rate_limit_per_min column, and giving each of an account's
-            # agents a fresh window would let the account raise its own limit by
-            # minting agents -- the one thing account holders can do unaided.
-            rate_limit_per_min=agent_row["rate_limit_per_min"],
-            source="agent",
-            agent_id=agent_row["id"],
-            agent_name=agent_row["name"],
-            proxy_grants=list(agent_row["proxy_grants"]),
-        )
-
     row = await conn.fetchrow(
-        """
+        f"""
         SELECT t.id, t.client_id, t.scope, t.resource, t.expires_at,
                t.revoked_at, t.rotated_to,
-               a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.is_admin, a.disabled, a.vault_scope, a.rate_limit_per_min
+               {PRINCIPAL_COLS}
           FROM oauth_tokens t
-          JOIN service_accounts a ON a.id = t.account_id
+          JOIN service_accounts sa ON sa.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'access'
         """,
         token_hash,
@@ -351,8 +567,9 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
             raise _unauthenticated("token has been revoked", "TOKEN_REVOKED")
         if row["expires_at"] is not None and row["expires_at"] < _now():
             raise _unauthenticated("token has expired", "TOKEN_EXPIRED")
-        if row["disabled"]:
-            raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
+        # The account's state (disabled, pending, retired...) is judged once,
+        # in `effective()`, for every credential kind. Not here as well: two
+        # copies of the check let one be deleted with the test still green.
         # RFC 8707 audience binding. A token minted for somewhere else must not
         # work here even if it is otherwise valid, or a compromised downstream
         # server can replay its tokens against this one.
@@ -365,31 +582,23 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         await conn.execute(
             "UPDATE oauth_tokens SET last_used_at = now() WHERE id = $1", row["id"]
         )
-        return Principal(
-            account_id=row["account_id"],
-            name=row["name"],
-            max_tier=row["max_tier"],
-            repo_scope=row["repo_scope"],
-            is_admin=row["is_admin"],
-            vault_scope=vault_scope_of(row),
-            rate_limit_per_min=row["rate_limit_per_min"],
-            source="oauth",
-            client_id=row["client_id"],
-            scope=row["scope"],
+        return await effective(
+            conn,
+            principal_from_row(
+                row, "oauth", client_id=row["client_id"], scope=row["scope"]
+            ),
         )
 
     # Service account tokens live in `account_tokens`, one row per credential.
-    # `service_accounts.token_hash` still holds the pre-migration value and is
-    # deliberately NOT consulted: falling back to it would accept a token whose
-    # `account_tokens` row had just been revoked, since migration 012's backfill
-    # put the same hash in both places. See migrations/012_account_tokens.sql.
+    # Agent tokens live there too since migration 017 (label 'agent'): an agent
+    # is a principal of kind 'agent' with a parent, and `effective` below is
+    # what narrows it to its sponsor -- the agent branch this function used to
+    # have, which handed an agent its parent's whole authority, is gone.
     row = await tokens.resolve(conn, token_hash)
     if row is None:
         raise _unauthenticated("unknown or invalid token")
     if row["revoked_at"] is not None:
         raise _unauthenticated("token has been revoked", "TOKEN_REVOKED")
-    if row["disabled"]:
-        raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
     if row["expires_at"] is not None and row["expires_at"] < _now():
         raise _unauthenticated("token has expired", "TOKEN_EXPIRED")
 
@@ -398,15 +607,9 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         "UPDATE service_accounts SET last_used_at = now() WHERE id = $1",
         row["account_id"],
     )
-    return Principal(
-        account_id=row["account_id"],
-        name=row["name"],
-        max_tier=row["max_tier"],
-        repo_scope=row["repo_scope"],
-        is_admin=row["is_admin"],
-        vault_scope=vault_scope_of(row),
-        rate_limit_per_min=row["rate_limit_per_min"],
-        source="token",
+    return await effective(
+        conn,
+        principal_from_row(row, "token", token_tier_cap=row["token_tier_cap"]),
     )
 
 
@@ -430,29 +633,16 @@ async def principal_by_name(conn: asyncpg.Connection, name: str) -> Principal:
     differs from the same account's over the API.
     """
     row = await conn.fetchrow(
-        """
-        SELECT id, name, max_tier, repo_scope, is_admin,
-               disabled, vault_scope, rate_limit_per_min
-          FROM service_accounts
-         WHERE name = $1
-        """,
-        name,
+        f"SELECT {PRINCIPAL_COLS} FROM service_accounts sa WHERE sa.name = $1", name
     )
     if row is None:
         raise UnknownAccount(f"no account named {name!r}")
     if row["disabled"]:
         raise UnknownAccount(f"account {name!r} is disabled")
-
-    return Principal(
-        account_id=row["id"],
-        name=row["name"],
-        max_tier=row["max_tier"],
-        repo_scope=row["repo_scope"],
-        is_admin=row["is_admin"],
-        vault_scope=vault_scope_of(row),
-        rate_limit_per_min=row["rate_limit_per_min"],
-        source="local",
-    )
+    try:
+        return await effective(conn, principal_from_row(row, "local"))
+    except ApiError as exc:
+        raise UnknownAccount(f"account {name!r}: {exc.message}") from None
 
 
 # -- browser sessions ------------------------------------------------------
@@ -507,12 +697,11 @@ async def revoke_session(conn: asyncpg.Connection, raw_token: str) -> None:
 async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal:
     """Turn a session cookie into a Principal, or raise 401."""
     row = await conn.fetchrow(
-        """
+        f"""
         SELECT t.id, t.expires_at, t.revoked_at,
-               a.id AS account_id, a.name, a.max_tier, a.repo_scope,
-               a.is_admin, a.disabled, a.vault_scope, a.rate_limit_per_min
+               {PRINCIPAL_COLS}
           FROM oauth_tokens t
-          JOIN service_accounts a ON a.id = t.account_id
+          JOIN service_accounts sa ON sa.id = t.account_id
          WHERE t.token_hash = $1 AND t.kind = 'session'
         """,
         hash_token(raw_token),
@@ -523,25 +712,14 @@ async def resolve_session(conn: asyncpg.Connection, raw_token: str) -> Principal
         raise _unauthenticated("session has been signed out", "TOKEN_REVOKED")
     if row["expires_at"] is not None and row["expires_at"] < _now():
         raise _unauthenticated("session has expired", "TOKEN_EXPIRED")
-    # Checked on every request, not only at sign-in: disabling an account has to
-    # take effect against sessions already in flight, or the control does
-    # nothing for up to SESSION_TTL_SECONDS.
-    if row["disabled"]:
-        raise _unauthenticated("account is disabled", "ACCOUNT_DISABLED")
-
+    # The account's state is checked on every request, not only at sign-in --
+    # in `effective()` below, which every credential kind goes through --
+    # because disabling an account has to take effect against sessions already
+    # in flight, or the control does nothing for up to SESSION_TTL_SECONDS.
     await conn.execute(
         "UPDATE oauth_tokens SET last_used_at = now() WHERE id = $1", row["id"]
     )
-    return Principal(
-        account_id=row["account_id"],
-        name=row["name"],
-        max_tier=row["max_tier"],
-        repo_scope=row["repo_scope"],
-        is_admin=row["is_admin"],
-        vault_scope=vault_scope_of(row),
-        rate_limit_per_min=row["rate_limit_per_min"],
-        source="session",
-    )
+    return await effective(conn, principal_from_row(row, "session"))
 
 
 async def require_auth(request: Request, allow_cookie: bool = False) -> Principal:

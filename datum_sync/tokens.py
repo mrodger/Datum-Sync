@@ -41,8 +41,10 @@ from datum_sync import auth
 # that read like a permission and enforced nothing. `agents.proxy_grants` is a
 # different thing and is enforced (proxy.py).
 _ACCOUNT_COLS = """
-    sa.id AS account_id, sa.name, sa.max_tier, sa.repo_scope,
-    sa.is_admin, sa.disabled, sa.vault_scope, sa.rate_limit_per_min
+    sa.id AS account_id, sa.name, sa.max_tier, sa.repo_scope, sa.is_admin,
+    sa.disabled, sa.vault_scope, sa.rate_limit_per_min,
+    sa.kind, sa.parent_id, sa.state, sa.proxy_grants, sa.limits,
+    sa.federation_scope
 """
 
 # Never `token_hash`. There is no read path that returns it, so no route can
@@ -50,8 +52,12 @@ _ACCOUNT_COLS = """
 # `connections._COLUMNS` and the secret column.
 _TOKEN_COLS = """
     t.id AS token_id, t.label, t.expires_at, t.revoked_at,
-    t.created_at, t.last_used_at
+    t.created_at, t.last_used_at, t.max_tier AS token_tier_cap
 """
+
+
+class TokenTierAbovePrincipal(ValueError):
+    """A token was asked for with a ceiling above its principal's tier."""
 
 
 async def create(
@@ -59,25 +65,38 @@ async def create(
     account_id: int,
     label: str,
     expires_at: datetime | None = None,
+    max_tier: int | None = None,
 ) -> tuple[asyncpg.Record, str]:
     """Mint a token for an account. Returns (row, raw_token).
 
     The raw token is returned exactly once and cannot be recovered afterwards.
     Raises `asyncpg.UniqueViolationError` if the account already has a live
-    token under this label.
+    token under this label, and `TokenTierAbovePrincipal` if `max_tier` is
+    above the principal's own -- a cap is a ceiling, never a raise, and
+    `auth.Principal.effective_tier` takes the minimum regardless, so refusing
+    here is what keeps the row honest rather than what keeps the caller down.
     """
+    if max_tier is not None:
+        own = await conn.fetchval(
+            "SELECT max_tier FROM service_accounts WHERE id = $1", account_id
+        )
+        if own is not None and max_tier > own:
+            raise TokenTierAbovePrincipal(
+                f"token tier {max_tier} is above the principal's tier {own}"
+            )
     raw = auth.new_token()
     row = await conn.fetchrow(
         """
-        INSERT INTO account_tokens (account_id, label, token_hash, expires_at)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO account_tokens (account_id, label, token_hash, expires_at, max_tier)
+        VALUES ($1, $2, $3, $4, $5)
         RETURNING id AS token_id, label, expires_at, revoked_at,
-                  created_at, last_used_at
+                  created_at, last_used_at, max_tier AS token_tier_cap
         """,
         account_id,
         label,
         auth.hash_token(raw),
         expires_at,
+        max_tier,
     )
     return row, raw
 
@@ -178,6 +197,7 @@ def public(row: asyncpg.Record, token: str | None = None) -> dict:
         "expires_at": row["expires_at"],
         "last_used_at": row["last_used_at"],
         "revoked_at": row["revoked_at"],
+        "max_tier": row["token_tier_cap"],
     }
     if token is not None:
         out["token"] = token

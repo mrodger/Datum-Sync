@@ -155,13 +155,15 @@ async def write(
     `target` would write a row that inserts cleanly and reads as nonsense.
     """
     global _dropped
-    if principal.agent_id is not None:
-        actor_kind, actor_id, actor_name = "agent", principal.agent_id, (
-            principal.agent_name or ""
-        )
-        # The account is not in a column, so it goes in detail -- an agent row
-        # that cannot be traced back to its account answers half the question.
-        detail = {**(detail or {}), "account": principal.name}
+    if principal.kind == "agent":
+        actor_kind, actor_id = "agent", principal.account_id
+        actor_name = principal.agent_name or principal.name
+        # The sponsor is not in a column, so it goes in detail -- an agent row
+        # that cannot be traced back to its sponsor answers half the question.
+        # Since 017 the agent is its own principal and the sponsor is its
+        # parent; the key is still `account`, which is what it has always
+        # meant here.
+        detail = {**(detail or {}), "account": principal.parent_name}
     else:
         actor_kind, actor_id, actor_name = "account", principal.account_id, principal.name
 

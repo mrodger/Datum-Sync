@@ -277,7 +277,9 @@ def connections(page) -> None:
     print("\nconnections")
     page.goto(BASE + "/ui#/connections")
     page.wait_for_selector("#view > [data-ready='connections']")
-    check("list renders", page.locator("#view h1").first.inner_text() == "Connections")
+    # The v1 screen titles itself "Connections & Parameters"; v2 says
+    # "Connections". Either is the list.
+    check("list renders", page.locator("#view h1").first.inner_text().startswith("Connections"))
 
     page.click("#view #create")
     page.wait_for_selector("form.panel")

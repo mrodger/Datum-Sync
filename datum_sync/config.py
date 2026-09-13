@@ -175,6 +175,15 @@ PASSWORD_MAX_CONCURRENT = int(os.getenv("PASSWORD_MAX_CONCURRENT", "4"))
 # URI that is not loopback. Relaxed only for local development.
 REQUIRE_HTTPS = os.getenv("REQUIRE_HTTPS", "false").lower() in ("1", "true", "yes")
 
+# -- agent auth plane policy (spec/agent-auth-plane/06 §policy) ---------------
+# Environment variables rather than a policy file: fifteen scalars do not need
+# a second configuration system with its own failure mode at start.
+
+# How deep the delegation tree may go. A root principal is depth 0.
+POLICY_MAX_DELEGATION_DEPTH = int(os.getenv("POLICY_MAX_DELEGATION_DEPTH", "4"))
+# The tier cap on the token an enrolment claim mints (the baseline credential).
+POLICY_BASELINE_TIER = int(os.getenv("POLICY_BASELINE_TIER", "2"))
+
 REPOSITORIES_PATH = _path("REPOSITORIES_PATH", "./repositories")
 RESOURCES_PATH = _path("RESOURCES_PATH", "./resources")
 DATA_PATH = _path("DATA_PATH", "./data")

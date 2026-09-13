@@ -46,6 +46,9 @@ SERVER_INFO = {"name": "datum-sync", "version": "0.1.0"}
 # The service a workspace must publish to be reachable as a tool.
 MCP_SERVICE = "data_streaming"
 
+# Calling a workspace tool submits a job, which is a tier-3 verb.
+WORKSPACE_MIN_TIER = 3
+
 # Beyond this an artifact is linked rather than inlined. A multi-megabyte
 # result pasted into a conversation is not usable by the model and displaces
 # the context it needs to interpret it.
@@ -164,8 +167,12 @@ async def _log_call(
                      is_governance, outcome, error_code, duration_ms, client_trace_id)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 """,
-                principal.account_id,
-                principal.name,
+                # The *account*: for an agent, its sponsor. This table predates
+                # agents being rows and has no agent column; audit_log carries
+                # the actor. Keeping the old meaning is what lets the two be
+                # compared before this one is retired (WP7).
+                principal.parent_id if principal.kind == "agent" else principal.account_id,
+                principal.parent_name if principal.kind == "agent" else principal.name,
                 method,
                 tool_name_val,
                 target,
@@ -457,18 +464,30 @@ VAULT_TOOLS = [VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_LIST_TOOL]
 async def _tools_list(
     principal: Principal, _: dict[str, Any], __: audit.Trace
 ) -> dict[str, Any]:
-    async with db.pool().acquire() as conn:
-        found = await catalogue(conn, principal)
-    tools = [
-        _tool_json(name, repo, ws, manifest)
-        for name, (repo, ws, manifest) in found.items()
-    ]
-    tools.append(PROXY_TOOL)
+    tier = principal.effective_tier
+    tools: list[dict[str, Any]] = []
+    # Calling a workspace tool submits a job, a tier-3 verb (spec 03 §6). A
+    # caller below that would see tools that always answer TIER_REQUIRED --
+    # fewer tools is better than broken ones, the same rule the vault tools
+    # follow below. The catalogue is not even built for them: the query is
+    # the cost, and the answer is known.
+    if tier >= WORKSPACE_MIN_TIER:
+        async with db.pool().acquire() as conn:
+            found = await catalogue(conn, principal)
+        tools = [
+            _tool_json(name, repo, ws, manifest)
+            for name, (repo, ws, manifest) in found.items()
+        ]
+    # The proxy needs tier 3 and a grant; without either it can only refuse.
+    if tier >= 3 and principal.proxy_grants:
+        tools.append(PROXY_TOOL)
     # Vault tools are visible only to callers with a vault scope. An account
-    # with no scope would see tools that always return 403 — fewer tools is
-    # better than broken ones.
+    # with no scope would see tools that always return 403. Reads are tier 1;
+    # the write tool is tier 3 and hidden below it.
     if principal.vault_scope:
-        tools.extend(VAULT_TOOLS)
+        tools.extend([VAULT_READ_TOOL, VAULT_LIST_TOOL])
+        if tier >= 3:
+            tools.append(VAULT_WRITE_TOOL)
     return {"tools": tools}
 
 
@@ -515,6 +534,9 @@ async def _vault_call(principal: Principal, name: str, args: dict[str, Any]) -> 
             content = args.get("content")
             if not isinstance(content, str):
                 raise RpcError(INVALID_PARAMS, "content is required")
+            # Writing is tier 3 (spec 03 §6). Checked before the scope so a
+            # baseline token is told to elevate, not that its path is wrong.
+            auth.require_tier(principal, 3, "vault_write")
             return await vault_fs.write(principal, path, content)
         elif name == "vault_list":
             return await vault_fs.list_dir(principal, path)
@@ -565,7 +587,8 @@ async def _tools_call(
         # screen and the automations engine read `jobs.submitted_by`, and for
         # every MCP-submitted job it was NULL until this argument was passed.
         row, _ = await execute.run_sync(
-            repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name
+            repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name,
+            principal=principal,
         )
     except ApiError as exc:
         # A workspace that fails is a *tool* error, not a protocol error: the

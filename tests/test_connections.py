@@ -304,7 +304,7 @@ async def plain_token(db):
     await db.execute("DELETE FROM service_accounts WHERE name = '_pytest_plain'")
     account_id = await db.fetchval(
         "INSERT INTO service_accounts (name, max_tier, is_admin) "
-        "VALUES ('_pytest_plain', 4, false) RETURNING id"
+        "VALUES ('_pytest_plain', 3, false) RETURNING id"
     )
     _, raw = await tokens.create(db, account_id, "fixture")
     yield raw

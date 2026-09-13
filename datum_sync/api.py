@@ -41,7 +41,8 @@ from starlette.datastructures import UploadFile
 
 from datum_sync import (
     agents, audit, auth, automations, config, connections, crypto, db, errors, events,
-    execute, jobs, mcp, oauth, ratelimit, schedules, services, tokens, ui, uploads,
+    execute, jobs, mcp, oauth, principals, ratelimit, schedules, services, tokens, ui,
+    uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -150,6 +151,7 @@ errors.install(app)
 oauth.install(app)
 ui.install(app)
 app.include_router(mcp.router)
+app.include_router(principals.router)
 
 
 @app.middleware("http")
@@ -668,6 +670,7 @@ async def submit(
             params,
             submitted_by=caller.name,
             idempotency_key=idempotency_key,
+            principal=caller,
         )
     response.headers["Location"] = f"/rest/v1/transformations/jobs/id/{job_id}"
     return {"id": str(job_id), "status": "queued"}
@@ -807,6 +810,7 @@ async def get_job(raw_id: str, caller: Principal = Caller) -> dict[str, Any]:
 @app.delete("/rest/v1/transformations/jobs/id/{raw_id}")
 async def cancel_job(raw_id: str, caller: Principal = Caller) -> dict[str, Any]:
     job_id = _job_id(raw_id)
+    auth.require_tier(caller, 3, "cancelling a job")
     async with db.pool().acquire() as conn:
         await _job_for(conn, caller, job_id)
         result = await jobs.cancel(conn, job_id)
@@ -831,6 +835,7 @@ async def resubmit_job(
             # should name the account that caused this execution.
             submitted_by=caller.name,
             parent_job=job_id,
+            principal=caller,
         )
     response.headers["Location"] = f"/rest/v1/transformations/jobs/id/{new_id}"
     return {"id": str(new_id), "status": "queued", "parent_job": raw_id}
@@ -1094,8 +1099,11 @@ async def update_account(name: str, body: dict = Body(), caller: Principal = Cal
 
 @app.delete("/rest/v1/accounts/{name}")
 async def delete_account(name: str, caller: Principal = Caller) -> dict[str, Any]:
-    """Permanently delete an account. Blocked if the account has active sessions or grants."""
-    auth.require_admin(caller)
+    """Permanently delete an account. Blocked if the account has active sessions or grants.
+
+    Tier 5 (spec 03 §6): deletion is for mistakes, retirement is the lifecycle.
+    """
+    auth.require_tier(caller, 5, "deleting a principal")
     if name == caller.name:
         raise ApiError(400, "INVALID_PARAMETER", "cannot delete your own account")
     async with db.pool().acquire() as conn:
@@ -1394,6 +1402,7 @@ async def list_schedules(caller: Principal = Caller) -> dict[str, Any]:
 async def create_schedule(
     body: dict[str, Any] = Body(...), caller: Principal = Caller
 ) -> dict[str, Any]:
+    auth.require_tier(caller, 3, "creating a schedule")
     for key in ("name", "repository", "workspace"):
         if not isinstance(body.get(key), str) or not body[key]:
             raise ApiError(400, "INVALID_PARAMETER", f"'{key}' is required")
@@ -1454,6 +1463,7 @@ async def update_schedule(
     repointed is a scope check that happened once, on a row that no longer says
     what it said. Delete it and make another.
     """
+    auth.require_tier(caller, 3, "editing a schedule")
     async with db.pool().acquire() as conn:
         await _schedule_for(conn, caller, schedule_id)
         try:
@@ -1469,6 +1479,7 @@ async def update_schedule(
 async def delete_schedule(
     schedule_id: int, caller: Principal = Caller
 ) -> dict[str, Any]:
+    auth.require_tier(caller, 3, "deleting a schedule")
     async with db.pool().acquire() as conn:
         await _schedule_for(conn, caller, schedule_id)
         await schedules.delete(conn, schedule_id)
@@ -1491,6 +1502,7 @@ async def list_automations(caller: Principal = Caller) -> dict[str, Any]:
 async def create_automation(
     body: dict[str, Any] = Body(...), caller: Principal = Caller
 ) -> dict[str, Any]:
+    auth.require_tier(caller, 3, "creating an automation")
     text = body.get("yaml")
     if not isinstance(text, str) or not text.strip():
         raise ApiError(400, "INVALID_PARAMETER", "'yaml' is required")
@@ -1537,6 +1549,7 @@ async def replace_automation(
     new one because otherwise the check is trivially bypassed by writing a
     harmless automation and then editing it into a privileged one.
     """
+    auth.require_tier(caller, 3, "editing an automation")
     text = body.get("yaml")
     if not isinstance(text, str) or not text.strip():
         raise ApiError(400, "INVALID_PARAMETER", "'yaml' is required")
@@ -1559,6 +1572,7 @@ async def toggle_automation(
     caller: Principal = Caller,
 ) -> dict[str, Any]:
     """Enable or disable without touching the document."""
+    auth.require_tier(caller, 3, "editing an automation")
     if not isinstance(body.get("enabled"), bool):
         raise ApiError(400, "INVALID_PARAMETER", "'enabled' must be true or false")
     async with db.pool().acquire() as conn:
@@ -1571,6 +1585,7 @@ async def toggle_automation(
 async def delete_automation(
     automation_id: int, caller: Principal = Caller
 ) -> dict[str, Any]:
+    auth.require_tier(caller, 3, "deleting an automation")
     async with db.pool().acquire() as conn:
         await _automation_for(conn, caller, automation_id)
         await automations.delete(conn, automation_id)
@@ -1765,7 +1780,8 @@ async def data_streaming(
     """Run and return the primary output inline. Parameters come from the query."""
     auth.require_repo(caller, repo)
     row, manifest = await execute.run_sync(
-        repo, ws, dict(request.query_params), "data_streaming", caller.name
+        repo, ws, dict(request.query_params), "data_streaming", caller.name,
+        principal=caller,
     )
     primary = manifest.primary_output
     artifacts = json.loads(row["artifacts"])
@@ -1792,7 +1808,8 @@ async def data_download(
     a zip if there are several."""
     auth.require_repo(caller, repo)
     row, _ = await execute.run_sync(
-        repo, ws, dict(request.query_params), "data_download", caller.name
+        repo, ws, dict(request.query_params), "data_download", caller.name,
+        principal=caller,
     )
     artifacts = json.loads(row["artifacts"])
     if not artifacts:
@@ -1873,6 +1890,7 @@ async def data_upload(
             params,
             submitted_by=caller.name,
             idempotency_key=idempotency_key,
+            principal=caller,
         )
     response.headers["Location"] = f"/rest/v1/transformations/jobs/id/{job_id}"
     return {"id": str(job_id), "status": "queued", "files": received}

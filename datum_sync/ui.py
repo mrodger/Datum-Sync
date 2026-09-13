@@ -109,17 +109,18 @@ async def login(request: Request, body: dict = Body(...)) -> JSONResponse:
             raise ApiError(401, "INVALID_CREDENTIALS", "incorrect name or password")
 
         raw = await auth.create_session(conn, account["id"])
-
-    principal = auth.Principal(
-        account_id=account["id"],
-        name=account["name"],
-        max_tier=account["max_tier"],
-        repo_scope=account["repo_scope"],
-        is_admin=account["is_admin"],
-        vault_scope=auth.vault_scope_of(account),
-        rate_limit_per_min=account["rate_limit_per_min"],
-        source="session",
-    )
+        # The same construction the cookie will get on its next request, so
+        # what sign-in reports and what /whoami reports cannot differ.
+        principal = await auth.effective(
+            conn,
+            auth.principal_from_row(
+                await conn.fetchrow(
+                    f"SELECT {auth.PRINCIPAL_COLS} FROM service_accounts sa WHERE sa.id = $1",
+                    account["id"],
+                ),
+                "session",
+            ),
+        )
     response = JSONResponse(auth.principal_json(principal))
     response.set_cookie(
         auth.SESSION_COOKIE,

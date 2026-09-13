@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 
 import asyncpg
 
-from datum_sync import auth, config, tokens, vault
+from datum_sync import auth, config, grants, tokens, vault
 
 # The label an account's first token gets. Named rather than left to the
 # operator so that `create` cannot produce an unlabelled row, and distinct from
@@ -67,6 +67,11 @@ async def create(
     admin: bool,
     description: str | None,
     vault_scope: dict | None = None,
+    kind: str = "human",
+    parent: str | None = None,
+    limits: dict | None = None,
+    federation_scope: dict | None = None,
+    token_tier: int | None = None,
 ) -> int:
     # Validate vault_scope before touching the database.
     if vault_scope is not None:
@@ -75,10 +80,44 @@ async def create(
         except vault.VaultScopeError as exc:
             print(f"invalid vault_scope: {exc}", file=sys.stderr)
             return 1
+    if admin and max_tier < 4:
+        # The trigger would promote it anyway (016); say so here so the
+        # operator is not surprised by the tier on the row.
+        max_tier = 4
+    if kind == "agent" and max_tier > 3:
+        print("an agent is at most tier 3 (spec/agent-auth-plane/03 §1)", file=sys.stderr)
+        return 1
 
     conn = await _connect()
     try:
         vault_json = json.dumps(vault_scope) if vault_scope is not None else None
+        parent_id = None
+        if parent is not None:
+            parent_id = await _account_id(conn, parent)
+            if parent_id is None:
+                print(f"no such account: {parent}", file=sys.stderr)
+                return 1
+            # PRIN-001 at the CLI too: a child made from a shell must narrow
+            # its parent exactly as one made over the API must.
+            prow = await conn.fetchrow(
+                f"SELECT {auth.PRINCIPAL_COLS} FROM service_accounts sa WHERE sa.id = $1",
+                parent_id,
+            )
+            wider = grants.narrows(
+                {
+                    "max_tier": max_tier,
+                    "repo_scope": _scopes(scopes),
+                    "vault_scope": vault_scope,
+                    "proxy_grants": [],
+                    "federation_scope": federation_scope,
+                    "limits": limits or {},
+                    "rate_limit_per_min": None,
+                },
+                auth._row_authority(prow),
+            )
+            if wider:
+                print(f"grant is wider than {parent}'s in: {', '.join(wider)}", file=sys.stderr)
+                return 1
         # One transaction: an account created without its first token is an
         # account nobody can authenticate as, and the operator would have no
         # signal that the second half failed.
@@ -88,8 +127,9 @@ async def create(
                     """
                     INSERT INTO service_accounts
                         (name, description, max_tier, repo_scope, is_admin,
-                         vault_scope)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                         vault_scope, kind, parent_id, limits, federation_scope,
+                         created_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'cli')
                     RETURNING id
                     """,
                     name,
@@ -98,10 +138,19 @@ async def create(
                     _scopes(scopes),
                     admin,
                     vault_json,
+                    kind,
+                    parent_id,
+                    json.dumps(limits or {}),
+                    json.dumps(federation_scope) if federation_scope is not None else None,
                 )
-                _, raw = await tokens.create(conn, account_id, INITIAL_LABEL)
+                _, raw = await tokens.create(
+                    conn, account_id, INITIAL_LABEL, max_tier=token_tier
+                )
         except asyncpg.UniqueViolationError:
             print(f"account {name!r} already exists", file=sys.stderr)
+            return 1
+        except tokens.TokenTierAbovePrincipal as exc:
+            print(str(exc), file=sys.stderr)
             return 1
     finally:
         await conn.close()
@@ -116,8 +165,14 @@ async def _account_id(conn: asyncpg.Connection, name: str) -> int | None:
     return await conn.fetchval("SELECT id FROM service_accounts WHERE name = $1", name)
 
 
-async def token_add(name: str, label: str, days: int | None) -> int:
-    """Mint an additional token. Existing ones keep working."""
+async def token_add(
+    name: str, label: str, days: int | None, max_tier: int | None = None
+) -> int:
+    """Mint an additional token. Existing ones keep working.
+
+    `max_tier` caps what this token may do below the principal's own tier --
+    the baseline credential of spec/agent-auth-plane/02 §3.
+    """
     expires = None
     if days is not None:
         expires = datetime.now(timezone.utc) + timedelta(days=days)
@@ -129,7 +184,10 @@ async def token_add(name: str, label: str, days: int | None) -> int:
             print(f"no such account: {name}", file=sys.stderr)
             return 1
         try:
-            _, raw = await tokens.create(conn, account_id, label, expires)
+            _, raw = await tokens.create(conn, account_id, label, expires, max_tier)
+        except tokens.TokenTierAbovePrincipal as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
         except asyncpg.UniqueViolationError:
             print(
                 f"{name} already has a live token labelled {label!r}; "
@@ -208,6 +266,18 @@ async def passwd(name: str, password: str) -> int:
     """
     conn = await _connect()
     try:
+        kind = await conn.fetchval("SELECT kind FROM service_accounts WHERE name = $1", name)
+        if kind is None:
+            print(f"no such account: {name}", file=sys.stderr)
+            return 1
+        if kind == "agent":
+            # A password is a human's credential: it is only ever verified at
+            # the consent screen and the UI sign-in, both of which bind an
+            # OAuth grant or a session to whoever typed it. An agent with a
+            # password is an agent that can sign in as a person (PRIN-007).
+            print(f"{name} is an agent; agents authenticate with tokens, never a password",
+                  file=sys.stderr)
+            return 1
         updated = await conn.fetchval(
             "UPDATE service_accounts SET password_hash = $2 WHERE name = $1 RETURNING id",
             name,
@@ -350,6 +420,20 @@ def main() -> int:
         metavar="JSON",
         help='vault scope as JSON, e.g. \'{"read":["dev/**"],"write":["dev/**"]}\'',
     )
+    p.add_argument("--kind", choices=("human", "agent", "system"), default="human")
+    p.add_argument(
+        "--parent",
+        metavar="ACCOUNT",
+        help="sponsor; the new principal's grant must narrow the sponsor's",
+    )
+    p.add_argument("--limits", metavar="JSON",
+                   help='e.g. \'{"concurrent_sessions":1,"jobs_per_hour":20}\'')
+    p.add_argument("--federation-scope", metavar="JSON",
+                   help="code/compute/documents/mcp blocks (spec/agent-auth-plane/05 §2)")
+    p.add_argument(
+        "--token-tier", type=int, choices=(1, 2, 3, 4, 5), metavar="N",
+        help="cap the first token below the principal's tier (a baseline credential)",
+    )
 
     p = sub.add_parser("token", help="mint, list and revoke account tokens")
     tsub = p.add_subparsers(dest="token_command", required=True)
@@ -362,6 +446,10 @@ def main() -> int:
         type=int,
         metavar="N",
         help="expire this token after N days. Omit for no expiry.",
+    )
+    t.add_argument(
+        "--max-tier", type=int, choices=(1, 2, 3, 4, 5), metavar="N",
+        help="cap this token below the principal's tier",
     )
 
     t = tsub.add_parser("list", help="show an account's tokens, revoked included")
@@ -399,12 +487,24 @@ def main() -> int:
             except json.JSONDecodeError as exc:
                 print(f"--vault-scope is not valid JSON: {exc}", file=sys.stderr)
                 return 1
+        extra = {}
+        for flag, key in (("limits", "limits"), ("federation_scope", "federation_scope")):
+            raw_json = getattr(args, flag)
+            if raw_json:
+                try:
+                    extra[key] = json.loads(raw_json)
+                except json.JSONDecodeError as exc:
+                    print(f"--{flag.replace('_', '-')} is not valid JSON: {exc}", file=sys.stderr)
+                    return 1
         return asyncio.run(
-            create(args.name, args.scope, args.max_tier, args.admin, args.description, vs)
+            create(args.name, args.scope, args.max_tier, args.admin, args.description, vs,
+                   kind=args.kind, parent=args.parent, token_tier=args.token_tier, **extra)
         )
     if args.command == "token":
         if args.token_command == "add":
-            return asyncio.run(token_add(args.name, args.label, args.expires_days))
+            return asyncio.run(
+                token_add(args.name, args.label, args.expires_days, args.max_tier)
+            )
         if args.token_command == "list":
             return asyncio.run(token_list(args.name))
         return asyncio.run(token_revoke(args.name, args.label))

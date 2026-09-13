@@ -42,10 +42,12 @@ def _principal(
         repo_scope=["*"],
         is_admin=False,
         vault_scope=None,
-        rate_limit_per_min=None, source="agent",
+        rate_limit_per_min=None, source="token",
         agent_id=agent_id,
         agent_name=agent_name,
         proxy_grants=proxy_grants or [],
+        kind="agent",
+        parent_id=2,
     )
 
 
@@ -98,9 +100,12 @@ def test_ssrf_rejects_no_host():
 
 
 def test_bare_account_token_denied():
-    """Account tokens (no agent_id) cannot proxy.
+    """An account with no proxy grant cannot proxy.
 
-    Guard: PROXY-001.
+    It used to be refused for being an account rather than an agent. Since
+    migration 016 every principal has `proxy_grants`, and authority is the
+    grant, not the kind (spec/agent-auth-plane/11 D-22): the refusal names
+    the grant it lacks.
     """
     p = Principal(
         account_id=1, name="acct", max_tier=4, repo_scope=["*"],
@@ -109,7 +114,7 @@ def test_bare_account_token_denied():
     )
     with pytest.raises(ApiError) as exc:
         check_proxy_access(p, _conn_row(), "openrouter")
-    assert exc.value.code == "AGENT_REQUIRED"
+    assert exc.value.code == "CONNECTION_DENIED"
 
 
 def test_agent_without_grant_denied():
@@ -135,10 +140,23 @@ def test_empty_grants_denied():
 
 
 def test_tier_denied():
-    # Guard: PROXY-003.
+    """Proxying is a tier-3 verb, and then the connection's own tier applies.
+
+    Two refusals with two codes: below tier 3 the caller cannot proxy at all
+    (TIER_REQUIRED, with the scope that would fix it in the detail); at tier 3
+    a tier-4 connection is still out of reach (TIER_DENIED).
+
+    Guard: PROXY-001, PROXY-003.
+    """
     p = _principal(proxy_grants=["secret-conn"], max_tier=2)
     with pytest.raises(ApiError) as exc:
         check_proxy_access(p, _conn_row(tier=3), "secret-conn")
+    assert exc.value.code == "TIER_REQUIRED"
+    assert exc.value.detail["required"] == 3
+
+    p = _principal(proxy_grants=["secret-conn"], max_tier=3)
+    with pytest.raises(ApiError) as exc:
+        check_proxy_access(p, _conn_row(tier=4), "secret-conn")
     assert exc.value.code == "TIER_DENIED"
 
 

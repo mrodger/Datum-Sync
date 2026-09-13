@@ -254,10 +254,7 @@ CASES = [
         "AUTH-022",
         "a disabled account is rejected on every request, not just at sign-in",
         "datum_sync/auth.py",
-        "    # Checked on every request, not only at sign-in: disabling an account has to\n"
-        "    # take effect against sessions already in flight, or the control does\n"
-        "    # nothing for up to SESSION_TTL_SECONDS.\n"
-        "    if row[\"disabled\"]:\n"
+        "    if state == \"disabled\":\n"
         "        raise _unauthenticated(\"account is disabled\", \"ACCOUNT_DISABLED\")\n",
         "",
         "tests/test_auth.py::test_disabling_an_account_kills_a_session_already_in_flight",
@@ -1477,19 +1474,11 @@ CASES = [
 
     (
         "PROXY-001",
-        "the proxy requires an agent token, not an account token",
+        "the proxy requires tier 3",
         "datum_sync/proxy.py",
-        "    if principal.agent_id is None:\n"
-        "        raise ApiError(\n"
-        "            403, \"AGENT_REQUIRED\",\n"
-        "            \"proxy_request requires an agent token, not an account token\",\n"
-        "        )",
-        "    if False:\n"
-        "        raise ApiError(\n"
-        "            403, \"AGENT_REQUIRED\",\n"
-        "            \"proxy_request requires an agent token, not an account token\",\n"
-        "        )",
-        "tests/test_proxy.py::test_bare_account_token_denied",
+        "    auth.require_tier(principal, 3, \"proxy_request\")\n",
+        "    pass\n",
+        "tests/test_proxy.py::test_tier_denied",
     ),
     (
         "PROXY-002",
@@ -1503,7 +1492,7 @@ CASES = [
         "PROXY-003",
         "the proxy enforces the account's tier ceiling",
         "datum_sync/proxy.py",
-        "    if principal.max_tier < conn_row[\"tier\"]:",
+        "    if principal.effective_tier < conn_row[\"tier\"]:",
         "    if False:",
         "tests/test_proxy.py::test_tier_denied",
     ),
@@ -1516,14 +1505,6 @@ CASES = [
         "        False\n"
         "        or False",
         "tests/test_proxy.py::test_ssrf_rejects_loopback",
-    ),
-    (
-        "AGENT-001",
-        "agents are never admin regardless of account",
-        "datum_sync/auth.py",
-        "            is_admin=False,  # agents are never admin",
-        "            is_admin=agent_row[\"is_admin\"],  # agents are never admin",
-        "tests/test_agents.py::test_agent_token_resolves_to_principal",
     ),
     (
         "PROXY-005",
@@ -1733,8 +1714,9 @@ CASES = [
         "vault tools hidden from accounts without vault_scope",
         "datum_sync/mcp.py",
         "    if principal.vault_scope:\n"
-        "        tools.extend(VAULT_TOOLS)",
-        "    tools.extend(VAULT_TOOLS)",
+        "        tools.extend([VAULT_READ_TOOL, VAULT_LIST_TOOL])",
+        "    if True:\n"
+        "        tools.extend([VAULT_READ_TOOL, VAULT_LIST_TOOL])",
         "tests/test_vault_fs.py::test_mcp_vault_tools_hidden_without_scope",
     ),
 
@@ -1789,8 +1771,8 @@ CASES = [
         "datum_sync/auth.py",
         '    if row["revoked_at"] is not None:\n'
         '        raise _unauthenticated("token has been revoked", "TOKEN_REVOKED")\n'
-        '    if row["disabled"]:',
-        '    if row["disabled"]:',
+        '    if row["expires_at"] is not None and row["expires_at"] < _now():',
+        '    if row["expires_at"] is not None and row["expires_at"] < _now():',
         "tests/test_account_tokens.py::"
         "test_revoking_one_token_leaves_the_others_working",
     ),
@@ -2166,14 +2148,135 @@ CASES = [
         "TIER-011",
         "an MCP tool call records who submitted the job",
         "datum_sync/mcp.py",
-        "        row, _ = await execute.run_sync(\n"
-        "            repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name\n"
-        "        )\n",
-        "        row, _ = await execute.run_sync(\n"
-        "            repo, ws, submitted, MCP_SERVICE\n"
-        "        )\n",
+        "            repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name,\n"
+        "            principal=principal,\n",
+        "            repo, ws, submitted, MCP_SERVICE,\n"
+        "            principal=principal,\n",
         "tests/test_tier.py::"
         "test_an_mcp_tool_call_records_who_submitted_the_job",
+    ),
+    (
+        "GRANT-001",
+        "a trailing ** absorbs at least one segment, as vault.matches does",
+        "datum_sync/grants.py",
+        "        first = j + 1 if i == len(o) - 1 else j\n",
+        "        first = j\n",
+        "tests/test_grants.py::test_subsumes_implies_match_implication",
+    ),
+    (
+        "PRIN-001",
+        "a child grant must narrow its parent at write",
+        "datum_sync/principals.py",
+        "    wider = grants.narrows(new, parent_effective)\n"
+        "    if wider:\n"
+        "        raise ApiError(\n"
+        "            400, \"GRANT_NOT_NARROWER\",",
+        "    wider = []\n"
+        "    if wider:\n"
+        "        raise ApiError(\n"
+        "            400, \"GRANT_NOT_NARROWER\",",
+        "tests/test_principals.py::"
+        "test_a_child_wider_than_its_parent_is_refused_naming_the_field",
+    ),
+    (
+        "PRIN-002",
+        "the effective grant is the meet with every ancestor",
+        "datum_sync/auth.py",
+        "            authority = grants.intersect(authority, _row_authority(anc))\n",
+        "            pass\n",
+        "tests/test_principals.py::"
+        "test_narrowing_a_parent_narrows_its_children_at_their_next_request",
+    ),
+    (
+        "PRIN-003",
+        "a non-active ancestor refuses the request",
+        "datum_sync/auth.py",
+        "            if anc[\"state\"] != \"active\":\n",
+        "            if False:\n",
+        "tests/test_agents.py::test_disabled_account_blocks_agent",
+    ),
+    (
+        "PRIN-004",
+        "is_admin cannot be set apart from the tier",
+        "datum_sync/principals.py",
+        "    for forbidden in (\"is_admin\", \"state\", \"disabled\", \"kind\", \"parent\", \"name\"):\n",
+        "    for forbidden in (\"state\", \"disabled\", \"kind\", \"parent\", \"name\"):\n",
+        "tests/test_principals.py::test_patch_refuses_is_admin",
+    ),
+    (
+        "PRIN-005",
+        "a grant edit that would leave a child wider is refused",
+        "datum_sync/principals.py",
+        "            if widened:\n",
+        "            if False:\n",
+        "tests/test_principals.py::"
+        "test_a_grant_edit_that_would_leave_a_child_wider_is_refused",
+    ),
+    (
+        "PRIN-006",
+        "tier 3 edits only its own children",
+        "datum_sync/principals.py",
+        "        if parent_id != actor.account_id:\n",
+        "        if False:\n",
+        "tests/test_principals.py::test_a_tier_3_sponsor_edits_only_its_own_children",
+    ),
+    (
+        "PRIN-007",
+        "an agent cannot be given a password",
+        "datum_sync/accounts.py",
+        "        if kind == \"agent\":\n",
+        "        if False:\n",
+        "tests/test_principals.py::test_an_agent_cannot_be_given_a_password",
+    ),
+    (
+        "PRIN-012",
+        "delegation depth is bounded",
+        "datum_sync/principals.py",
+        "    if depth >= config.POLICY_MAX_DELEGATION_DEPTH:\n",
+        "    if False:\n",
+        "tests/test_principals.py::test_delegation_depth_is_bounded",
+    ),
+    (
+        "TIER-001",
+        "submitting a job requires tier 3, checked once in jobs.submit",
+        "datum_sync/jobs.py",
+        "        auth.require_tier(principal, 3, \"submitting a job\")\n",
+        "        pass\n",
+        "tests/test_tier.py::test_submitting_needs_tier_3_on_every_door",
+    ),
+    (
+        "TIER-002",
+        "a token cap lowers the effective tier",
+        "datum_sync/auth.py",
+        "        if self.token_tier_cap is not None:\n"
+        "            tier = min(tier, self.token_tier_cap)\n",
+        "        if False:\n"
+        "            tier = min(tier, self.token_tier_cap)\n",
+        "tests/test_tier.py::test_a_token_cap_lowers_the_effective_tier",
+    ),
+    (
+        "TIER-003",
+        "an OAuth scope caps the effective tier",
+        "datum_sync/auth.py",
+        "        cap = scope_tier(self.scope)\n",
+        "        cap = None\n",
+        "tests/test_tier.py::test_an_oauth_scope_caps_the_effective_tier",
+    ),
+    (
+        "TIER-004",
+        "the catalogue hides workspace tools below tier 3",
+        "datum_sync/mcp.py",
+        "    if tier >= WORKSPACE_MIN_TIER:\n",
+        "    if True:\n",
+        "tests/test_tier.py::test_the_catalogue_hides_what_the_tier_cannot_call",
+    ),
+    (
+        "TIER-006",
+        "vault_write requires tier 3",
+        "datum_sync/mcp.py",
+        "            auth.require_tier(principal, 3, \"vault_write\")\n",
+        "            pass\n",
+        "tests/test_tier.py::test_vault_write_needs_tier_3",
     ),
 ]
 
@@ -2191,6 +2294,13 @@ CASES = [
 # every run, so "no case" stays a visible claim someone has to keep making rather
 # than an absence nobody sees.
 UNPROVABLE = {
+    "AGENT-001": (
+        "Agents are never admin. Since migration 016 that is a CHECK "
+        "(service_accounts_agent_tier: kind = 'agent' implies max_tier <= 3, and "
+        "is_admin = (max_tier >= 4)), so breaking it means altering the database, "
+        "not a source file. agents.create's LEAST(parent.max_tier, 3) is the "
+        "source-side half and deleting it produces a constraint error, not a pass."
+    ),
     "SCHEMA-001": (
         "The guard is that the live database equals the one migrations/ build. "
         "Breaking it means altering a database, not a source file, so there is no "

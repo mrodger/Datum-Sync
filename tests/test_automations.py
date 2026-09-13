@@ -457,7 +457,7 @@ async def scoped_token(db):
     account_id = await db.fetchval(
         """
         INSERT INTO service_accounts (name, max_tier, repo_scope)
-        VALUES ('_pytest_scoped', 4, ARRAY['Elsewhere/*'])
+        VALUES ('_pytest_scoped', 3, ARRAY['Elsewhere/*'])
         RETURNING id
         """
     )

@@ -24,6 +24,7 @@ import asyncpg
 
 from datum_sync import config, db, jobs
 from datum_sync.errors import ApiError
+from datum_sync.auth import Principal
 from datum_sync.manifest import Manifest
 from datum_sync.worker import WORKER_LOCK
 
@@ -129,8 +130,14 @@ async def run_sync(
     params: dict[str, Any],
     service: str,
     submitted_by: str | None = None,
+    principal: "Principal | None" = None,
 ) -> tuple[asyncpg.Record, Manifest]:
-    """Submit and wait. Shared by /stream, /download and MCP tools/call."""
+    """Submit and wait. Shared by /stream, /download and MCP tools/call.
+
+    `principal` is passed through to `jobs.submit`, which is where the tier
+    check lives; this function adds nothing to it and must not, or the check
+    would exist twice and drift.
+    """
     async with db.pool().acquire() as conn:
         manifest = await manifest_for(conn, repo, ws, service)
         if not await worker_is_running(conn):
@@ -139,7 +146,9 @@ async def run_sync(
                 "NO_WORKER",
                 "no worker is running; the job would queue indefinitely",
             )
-        job_id = await jobs.submit(conn, repo, ws, params, submitted_by=submitted_by)
+        job_id = await jobs.submit(
+            conn, repo, ws, params, submitted_by=submitted_by, principal=principal
+        )
 
     row = await await_job(job_id, manifest.timeout_seconds + SYNC_MARGIN_SECONDS)
     if row["status"] != "complete":

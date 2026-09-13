@@ -21,6 +21,7 @@ import pytest
 import pytest_asyncio
 
 from datum_sync import (
+    agents,
     auth, connections as conn_mod, crypto, db as db_module, proxy, tokens,
 )
 from datum_sync.api import app
@@ -48,7 +49,7 @@ async def db():
     yield conn
     # cleanup in reverse dependency order
     await conn.execute("DELETE FROM proxy_log WHERE agent_name = $1", AGENT_NAME)
-    await conn.execute("DELETE FROM agents WHERE name = $1", AGENT_NAME)
+    await conn.execute("DELETE FROM service_accounts WHERE name = $1", AGENT_NAME)
     await conn.execute("DELETE FROM connections WHERE name = $1", CONN_NAME)
     await conn.execute("DELETE FROM service_accounts WHERE name = $1", ACCOUNT_NAME)
     await conn.close()
@@ -72,17 +73,10 @@ async def setup(db, monkeypatch):
     _, account_token = await tokens.create(db, account_id, "fixture")
 
     # Agent with proxy grant
-    agent_token = auth.new_token()
-    await db.execute(
-        """
-        INSERT INTO agents (account_id, name, token_hash, proxy_grants)
-        VALUES ($1, $2, $3, $4)
-        """,
-        account_id,
-        AGENT_NAME,
-        auth.hash_token(agent_token),
-        [CONN_NAME],
-    )
+    # Through the module rather than an INSERT: since migration 017 an agent
+    # is a principal row plus an account_tokens row, and `agents.create` is
+    # the one place that shape is written.
+    _, agent_token = await agents.create(db, account_id, AGENT_NAME, [CONN_NAME])
 
     # HTTP connection with bearer auth injection
     await conn_mod.create(
@@ -222,10 +216,16 @@ async def test_full_proxy_via_mcp(client, setup, db, monkeypatch):
     assert row["account_name"] == ACCOUNT_NAME
 
 
-async def test_account_token_rejected_for_proxy(client, setup):
+async def test_account_token_rejected_for_proxy(client, setup, db):
     """An account token (not an agent token) cannot use proxy_request."""
     _, account_token = setup
 
+    # The sponsor holds the grant now (agents.create widened it so the agent
+    # could narrow it), so take it away: this test is about a principal with
+    # no grant, and since D-22 the kind of principal is not what decides.
+    await db.execute(
+        "UPDATE service_accounts SET proxy_grants = '{}' WHERE name = $1", ACCOUNT_NAME
+    )
     r = await client.post(
         "/mcp",
         json=_mcp_call(CONN_NAME),
@@ -234,16 +234,19 @@ async def test_account_token_rejected_for_proxy(client, setup):
     assert r.status_code == 200
     result = r.json()["result"]
     assert result["isError"] is True
-    assert "AGENT_REQUIRED" in result["content"][0]["text"]
+    # No AGENT_REQUIRED any more: authority is the grant, not the kind of
+    # principal (spec/agent-auth-plane/11 D-22). An account with no proxy
+    # grant is refused for the grant it lacks.
+    assert "CONNECTION_DENIED" in result["content"][0]["text"]
 
 
 async def test_agent_without_grant_rejected(client, setup, db):
     """An agent without the connection in proxy_grants is denied."""
     agent_token, _ = setup
 
-    # Remove the grant
+    # Remove the grant. The agent is a principal row since migration 017.
     await db.execute(
-        "UPDATE agents SET proxy_grants = $1 WHERE name = $2",
+        "UPDATE service_accounts SET proxy_grants = $1 WHERE name = $2",
         [],
         AGENT_NAME,
     )
@@ -260,7 +263,7 @@ async def test_agent_without_grant_rejected(client, setup, db):
 
     # Restore grant for other tests
     await db.execute(
-        "UPDATE agents SET proxy_grants = $1 WHERE name = $2",
+        "UPDATE service_accounts SET proxy_grants = $1 WHERE name = $2",
         [CONN_NAME],
         AGENT_NAME,
     )

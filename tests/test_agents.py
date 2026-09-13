@@ -7,7 +7,7 @@ import pytest_asyncio
 
 from conftest import TEST_ACCOUNT
 
-from datum_sync import auth, db as db_module, tokens
+from datum_sync import agents, auth, db as db_module, tokens
 from datum_sync.api import app
 
 pytestmark = pytest.mark.asyncio
@@ -143,44 +143,37 @@ async def test_delete_agent(client, db):
 
 
 async def test_agent_token_resolves_to_principal(db):
-    """An agent token resolves to a Principal with agent_id set.
+    """An agent token resolves to the agent's own principal, under its parent.
 
-    The parent account is deliberately admin so the ``is_admin is False``
-    assertion below proves that agents are NEVER admin regardless of their
-    parent's status.
+    Since migration 017 an agent is a `service_accounts` row of kind 'agent'.
+    Its token resolves to *that* row -- its own name, its own grants -- with
+    the parent folded in by `auth.effective`. The parent here is admin, and
+    the agent is not: `kind = 'agent'` implies tier <= 3 (a CHECK from 016),
+    and `is_admin` is derived from the tier.
 
     Guard: AGENT-001.
     """
-    # Create an admin account — agents must still resolve as non-admin.
     account_id = await db.fetchval(
         """
         INSERT INTO service_accounts (name, max_tier, is_admin)
-        VALUES ('_agent_test_acct', 3, true)
+        VALUES ('_agent_test_acct', 4, true)
         RETURNING id
         """
     )
-
-    # Create an agent
-    raw = auth.new_token()
-    await db.execute(
-        """
-        INSERT INTO agents (account_id, name, token_hash, proxy_grants)
-        VALUES ($1, '_agent_test', $2, $3)
-        """,
-        account_id,
-        auth.hash_token(raw),
-        ["openrouter", "tavily"],
-    )
+    _, raw = await agents.create(db, account_id, "_agent_test", ["openrouter", "tavily"])
 
     try:
         principal = await auth.resolve(db, raw)
-        assert principal.agent_id is not None
+        assert principal.kind == "agent"
+        assert principal.parent_id == account_id
+        assert principal.agent_id == principal.account_id
         assert principal.agent_name == "_agent_test"
-        assert principal.proxy_grants == ["openrouter", "tavily"]
-        assert principal.name == "_agent_test_acct"  # parent account name
+        assert principal.name == "_agent_test"
+        assert sorted(principal.proxy_grants) == ["openrouter", "tavily"]
         assert principal.max_tier == 3
+        assert principal.effective_tier == 3
         assert principal.is_admin is False  # agents are never admin
-        assert principal.source == "agent"
+        assert principal.source == "token"
     finally:
         await db.execute("DELETE FROM service_accounts WHERE name = '_agent_test_acct'")
 
@@ -193,15 +186,8 @@ async def test_disabled_agent_rejected(db):
         RETURNING id
         """
     )
-    raw = auth.new_token()
-    await db.execute(
-        """
-        INSERT INTO agents (account_id, name, token_hash, disabled)
-        VALUES ($1, '_dis_agent', $2, true)
-        """,
-        account_id,
-        auth.hash_token(raw),
-    )
+    _, raw = await agents.create(db, account_id, "_dis_agent")
+    await agents.disable(db, "_dis_agent", True)
     try:
         with pytest.raises(auth.ApiError) as exc_info:
             await auth.resolve(db, raw)
@@ -212,32 +198,30 @@ async def test_disabled_agent_rejected(db):
 
 
 async def test_disabled_account_blocks_agent(db):
+    """Disabling the sponsor disables its agents at their next request.
+
+    Guard: PRIN-003.
+    """
     account_id = await db.fetchval(
         """
-        INSERT INTO service_accounts (name, max_tier, is_admin, disabled)
-        VALUES ('_dis_acct2', 2, false, true)
+        INSERT INTO service_accounts (name, max_tier, is_admin)
+        VALUES ('_dis_acct2', 2, false)
         RETURNING id
         """
     )
-    raw = auth.new_token()
-    await db.execute(
-        """
-        INSERT INTO agents (account_id, name, token_hash)
-        VALUES ($1, '_dis_acct_agent', $2)
-        """,
-        account_id,
-        auth.hash_token(raw),
-    )
+    _, raw = await agents.create(db, account_id, "_dis_acct_agent")
+    await db.execute("UPDATE service_accounts SET disabled = true WHERE id = $1", account_id)
     try:
         with pytest.raises(auth.ApiError) as exc_info:
             await auth.resolve(db, raw)
         assert exc_info.value.status == 401
+        assert exc_info.value.code == "ANCESTOR_DISABLED"
     finally:
         await db.execute("DELETE FROM service_accounts WHERE name = '_dis_acct2'")
 
 
 async def test_account_token_has_no_agent_id(db):
-    """A plain account token resolves with agent_id=None."""
+    """A plain account token resolves as a human with no agent identity."""
     account_id = await db.fetchval(
         """
         INSERT INTO service_accounts (name, max_tier, is_admin)
@@ -248,9 +232,10 @@ async def test_account_token_has_no_agent_id(db):
     _, raw = await tokens.create(db, account_id, "fixture")
     try:
         principal = await auth.resolve(db, raw)
+        assert principal.kind == "human"
         assert principal.agent_id is None
         assert principal.agent_name is None
-        assert principal.proxy_grants is None
+        assert principal.proxy_grants == []
     finally:
         await db.execute("DELETE FROM service_accounts WHERE name = '_no_agent_acct'")
 

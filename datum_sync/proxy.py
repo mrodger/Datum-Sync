@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from datum_sync import audit, connections, crypto, db
+from datum_sync import audit, auth, connections, crypto, db
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 
@@ -143,28 +143,30 @@ def inject_auth(
 def check_proxy_access(
     principal: Principal, conn_row, conn_name: str
 ) -> None:
-    """Raise 403 if the caller may not proxy through this connection."""
-    # Must be an agent — bare account tokens cannot proxy.
-    if principal.agent_id is None:
-        raise ApiError(
-            403, "AGENT_REQUIRED",
-            "proxy_request requires an agent token, not an account token",
-        )
+    """Raise 403 if the caller may not proxy through this connection.
 
-    # Agent must have the connection in its proxy_grants.
+    Authority is the grant, not the kind of principal (spec 11 D-22). The
+    rule that only agents could proxy existed because accounts had no
+    `proxy_grants` column; since migration 016 every principal has one, and
+    a human holding a grant is no less entitled to it than an agent.
+    """
+    # Proxying is a tier-3 verb (spec 03 §6), checked against the credential's
+    # effective tier so a baseline token cannot proxy.
+    auth.require_tier(principal, 3, "proxy_request")
+
+    # The connection must be in the caller's proxy_grants.
     if conn_name not in (principal.proxy_grants or []):
         raise ApiError(
             403, "CONNECTION_DENIED",
-            f"agent {principal.agent_name!r} has no proxy grant "
-            f"for connection {conn_name!r}",
+            f"{principal.name!r} has no proxy grant for connection {conn_name!r}",
         )
 
-    # Account tier ceiling.
-    if principal.max_tier < conn_row["tier"]:
+    # Tier ceiling: the credential's effective tier, not the row's.
+    if principal.effective_tier < conn_row["tier"]:
         raise ApiError(
             403, "TIER_DENIED",
             f"connection {conn_name!r} is tier {conn_row['tier']}; "
-            f"account {principal.name!r} is limited to tier {principal.max_tier}",
+            f"{principal.name!r} is acting at tier {principal.effective_tier}",
         )
 
 
@@ -339,7 +341,10 @@ async def _audit_log(
             """,
             principal.agent_id,
             principal.agent_name or "",
-            principal.name,
+            # The account column is the sponsor for an agent, as it was when
+            # agents borrowed their account's principal; the agent is the
+            # row's own agent_name.
+            principal.parent_name or principal.name,
             connection_name,
             method,
             path[:2000],

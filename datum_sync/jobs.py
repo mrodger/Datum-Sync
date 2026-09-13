@@ -87,13 +87,32 @@ async def submit(
     idempotency_key: str | None = None,
     parent_job: uuid.UUID | None = None,
     triggered_by: str | None = None,
+    principal: "auth.Principal | None" = None,
 ) -> uuid.UUID:
     """Queue a job. Returns its id.
 
     Parameters are validated here rather than in the worker so a caller gets a
     synchronous rejection for a bad request instead of a job that queues
     successfully and then fails a second later for a reason nobody saw.
+
+    `principal` is the caller, when there is one. Submitting is a tier-3 verb
+    (spec/agent-auth-plane/03 §6) and the check is made HERE, once, so that
+    every door -- REST submit, resubmit, upload, /stream, /download, MCP
+    tools/call -- pays it by passing the caller through, and a new door that
+    forgets to is a door with no submitter on its jobs, which the Jobs screen
+    shows. `None` is for the scheduler and the automation engine, which
+    submit on behalf of a schedule or automation whose author's tier was
+    checked when it was written.
     """
+    if principal is not None:
+        # Imported here: errors.py imports this module for JobError, and
+        # auth.py reaches errors.py through vault.py, so a top-level import
+        # of auth from here is a cycle at load time.
+        from datum_sync import auth
+
+        auth.require_tier(principal, 3, "submitting a job")
+        if submitted_by is None:
+            submitted_by = principal.name
     manifest = await load_manifest_for(conn, repository, workspace)
     try:
         validated = validate_params(manifest, params)
