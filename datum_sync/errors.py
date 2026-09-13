@@ -32,7 +32,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from datum_sync.jobs import JobError, WorkspaceNotFound
+from datum_sync.jobs import JobError, JobLimit, WorkspaceNotFound
 from datum_sync.manifest import ManifestError
 from datum_sync.uploads import UploadError
 
@@ -116,6 +116,15 @@ def install(app: FastAPI) -> None:
     @app.exception_handler(WorkspaceNotFound)
     async def _not_found(request: Request, exc: WorkspaceNotFound) -> JSONResponse:
         return envelope(request, 404, "NOT_FOUND", str(exc))
+
+    @app.exception_handler(JobLimit)
+    async def _job_limit(request: Request, exc: JobLimit) -> JSONResponse:
+        # Registered beside JobError, which it subclasses: Starlette resolves
+        # handlers by MRO, so the more specific class wins.
+        return envelope(
+            request, 429, "JOB_LIMIT", str(exc),
+            {"limit": exc.which, "value": exc.limit, "count": exc.count},
+        )
 
     @app.exception_handler(JobError)
     async def _job_error(request: Request, exc: JobError) -> JSONResponse:

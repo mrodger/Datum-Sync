@@ -131,12 +131,19 @@ async def run_sync(
     service: str,
     submitted_by: str | None = None,
     principal: "Principal | None" = None,
+    wait_seconds: float | None = None,
+    session_id: str | None = None,
+    trace_id: str | None = None,
 ) -> tuple[asyncpg.Record, Manifest]:
     """Submit and wait. Shared by /stream, /download and MCP tools/call.
 
     `principal` is passed through to `jobs.submit`, which is where the tier
     check lives; this function adds nothing to it and must not, or the check
     would exist twice and drift.
+
+    `wait_seconds` caps the wait below the workspace's own timeout. On
+    expiry `await_job` raises TIMEOUT carrying the job id, and the MCP
+    surface turns that into a job handle (spec 07 §6) rather than an error.
     """
     async with db.pool().acquire() as conn:
         manifest = await manifest_for(conn, repo, ws, service)
@@ -147,10 +154,14 @@ async def run_sync(
                 "no worker is running; the job would queue indefinitely",
             )
         job_id = await jobs.submit(
-            conn, repo, ws, params, submitted_by=submitted_by, principal=principal
+            conn, repo, ws, params, submitted_by=submitted_by, principal=principal,
+            session_id=session_id, trace_id=trace_id,
         )
 
-    row = await await_job(job_id, manifest.timeout_seconds + SYNC_MARGIN_SECONDS)
+    timeout = manifest.timeout_seconds + SYNC_MARGIN_SECONDS
+    if wait_seconds is not None:
+        timeout = min(timeout, wait_seconds)
+    row = await await_job(job_id, timeout)
     if row["status"] != "complete":
         raise ApiError(
             502,

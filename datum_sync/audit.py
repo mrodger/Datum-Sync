@@ -95,6 +95,9 @@ class Trace:
 
     id: str
     client_id: str | None
+    # The MCP session this request ran in, once the endpoint has admitted or
+    # validated it. None on every other surface.
+    session_id: str | None = None
 
     @classmethod
     def mint(cls, client_id: str | None) -> Trace:
@@ -142,6 +145,7 @@ async def write(
     duration_ms: int | None = None,
     governance: bool = False,
     detail: dict[str, Any] | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Write one audit row on the caller's connection. Never raises.
 
@@ -177,8 +181,8 @@ async def write(
             INSERT INTO audit_log
                 (trace_id, client_trace_id, actor_id, actor_name, actor_kind,
                  via, verb, target_kind, target, outcome, error_code,
-                 duration_ms, governance, detail)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 duration_ms, governance, detail, session_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             """,
             trace.id,
             trace.client_id,
@@ -194,6 +198,7 @@ async def write(
             duration_ms,
             governance,
             _bounded(detail),
+            uuid.UUID(session_id) if session_id else None,
         )
     except Exception:
         _dropped += 1

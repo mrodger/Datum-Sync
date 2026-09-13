@@ -88,6 +88,8 @@ async def submit(
     parent_job: uuid.UUID | None = None,
     triggered_by: str | None = None,
     principal: "auth.Principal | None" = None,
+    session_id: str | None = None,
+    trace_id: str | None = None,
 ) -> uuid.UUID:
     """Queue a job. Returns its id.
 
@@ -113,6 +115,7 @@ async def submit(
         auth.require_tier(principal, 3, "submitting a job")
         if submitted_by is None:
             submitted_by = principal.name
+        await _check_job_limits(conn, principal)
     manifest = await load_manifest_for(conn, repository, workspace)
     try:
         validated = validate_params(manifest, params)
@@ -128,8 +131,8 @@ async def submit(
         job_id = await conn.fetchval(
             """
             INSERT INTO jobs (repository, workspace, params, submitted_by,
-                              parent_job, triggered_by)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                              parent_job, triggered_by, grant_snapshot)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
             """,
             repository,
@@ -138,6 +141,7 @@ async def submit(
             submitted_by,
             parent_job,
             triggered_by,
+            json.dumps(_snapshot(principal, session_id, trace_id)) if principal else None,
         )
         if idempotency_key is not None:
             # ON CONFLICT blocks on a concurrent uncommitted insert of the same
@@ -163,6 +167,58 @@ async def submit(
 
 class _KeyRace(Exception):
     """Another submission claimed this idempotency key first."""
+
+
+class JobLimit(JobError):
+    """The principal's jobs_per_hour or concurrent_jobs is spent."""
+
+    def __init__(self, which: str, limit: int, count: int) -> None:
+        super().__init__(f"{which} limit of {limit} reached ({count} counted)")
+        self.which, self.limit, self.count = which, limit, count
+
+
+def _snapshot(principal, session_id: str | None, trace_id: str | None) -> dict[str, Any]:
+    """The authority a job runs under, frozen at submit (spec 03 §7)."""
+    return {
+        **principal.authority(),
+        "principal_name": principal.name,
+        "principal_id": principal.account_id,
+        "kind": principal.kind,
+        "parent_id": principal.parent_id,
+        "effective_tier": principal.effective_tier,
+        "session_id": session_id,
+        "trace_id": trace_id,
+    }
+
+
+async def _check_job_limits(conn: asyncpg.Connection, principal) -> None:
+    """`limits.jobs_per_hour` and `limits.concurrent_jobs`, counted in the
+    database, never in memory (spec 03 §5.1). Missing = policy default."""
+    from datum_sync import config
+
+    limits = principal.limits or {}
+    per_hour = limits.get("jobs_per_hour", config.DEFAULT_JOBS_PER_HOUR)
+    concurrent = limits.get("concurrent_jobs", config.DEFAULT_CONCURRENT_JOBS)
+    if per_hour is not None:
+        n = await conn.fetchval(
+            """
+            SELECT count(*) FROM jobs
+             WHERE submitted_by = $1 AND submitted_at > now() - interval '1 hour'
+            """,
+            principal.name,
+        )
+        if n >= per_hour:
+            raise JobLimit("jobs_per_hour", per_hour, n)
+    if concurrent is not None:
+        n = await conn.fetchval(
+            """
+            SELECT count(*) FROM jobs
+             WHERE submitted_by = $1 AND status IN ('queued', 'running')
+            """,
+            principal.name,
+        )
+        if n >= concurrent:
+            raise JobLimit("concurrent_jobs", concurrent, n)
 
 
 async def _existing_for_key(
@@ -213,7 +269,7 @@ async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
             """
             UPDATE jobs SET status = 'running', started_at = now()
             WHERE id = $1
-            RETURNING id, repository, workspace, params
+            RETURNING id, repository, workspace, params, grant_snapshot
             """,
             row["id"],
         )

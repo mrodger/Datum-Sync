@@ -26,13 +26,18 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
-from datum_sync import audit, auth, config, db, execute, proxy, vault_fs
+import dataclasses
+import hashlib
+
+from datum_sync import audit, auth, config, db, execute, proxy, sessions, vault_fs
+from datum_sync import jobs as jobs_mod
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 from datum_sync.manifest import Manifest, ParameterType
@@ -56,12 +61,21 @@ MAX_INLINE_BYTES = 64 * 1024
 
 _UNSAFE_TOOL_CHAR = re.compile(r"[^A-Za-z0-9_-]")
 
+# Tool names are capped so that a client prefix (`mcp__datum-sync__`, 17
+# characters, is what the Datum-3.0 bridge adds; Claude Code drops any tool
+# over 64) still fits. A name over the cap keeps its first characters and
+# ends in a hash of the whole, so two long names stay distinct and a given
+# workspace always gets the same name (spec 12 §1, MCP-020).
+MAX_TOOL_NAME = 48
+
 # JSON-RPC 2.0 error codes.
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
+# Server-defined (spec 03 §5): the principal's concurrent-session limit.
+SESSION_LIMIT = -32000
 
 
 # -- governance path classification ----------------------------------------
@@ -143,6 +157,7 @@ async def _log_call(
     error_code: int | None,
     duration_ms: int,
     trace: audit.Trace,
+    session_id: str | None = None,
 ) -> None:
     """Write one row to mcp_call_log and one to audit_log. Never raises.
 
@@ -195,6 +210,7 @@ async def _log_call(
                 duration_ms=duration_ms,
                 governance=_is_governance(target),
                 detail={"tool": tool_name_val} if tool_name_val else None,
+                session_id=session_id,
             )
     except Exception:
         pass  # logging failure must never surface to the caller
@@ -219,7 +235,14 @@ _JSON_TYPE = {
 
 
 def tool_name(repo: str, ws: str) -> str:
-    return _UNSAFE_TOOL_CHAR.sub("_", f"{repo}__{ws}")[:128]
+    return cap_tool_name(_UNSAFE_TOOL_CHAR.sub("_", f"{repo}__{ws}"))
+
+
+def cap_tool_name(name: str) -> str:
+    if len(name) <= MAX_TOOL_NAME:
+        return name
+    digest = hashlib.sha1(name.encode()).hexdigest()[:6]
+    return f"{name[:MAX_TOOL_NAME - 7]}_{digest}"
 
 
 def input_schema(manifest: Manifest) -> dict[str, Any]:
@@ -460,12 +483,72 @@ VAULT_LIST_TOOL = {
 
 VAULT_TOOLS = [VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_LIST_TOOL]
 
+# Built-in tools that every principal gets, by tier (spec 07 §6). Shown only
+# when usable, like the vault tools: a tool that can only refuse is noise.
+WHOAMI_TOOL = {
+    "name": "whoami",
+    "title": "Who am I",
+    "description": "This credential's principal, effective tier, limits, scopes, and the "
+                   "OAuth scope that would unlock more.",
+    "inputSchema": {"type": "object", "properties": {}},
+    "annotations": {"readOnlyHint": True, "datumMinTier": 1},
+}
+SESSION_INFO_TOOL = {
+    "name": "session_info",
+    "title": "Session",
+    "description": "This MCP session, the principal's session limit, and the other live "
+                   "sessions (ids and ages only).",
+    "inputSchema": {"type": "object", "properties": {}},
+    "annotations": {"readOnlyHint": True, "datumMinTier": 1},
+}
+JOB_STATUS_TOOL = {
+    "name": "job_status",
+    "title": "Job status",
+    "description": "Status, progress and the last log lines of a job you submitted "
+                   "(or, at tier 4, any job in scope).",
+    "inputSchema": {"type": "object", "properties": {"job_id": {"type": "string"}},
+                    "required": ["job_id"]},
+    "annotations": {"readOnlyHint": True, "datumMinTier": 2},
+}
+JOB_RESULT_TOOL = {
+    "name": "job_result",
+    "title": "Job result",
+    "description": "The output of a completed job, as the tool call would have returned it; "
+                   "or its handle again if it is still running.",
+    "inputSchema": {"type": "object", "properties": {"job_id": {"type": "string"}},
+                    "required": ["job_id"]},
+    "annotations": {"readOnlyHint": True, "datumMinTier": 2},
+}
+JOB_LIST_TOOL = {
+    "name": "job_list",
+    "title": "My jobs",
+    "description": "Your most recent jobs.",
+    "inputSchema": {"type": "object", "properties": {
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}}},
+    "annotations": {"readOnlyHint": True, "datumMinTier": 2},
+}
+JOB_CANCEL_TOOL = {
+    "name": "job_cancel",
+    "title": "Cancel job",
+    "description": "Cancel a queued or running job you submitted.",
+    "inputSchema": {"type": "object", "properties": {"job_id": {"type": "string"}},
+                    "required": ["job_id"]},
+    "annotations": {"datumMinTier": 3},
+}
+_BUILTIN_TOOL_NAMES = frozenset({
+    "whoami", "session_info", "job_status", "job_result", "job_list", "job_cancel",
+})
+
 
 async def _tools_list(
     principal: Principal, _: dict[str, Any], __: audit.Trace
 ) -> dict[str, Any]:
     tier = principal.effective_tier
-    tools: list[dict[str, Any]] = []
+    tools: list[dict[str, Any]] = [WHOAMI_TOOL, SESSION_INFO_TOOL]
+    if tier >= 2:
+        tools += [JOB_STATUS_TOOL, JOB_RESULT_TOOL, JOB_LIST_TOOL]
+    if tier >= 3:
+        tools.append(JOB_CANCEL_TOOL)
     # Calling a workspace tool submits a job, a tier-3 verb (spec 03 §6). A
     # caller below that would see tools that always answer TIER_REQUIRED --
     # fewer tools is better than broken ones, the same rule the vault tools
@@ -566,6 +649,8 @@ async def _tools_call(
         return await _proxy_call(principal, arguments, trace)
     if name in _VAULT_TOOL_NAMES:
         return await _vault_call(principal, name, arguments)
+    if name in _BUILTIN_TOOL_NAMES:
+        return await _builtin_call(principal, name, arguments, trace)
 
     async with db.pool().acquire() as conn:
         found = await catalogue(conn, principal)
@@ -579,6 +664,14 @@ async def _tools_call(
     # jobs.submit validates and coerces against the manifest, so the values are
     # handed over as strings exactly as a query string would deliver them
     # rather than being coerced twice, in two places, differently.
+    # `_wait_seconds` is the caller's, not the workspace's: how long this
+    # call may hold the connection before returning a job handle (07 §6).
+    wait = arguments.pop("_wait_seconds", None)
+    try:
+        wait = float(wait) if wait is not None else float(config.MCP_WAIT_SECONDS)
+    except (TypeError, ValueError):
+        raise RpcError(INVALID_PARAMS, "_wait_seconds must be a number")
+    wait = max(0.0, min(wait, 300.0))
     submitted = {k: _as_param(v) for k, v in arguments.items()}
 
     try:
@@ -588,9 +681,15 @@ async def _tools_call(
         # every MCP-submitted job it was NULL until this argument was passed.
         row, _ = await execute.run_sync(
             repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name,
-            principal=principal,
+            principal=principal, wait_seconds=wait,
+            session_id=trace.session_id, trace_id=trace.id,
         )
     except ApiError as exc:
+        if exc.code == "TIMEOUT" and exc.detail.get("job_id"):
+            # Still running: a handle, not an error. The client polls with
+            # job_status and fetches with job_result.
+            async with db.pool().acquire() as conn:
+                return await _job_handle(conn, principal, exc.detail["job_id"])
         # A workspace that fails is a *tool* error, not a protocol error: the
         # call was well-formed and the model is the one that needs to read the
         # failure and decide what to do. Returning a JSON-RPC error instead
@@ -601,6 +700,125 @@ async def _tools_call(
         }
 
     return {"content": _content_blocks(row), "isError": False}
+
+
+async def _job_visible(conn: asyncpg.Connection, principal: Principal, raw_id: str) -> asyncpg.Record:
+    """A job the caller may see: its own, its child's, or (tier 4) any in scope."""
+    try:
+        job_id = uuid.UUID(str(raw_id))
+    except ValueError:
+        raise ApiError(400, "INVALID_PARAMETER", f"not a job id: {raw_id!r}")
+    row = await jobs_mod.get(conn, job_id)
+    if row is None:
+        raise ApiError(404, "NOT_FOUND", f"no such job {raw_id}")
+    if not principal.allows_repo(row["repository"]):
+        raise ApiError(404, "NOT_FOUND", f"no such job {raw_id}")
+    snapshot = auth.json_of(row, "grant_snapshot") or {}
+    mine = row["submitted_by"] == principal.name
+    child = snapshot.get("parent_id") == principal.account_id
+    if not (mine or child or principal.effective_tier >= 4):
+        raise ApiError(404, "NOT_FOUND", f"no such job {raw_id}")
+    return row
+
+
+async def _job_handle(conn: asyncpg.Connection, principal: Principal, raw_id: str) -> dict[str, Any]:
+    row = await _job_visible(conn, principal, raw_id)
+    started = row["started_at"]
+    elapsed = int((time.time() - started.timestamp())) if started else 0
+    tail = await conn.fetch(
+        "SELECT level, message FROM job_log WHERE job_id = $1 ORDER BY id DESC LIMIT 5",
+        row["id"],
+    )
+    lines = [f"{r['level']}: {r['message']}" for r in reversed(tail)]
+    text = (
+        f"Job {row['id']} is {row['status']}"
+        + (f" (started {elapsed}s ago)." if started else ".")
+        + "\nCall job_status with this job_id to check, or job_result to fetch the "
+        "output when it completes."
+        + ("\n\nRecent log:\n" + "\n".join(lines) if lines else "")
+    )
+    return {
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": {
+            "job_id": str(row["id"]), "status": row["status"],
+            "submitted_at": row["submitted_at"].isoformat(),
+            "started_at": started.isoformat() if started else None,
+        },
+        "isError": False,
+    }
+
+
+async def _builtin_call(
+    principal: Principal, name: str, args: dict[str, Any], trace: audit.Trace
+) -> dict[str, Any]:
+    try:
+        if name == "whoami":
+            body = auth.principal_json(principal)
+            if trace.session_id:
+                body["session"] = {"id": trace.session_id}
+            return {"content": [{"type": "text", "text": json.dumps(body, indent=1)}],
+                    "structuredContent": body, "isError": False}
+        if name == "session_info":
+            async with db.pool().acquire() as conn:
+                rows = await sessions.live(conn, principal)
+            body = {
+                "session_id": trace.session_id,
+                "limit": sessions.limit_for(principal),
+                "idle_seconds": sessions.idle_window(principal),
+                "live": [{"id": str(r["id"]), "started_at": r["started_at"].isoformat(),
+                          "idle_seconds": int(r["idle_seconds"]),
+                          "client_name": r["client_name"], "this": str(r["id"]) == trace.session_id}
+                         for r in rows],
+            }
+            return {"content": [{"type": "text", "text": json.dumps(body, indent=1)}],
+                    "structuredContent": body, "isError": False}
+        if name in ("job_status", "job_result", "job_cancel"):
+            auth.require_tier(principal, 3 if name == "job_cancel" else 2, name)
+            raw_id = args.get("job_id")
+            if not isinstance(raw_id, str):
+                raise RpcError(INVALID_PARAMS, "job_id is required")
+            async with db.pool().acquire() as conn:
+                if name == "job_cancel":
+                    await _job_visible(conn, principal, raw_id)
+                    result = await jobs_mod.cancel(conn, uuid.UUID(raw_id))
+                    return {"content": [{"type": "text", "text": f"job {raw_id}: {result}"}],
+                            "structuredContent": {"job_id": raw_id, "result": result},
+                            "isError": False}
+                row = await _job_visible(conn, principal, raw_id)
+                if name == "job_result" and row["status"] == "complete":
+                    return {"content": _content_blocks(row),
+                            "structuredContent": {"job_id": str(row["id"]), "status": "complete"},
+                            "isError": False}
+                if name == "job_result" and row["status"] in ("failed", "cancelled"):
+                    return {"content": [{"type": "text", "text": f"{row['status']}: {row['error'] or ''}"}],
+                            "structuredContent": {"job_id": str(row["id"]), "status": row["status"]},
+                            "isError": True}
+                return await _job_handle(conn, principal, raw_id)
+        if name == "job_list":
+            auth.require_tier(principal, 2, "job_list")
+            limit = args.get("limit", 10)
+            if not isinstance(limit, int) or not 1 <= limit <= 50:
+                raise RpcError(INVALID_PARAMS, "limit must be 1-50")
+            async with db.pool().acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, repository, workspace, status, submitted_at, completed_at
+                      FROM jobs WHERE submitted_by = $1
+                     ORDER BY submitted_at DESC LIMIT $2
+                    """,
+                    principal.name, limit,
+                )
+            body = [{"job_id": str(r["id"]), "workspace": f"{r['repository']}/{r['workspace']}",
+                     "status": r["status"], "submitted_at": r["submitted_at"].isoformat()} for r in rows]
+            return {"content": [{"type": "text", "text": json.dumps(body, indent=1) if body else "No jobs."}],
+                    "structuredContent": {"jobs": body}, "isError": False}
+    except ApiError as exc:
+        return {
+            "content": [{"type": "text", "text": f"{exc.code}: {exc.message}"}],
+            "isError": True,
+            "structuredContent": {"code": exc.code, **(exc.detail or {})},
+        }
+    raise RpcError(INVALID_PARAMS, f"unknown tool {name!r}")
 
 
 def _as_param(value: Any) -> str:
@@ -681,6 +899,51 @@ async def endpoint(request: Request) -> Response:
     if handler is None:
         return _rpc_error(request_id, METHOD_NOT_FOUND, f"unknown method {method!r}")
 
+    # -- sessions (spec 03 §5, 12 §2) ------------------------------------------
+    # `initialize` admits a session and answers with its id; every other
+    # method presents it. A session exists for counting and audit grouping
+    # only -- the request is still fully authenticated by its bearer token.
+    headers = {"MCP-Protocol-Version": PROTOCOL_VERSION}
+    presented = request.headers.get(sessions.SESSION_HEADER)
+    session_id: str | None = None
+    if method == "initialize":
+        try:
+            async with db.pool().acquire() as conn:
+                sid, superseded = await sessions.open(
+                    conn, principal, params.get("clientInfo"), params.get("protocolVersion")
+                )
+        except sessions.SessionLimit as exc:
+            await _log_call(principal, method, None, None, "error", SESSION_LIMIT, 0, trace)
+            return _rpc_error(
+                request_id, SESSION_LIMIT,
+                f"session limit of {sessions.limit_for(principal)} reached; "
+                "close a live session or wait for it to idle out",
+                {"active": exc.active, "limit": sessions.limit_for(principal)},
+            )
+        session_id = str(sid)
+        headers[sessions.SESSION_HEADER] = session_id
+        if superseded:
+            headers["X-Datum-Superseded-Session"] = superseded
+    elif presented:
+        async with db.pool().acquire() as conn:
+            row = await sessions.touch(conn, principal, presented)
+        if row is None:
+            # Unknown, ended, idle, or another principal's: the transport
+            # says 404 so the client re-initialises, and the body says
+            # nothing more (SESS-002).
+            return Response(status_code=404, headers=headers)
+        session_id = presented
+    elif principal.kind == "agent":
+        # Agents always run in a session (SESS-004). Humans driving /mcp as a
+        # plain RPC from a script get one release of grace.
+        return JSONResponse(
+            status_code=400,
+            content={"status": 400, "code": "SESSION_REQUIRED",
+                     "message": "send initialize first and present Mcp-Session-Id"},
+            headers=headers,
+        )
+    trace = dataclasses.replace(trace, session_id=session_id)
+
     tool_name_val = params.get("name") if method == "tools/call" else None
     target = _call_target(method, tool_name_val, params)
     t0 = time.monotonic()
@@ -691,19 +954,30 @@ async def endpoint(request: Request) -> Response:
         duration_ms = int((time.monotonic() - t0) * 1000)
         await _log_call(
             principal, method, tool_name_val, target,
-            "error", exc.code, duration_ms, trace,
+            "error", exc.code, duration_ms, trace, session_id,
         )
         return _rpc_error(request_id, exc.code, exc.message, exc.data)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
     await _log_call(
         principal, method, tool_name_val, target,
-        "ok", None, duration_ms, trace,
+        "ok", None, duration_ms, trace, session_id,
     )
     return JSONResponse(
         content={"jsonrpc": "2.0", "id": request_id, "result": result},
-        headers={"MCP-Protocol-Version": PROTOCOL_VERSION},
+        headers=headers,
     )
+
+
+@router.delete("/mcp")
+async def end_session(request: Request) -> Response:
+    """The client is done with its session. Idempotent; always 204."""
+    principal = await auth.require_auth(request)
+    presented = request.headers.get(sessions.SESSION_HEADER)
+    if presented:
+        async with db.pool().acquire() as conn:
+            await sessions.close(conn, principal, presented)
+    return Response(status_code=204, headers={"MCP-Protocol-Version": PROTOCOL_VERSION})
 
 
 @router.get("/mcp")

@@ -102,7 +102,7 @@ async def test_an_mcp_tool_call_records_who_submitted_the_job(tier_setup, monkey
     """
     seen: dict = {}
 
-    async def fake_run_sync(repo, ws, params, service, submitted_by=None, principal=None):
+    async def fake_run_sync(repo, ws, params, service, submitted_by=None, principal=None, **kw):
         seen.update(repo=repo, ws=ws, service=service, submitted_by=submitted_by,
                     principal=principal)
         return {"id": uuid.uuid4(), "artifacts": "[]"}, None

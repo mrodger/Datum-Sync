@@ -228,14 +228,29 @@ def _proxy_call(path: str = "/v1/test"):
 
 
 async def _rows(db, actor: str = AGENT_NAME) -> list[dict]:
+    # The session's own `initialize` is a request of its own with a trace of
+    # its own (WP3); these tests are about the rows of one tool call.
     return [
         dict(r) for r in await db.fetch(
-            "SELECT * FROM audit_log WHERE actor_name = $1 ORDER BY id", actor
+            "SELECT * FROM audit_log WHERE actor_name = $1 AND verb <> 'mcp.initialize' "
+            "ORDER BY id", actor
         )
     ]
 
 
 # -- half 1: the rows of one request join -------------------------------------
+
+
+async def _session(client, token: str) -> dict[str, str]:
+    """Headers for an agent's MCP request: agents always run in a session
+    (SESS-004), so `initialize` first and present the id."""
+    r = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                                        "params": {"protocolVersion": "2025-06-18",
+                                                   "clientInfo": {"name": "pytest", "version": "0"},
+                                                   "capabilities": {}}},
+                          headers={"authorization": f"Bearer {token}"})
+    assert r.status_code == 200 and "error" not in r.json(), r.text
+    return {"authorization": f"Bearer {token}", "Mcp-Session-Id": r.headers["Mcp-Session-Id"]}
 
 
 async def test_one_trace_covers_the_mcp_row_and_the_proxy_row(client, setup, db):
@@ -251,7 +266,7 @@ async def test_one_trace_covers_the_mcp_row_and_the_proxy_row(client, setup, db)
     agent_token, _ = setup
     r = await client.post(
         "/mcp", json=_proxy_call(),
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     assert r.status_code == 200, r.text
     assert r.json()["result"]["isError"] is False
@@ -282,7 +297,7 @@ async def test_a_call_that_never_reaches_the_proxy_writes_one_row(client, setup,
     await client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     rows = await _rows(db)
     assert [r["verb"] for r in rows] == ["mcp.tools.list"]
@@ -297,7 +312,7 @@ async def test_an_upstream_failure_is_recorded_as_an_error(client, setup, db, mo
     )
     await client.post(
         "/mcp", json=_proxy_call(),
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     proxy_row = next(r for r in await _rows(db) if r["verb"] == "proxy.request")
     assert proxy_row["outcome"] == "error"
@@ -319,7 +334,7 @@ async def test_a_repeated_client_trace_does_not_merge_two_requests(client, setup
     """
     agent_token, _ = setup
     headers = {
-        "authorization": f"Bearer {agent_token}",
+        **await _session(client, agent_token),
         "X-Trace-Id": "i-am-always-this-value",
     }
     await client.post("/mcp", json=_proxy_call("/one"), headers=headers)
@@ -352,14 +367,14 @@ async def test_a_client_cannot_splice_itself_into_another_trace(client, setup, d
     agent_token, _ = setup
     await client.post(
         "/mcp", json=_proxy_call("/victim"),
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     victim_trace = str((await _rows(db))[0]["trace_id"])
 
     await client.post(
         "/mcp", json=_proxy_call("/attacker"),
         headers={
-            "authorization": f"Bearer {agent_token}",
+            **await _session(client, agent_token),
             "X-Trace-Id": victim_trace,
         },
     )
@@ -390,7 +405,7 @@ async def test_the_audit_row_agrees_with_the_mcp_call_log_row(client, setup, db)
     agent_token, _ = setup
     await client.post(
         "/mcp", json=_proxy_call(),
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     old = dict(await db.fetchrow(
         "SELECT * FROM mcp_call_log WHERE account_name = $1 ORDER BY id DESC LIMIT 1",
@@ -425,7 +440,7 @@ async def test_no_audit_row_carries_the_injected_secret(client, setup, db):
     agent_token, _ = setup
     await client.post(
         "/mcp", json=_proxy_call(),
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     for row in await _rows(db):
         blob = json.dumps({k: str(v) for k, v in row.items()})

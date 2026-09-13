@@ -136,6 +136,17 @@ async def revoke(conn: asyncpg.Connection, account_id: int, label: str) -> bool:
         account_id,
         label,
     )
+    if result is not None:
+        # A live MCP session on this token ends with it (SESS-003). Inline
+        # rather than through sessions.py, which imports auth, which imports
+        # this module.
+        await conn.execute(
+            """
+            UPDATE mcp_sessions SET ended_at = now(), end_reason = 'revoked'
+             WHERE credential_kind = 'token' AND token_id = $1 AND ended_at IS NULL
+            """,
+            result,
+        )
     return result is not None
 
 
@@ -146,6 +157,13 @@ async def revoke_all(conn: asyncpg.Connection, account_id: int) -> int:
         UPDATE account_tokens SET revoked_at = now()
          WHERE account_id = $1 AND revoked_at IS NULL
         RETURNING id
+        """,
+        account_id,
+    )
+    await conn.execute(
+        """
+        UPDATE mcp_sessions SET ended_at = now(), end_reason = 'revoked'
+         WHERE principal_id = $1 AND ended_at IS NULL
         """,
         account_id,
     )

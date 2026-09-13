@@ -188,6 +188,16 @@ POLICY_REVIEW_INTERVAL_DAYS = int(os.getenv("POLICY_REVIEW_INTERVAL_DAYS", "90")
 POLICY_INACTIVITY_RESTRICT_DAYS = int(os.getenv("POLICY_INACTIVITY_RESTRICT_DAYS", "30"))
 POLICY_PENDING_TTL_DAYS = int(os.getenv("POLICY_PENDING_TTL_DAYS", "7"))
 POLICY_CLAIM_TTL_HOURS = int(os.getenv("POLICY_CLAIM_TTL_HOURS", "24"))
+# Sessions (spec 03 §5, 12 §2). A capped token is a baseline credential.
+POLICY_BASELINE_SESSIONS = int(os.getenv("POLICY_BASELINE_SESSIONS", "1"))
+POLICY_ELEVATED_SESSIONS = int(os.getenv("POLICY_ELEVATED_SESSIONS", "4"))
+SESSION_IDLE_SECONDS = int(os.getenv("SESSION_IDLE_SECONDS", "900"))
+# Job limits when a principal's `limits` says nothing (spec 03 §5.1).
+DEFAULT_JOBS_PER_HOUR = int(os.getenv("DEFAULT_JOBS_PER_HOUR", "60"))
+DEFAULT_CONCURRENT_JOBS = int(os.getenv("DEFAULT_CONCURRENT_JOBS", "2"))
+# How long an MCP tools/call waits for a workspace before returning a job
+# handle (spec 07 §6). Under the 60 s per-request timer the clients apply.
+MCP_WAIT_SECONDS = int(os.getenv("MCP_WAIT_SECONDS", "45"))
 # How often the worker runs the lifecycle housekeeping. Daily by design; the
 # tests set it low.
 LIFECYCLE_TICK_SECONDS = int(os.getenv("LIFECYCLE_TICK_SECONDS", str(24 * 3600)))

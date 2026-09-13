@@ -1616,8 +1616,8 @@ CASES = [
         "AUDIT-009",
         "a failed audit write is counted, not silently swallowed",
         "datum_sync/audit.py",
-        "            governance,\n            _bounded(detail),\n        )\n    except Exception:\n        _dropped += 1",
-        "            governance,\n            _bounded(detail),\n        )\n    except Exception:\n        pass",
+        "            uuid.UUID(session_id) if session_id else None,\n        )\n    except Exception:\n        _dropped += 1",
+        "            uuid.UUID(session_id) if session_id else None,\n        )\n    except Exception:\n        pass",
         "tests/test_audit_trace.py::test_a_failed_audit_write_is_counted_not_hidden",
     ),
 
@@ -1760,7 +1760,7 @@ CASES = [
         "datum_sync/mcp.py",
         '        await _log_call(\n'
         '            principal, method, tool_name_val, target,\n'
-        '            "error", exc.code, duration_ms, trace,\n'
+        '            "error", exc.code, duration_ms, trace, session_id,\n'
         '        )',
         '        pass  # log removed',
         "tests/test_mcp_call_log.py::test_log_error_outcome",
@@ -2149,9 +2149,9 @@ CASES = [
         "an MCP tool call records who submitted the job",
         "datum_sync/mcp.py",
         "            repo, ws, submitted, MCP_SERVICE, submitted_by=principal.name,\n"
-        "            principal=principal,\n",
+        "            principal=principal, wait_seconds=wait,\n",
         "            repo, ws, submitted, MCP_SERVICE,\n"
-        "            principal=principal,\n",
+        "            principal=principal, wait_seconds=wait,\n",
         "tests/test_tier.py::"
         "test_an_mcp_tool_call_records_who_submitted_the_job",
     ),
@@ -2354,6 +2354,82 @@ CASES = [
         "    if False:\n"
         "        auth.require_tier(caller, 4, \"minting an auto-approving enrolment code\")\n",
         "tests/test_enrol.py::test_auto_approve_codes_need_tier_4",
+    ),
+    (
+        "SESS-001",
+        "a second credential is refused at the session limit",
+        "datum_sync/sessions.py",
+        "        if len(rows) >= limit:\n",
+        "        if False:\n",
+        "tests/test_sessions.py::test_a_second_credential_is_refused_at_the_limit",
+    ),
+    (
+        "SESS-002",
+        "a session id is bound to its principal",
+        "datum_sync/sessions.py",
+        "         WHERE id = $1 AND principal_id = $2 AND ended_at IS NULL\n"
+        "           AND last_seen_at > now() - make_interval(secs => $3)\n"
+        "        RETURNING id, credential_kind, token_id, client_name, started_at\n",
+        "         WHERE id = $1 AND $2 IS NOT NULL AND ended_at IS NULL\n"
+        "           AND last_seen_at > now() - make_interval(secs => $3)\n"
+        "        RETURNING id, credential_kind, token_id, client_name, started_at\n",
+        "tests/test_sessions.py::test_a_session_is_bound_to_its_principal",
+    ),
+    (
+        "SESS-003",
+        "revoking a token ends its live session",
+        "datum_sync/tokens.py",
+        "    if result is not None:\n"
+        "        # A live MCP session on this token ends with it (SESS-003). Inline\n",
+        "    if False:\n"
+        "        # A live MCP session on this token ends with it (SESS-003). Inline\n",
+        "tests/test_sessions.py::test_revoking_the_token_ends_its_session",
+    ),
+    (
+        "SESS-004",
+        "agents cannot skip initialize",
+        "datum_sync/mcp.py",
+        "    elif principal.kind == \"agent\":\n",
+        "    elif False:\n",
+        "tests/test_sessions.py::test_agents_cannot_skip_initialize",
+    ),
+    (
+        "SESS-005",
+        "supersession only on the same credential row",
+        "datum_sync/sessions.py",
+        "            same = [\n"
+        "                r for r in rows\n"
+        "                if r[\"credential_kind\"] == principal.source\n"
+        "                and r[\"token_id\"] == principal.credential_id\n"
+        "            ]\n",
+        "            same = list(rows)\n",
+        "tests/test_sessions.py::test_the_same_credential_supersedes_its_own_session",
+    ),
+    (
+        "SESS-006",
+        "the idle window is per principal",
+        "datum_sync/sessions.py",
+        "    return int(value) if value is not None else config.SESSION_IDLE_SECONDS\n",
+        "    return config.SESSION_IDLE_SECONDS\n",
+        "tests/test_sessions.py::test_the_idle_window_is_per_principal",
+    ),
+    (
+        "MCP-020",
+        "tool names are capped at 48 characters, stably",
+        "datum_sync/mcp.py",
+        "    if len(name) <= MAX_TOOL_NAME:\n"
+        "        return name\n",
+        "    if True:\n"
+        "        return name\n",
+        "tests/test_sessions.py::test_tool_names_are_capped_stably",
+    ),
+    (
+        "TIER-010",
+        "job limits are counted in the database",
+        "datum_sync/jobs.py",
+        "        await _check_job_limits(conn, principal)\n",
+        "        pass\n",
+        "tests/test_sessions.py::test_job_limits_are_counted_in_the_database",
     ),
 ]
 

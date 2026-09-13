@@ -170,6 +170,9 @@ class Principal:
     # The credential's own ceiling (account_tokens.max_tier), or None. Folded
     # into `effective_tier`, which is the only tier `require_tier` reads.
     token_tier_cap: int | None = None
+    # The credential row this principal was resolved from (account_tokens.id
+    # or oauth_tokens.id, by `source`). What a session is bound to.
+    credential_id: int | None = None
     limits: dict = field(default_factory=dict)
     federation_scope: dict | None = None
 
@@ -603,7 +606,8 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
         return await effective(
             conn,
             principal_from_row(
-                row, "oauth", client_id=row["client_id"], scope=row["scope"]
+                row, "oauth", client_id=row["client_id"], scope=row["scope"],
+                credential_id=row["id"],
             ),
         )
 
@@ -627,7 +631,9 @@ async def resolve(conn: asyncpg.Connection, raw_token: str) -> Principal:
     )
     return await effective(
         conn,
-        principal_from_row(row, "token", token_tier_cap=row["token_tier_cap"]),
+        principal_from_row(
+            row, "token", token_tier_cap=row["token_tier_cap"], credential_id=row["token_id"]
+        ),
     )
 
 

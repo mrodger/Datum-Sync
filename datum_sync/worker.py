@@ -248,12 +248,18 @@ class Worker:
                 await jobs.finish(conn, job_id, "failed", error=str(e))
                 return
 
+            # The frozen grant, when the job has one: connections resolve
+            # against the tier the job was submitted at, never the live row.
+            snapshot = job["grant_snapshot"]
+            if isinstance(snapshot, str):
+                snapshot = json.loads(snapshot)
             try:
                 resolved = await connections.resolve(
                     conn,
                     job["repository"],
                     job["workspace"],
                     [c.name for c in manifest.connections],
+                    max_tier=snapshot.get("effective_tier") if snapshot else None,
                 )
             except (connections.ConnectionStoreError, crypto.CryptoError) as e:
                 # A declared connection was deleted, moved out of scope, or

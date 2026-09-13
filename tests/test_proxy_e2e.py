@@ -162,6 +162,18 @@ def _mcp_call(connection: str, method: str = "GET", path: str = "/v1/test"):
 # -- tests -------------------------------------------------------------------
 
 
+async def _session(client, token: str) -> dict[str, str]:
+    """Headers for an agent's MCP request: agents always run in a session
+    (SESS-004), so `initialize` first and present the id."""
+    r = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                                        "params": {"protocolVersion": "2025-06-18",
+                                                   "clientInfo": {"name": "pytest", "version": "0"},
+                                                   "capabilities": {}}},
+                          headers={"authorization": f"Bearer {token}"})
+    assert r.status_code == 200 and "error" not in r.json(), r.text
+    return {"authorization": f"Bearer {token}", "Mcp-Session-Id": r.headers["Mcp-Session-Id"]}
+
+
 async def test_full_proxy_via_mcp(client, setup, db, monkeypatch):
     """Agent token → /mcp tools/call proxy_request → injected auth → audit log."""
     agent_token, _ = setup
@@ -181,7 +193,7 @@ async def test_full_proxy_via_mcp(client, setup, db, monkeypatch):
     r = await client.post(
         "/mcp",
         json=_mcp_call(CONN_NAME),
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -254,7 +266,7 @@ async def test_agent_without_grant_rejected(client, setup, db):
     r = await client.post(
         "/mcp",
         json=_mcp_call(CONN_NAME),
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     assert r.status_code == 200
     result = r.json()["result"]
@@ -276,7 +288,7 @@ async def test_tools_list_includes_proxy(client, setup):
     r = await client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
-        headers={"authorization": f"Bearer {agent_token}"},
+        headers=await _session(client, agent_token),
     )
     assert r.status_code == 200
     tools = r.json()["result"]["tools"]

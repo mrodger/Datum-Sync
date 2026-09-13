@@ -3312,13 +3312,37 @@ async function screenPrincipal(view, name) {
             el('div', { class: 'action-bar' }, el('div', { class: 'actions' },
                 el('button', { type: 'submit' }, 'Mint token')))));
 
+    // -- sessions (spec 03 §5, 08 §6) --------------------------------------------
+    const sessionsPanel = el('div', { class: 'panel' }, el('h2', {}, 'Sessions'));
+    api(path + '/sessions').then((s) => {
+        const live = s.items.filter((x) => !x.ended_at);
+        sessionsPanel.append(el('p', { class: 'hint' },
+            `${live.length} live of ${s.limit} allowed; idle after ${s.idle_seconds}s.`));
+        if (!s.items.length) return void sessionsPanel.append(el('p', { class: 'hint' }, 'No sessions in the last day.'));
+        sessionsPanel.append(table(['Client', 'Credential', 'Started', 'Idle', 'State', ''], s.items.map((x) => {
+            const endBtn = el('button', { type: 'button', class: 'secondary', onclick: async () => {
+                endBtn.disabled = true;
+                try { await api(path + '/sessions/' + x.id, { method: 'DELETE' }); route(); }
+                catch (err) { failure.append(banner(err)); endBtn.disabled = false; }
+            } }, 'End');
+            return el('tr', {},
+                el('td', {}, x.client_name || el('span', { class: 'hint' }, 'unknown')),
+                el('td', {}, x.credential_kind),
+                el('td', {}, when(x.started_at)),
+                el('td', {}, x.ended_at ? '\u2014' : x.idle_seconds + 's'),
+                el('td', {}, x.ended_at ? el('span', { class: 'badge cancelled' }, x.end_reason || 'ended')
+                    : el('span', { class: 'badge running' }, 'live')),
+                el('td', {}, x.ended_at ? null : endBtn));
+        })));
+    }).catch((err) => sessionsPanel.append(banner(err)));
+
     append(view, [
         crumbs(['Principals', '#/admin'], [name]),
         el('div', { class: 'page-header' }, el('h1', {}, name), stateBadge(p.state)),
         failure,
         tokenDisplay,
         el('div', { class: 'split' },
-            el('div', {}, details, effective, tokensPanel),
+            el('div', {}, details, effective, tokensPanel, sessionsPanel),
             editor),
     ]);
 }

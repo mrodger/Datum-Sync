@@ -505,13 +505,22 @@ async def _revoke_family(
     attacker, so every token this client holds for this account is revoked and
     the human re-authorizes. OAuth 2.1 §4.14.2.
     """
-    await conn.execute(
+    ids = await conn.fetch(
         """
         UPDATE oauth_tokens SET revoked_at = now()
          WHERE client_id = $1 AND account_id = $2 AND revoked_at IS NULL
+        RETURNING id
         """,
         client_id,
         account_id,
+    )
+    # And the MCP sessions those tokens opened (SESS-003).
+    await conn.execute(
+        """
+        UPDATE mcp_sessions SET ended_at = now(), end_reason = 'revoked'
+         WHERE credential_kind = 'oauth' AND token_id = ANY($1::bigint[]) AND ended_at IS NULL
+        """,
+        [r["id"] for r in ids],
     )
 
 

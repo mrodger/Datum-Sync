@@ -266,6 +266,7 @@ async def resolve(
     repository: str,
     workspace: str,
     names: list[str],
+    max_tier: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build the `connections` dict a workspace's `run()` receives.
 
@@ -273,6 +274,14 @@ async def resolve(
     a dict without it fails later, inside its own code, with a KeyError that
     says nothing about scope -- so the failure has to happen here, where the
     reason is known.
+
+    `max_tier` is the job's frozen grant (jobs.grant_snapshot), when the job
+    has one: a connection above it is refused here, at run time, on the
+    authority the job was submitted with rather than whatever the submitter
+    holds by the time the worker gets to it (spec 03 §7). None -- the
+    scheduler, the automation engine, jobs from before the column -- means
+    the publish gate's check of the publisher's tier stands alone, as it
+    always did.
     """
     resolved: dict[str, dict[str, Any]] = {}
     for name in names:
@@ -283,6 +292,11 @@ async def resolve(
             raise ConnectionStoreError(
                 f"connection {name!r} is {row['scope']}-scoped and does not "
                 f"cover {repository}/{workspace}"
+            )
+        if max_tier is not None and row["tier"] > max_tier:
+            raise ConnectionStoreError(
+                f"connection {name!r} is tier {row['tier']}; the job was submitted "
+                f"at tier {max_tier}"
             )
         obj = {
             "name": row["name"],

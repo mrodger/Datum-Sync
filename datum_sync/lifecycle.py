@@ -28,7 +28,7 @@ from typing import Any
 import asyncpg
 from fastapi import APIRouter, Body, Depends, Request
 
-from datum_sync import audit, auth, config, db, grants, principals, tokens
+from datum_sync import audit, auth, config, db, grants, principals, sessions, tokens
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 
@@ -104,7 +104,8 @@ async def _revoke_everything(conn: asyncpg.Connection, account_id: int) -> dict[
         """,
         account_id,
     )
-    return {"tokens": n_tokens, "oauth": n_oauth}
+    n_sessions = await sessions.end_for_principal(conn, account_id)
+    return {"tokens": n_tokens, "oauth": n_oauth, "sessions": n_sessions}
 
 
 async def _set_state(conn: asyncpg.Connection, account_id: int, state: str) -> None:
@@ -179,6 +180,9 @@ async def restrict(conn: asyncpg.Connection, row: asyncpg.Record, reason: str) -
         """,
         row["account_id"],
     )
+    # Live sessions end too: the next initialize is admitted at the
+    # restricted limit and sees the restricted tools (SESS-003).
+    await sessions.end_for_principal(conn, row["account_id"], reason="revoked")
 
 
 async def restore(conn: asyncpg.Connection, row: asyncpg.Record) -> None:

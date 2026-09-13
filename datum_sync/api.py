@@ -42,7 +42,7 @@ from starlette.datastructures import UploadFile
 from datum_sync import (
     agents, audit, auth, automations, config, connections, crypto, db, enrol, errors,
     events, execute, jobs, lifecycle, mcp, oauth, principals, ratelimit, schedules,
-    services, tokens, ui, uploads,
+    services, sessions, tokens, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -158,6 +158,7 @@ app.include_router(mcp.router)
 app.include_router(principals.router)
 app.include_router(lifecycle.router)
 app.include_router(enrol.router)
+app.include_router(sessions.router)
 
 
 @app.middleware("http")
