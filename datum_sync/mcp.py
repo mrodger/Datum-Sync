@@ -38,6 +38,7 @@ import hashlib
 
 from datum_sync import audit, auth, config, db, execute, proxy, sessions, vault_fs
 from datum_sync import jobs as jobs_mod
+from datum_sync.federation import catalogue as fedcat, client as fedclient, guards as guards_mod
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 from datum_sync.manifest import Manifest, ParameterType
@@ -375,7 +376,7 @@ async def _initialize(
     requested = params.get("protocolVersion")
     return {
         "protocolVersion": requested if requested == PROTOCOL_VERSION else PROTOCOL_VERSION,
-        "capabilities": {"tools": {"listChanged": False}},
+        "capabilities": {"tools": {"listChanged": False}, "resources": {"listChanged": False}},
         "serverInfo": SERVER_INFO,
     }
 
@@ -577,6 +578,12 @@ async def _tools_list(
             _tool_json(name, repo, ws, manifest)
             for name, (repo, ws, manifest) in found.items()
         ]
+    # Federated tools (spec 05 §3.2): from the cache, never an upstream, for
+    # the connections the principal's federation blocks name. Local names
+    # win a clash, so the catalogue's names are excluded (FED-019).
+    if principal.federation_scope:
+        async with db.pool().acquire() as conn:
+            tools += await fedcat.visible_tools(conn, principal, exclude={t["name"] for t in tools})
     # The proxy needs tier 3 and a grant; without either it can only refuse.
     if tier >= 3 and principal.proxy_grants:
         tools.append(PROXY_TOOL)
@@ -670,6 +677,9 @@ async def _tools_call(
 
     async with db.pool().acquire() as conn:
         found = await catalogue(conn, principal)
+        fed = None if name in found else await fedcat.lookup(conn, name)
+    if name not in found and fed is not None:
+        return await _federated_call(principal, fed[0], fed[1], arguments, trace)
     if name not in found:
         # Same answer whether the tool does not exist or this account cannot
         # see it: the catalogue is already scope-filtered, and distinguishing
@@ -716,6 +726,192 @@ async def _tools_call(
         }
 
     return {"content": _content_blocks(row), "isError": False}
+
+
+# -- federation (spec 05 §4.2) ------------------------------------------------------
+
+_drive_cache: dict[tuple[str, str], tuple[float, list[str]]] = {}
+
+
+def _tool_error(code: str, message: str, **extra: Any) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": f"{code}: {message}"}],
+            "isError": True, "structuredContent": {"code": code, **extra}}
+
+
+async def _drive_resolver(upstream: fedclient.Upstream, connection: str):
+    """`resolve: drive_folder`: a file id to its ancestor folder ids, cached."""
+    async def resolve(file_id: str) -> list[str]:
+        key = (connection, file_id)
+        hit = _drive_cache.get(key)
+        if hit and time.time() - hit[0] < config.DRIVE_RESOLVE_TTL_SECONDS:
+            return hit[1]
+        chain: list[str] = []
+        current = file_id
+        for _ in range(20):
+            result = await upstream.tools_call("get_file", {"fileId": current})
+            if result.get("isError"):
+                break  # the top of the tree, or a folder this credential cannot read
+            body = result.get("structuredContent")
+            if not isinstance(body, dict):
+                text = next((b.get("text") for b in result.get("content") or [] if b.get("type") == "text"), "")
+                try:
+                    body = json.loads(text) if text else {}
+                except json.JSONDecodeError:
+                    break
+            parents = body.get("parents") or []
+            if not parents:
+                break
+            chain.append(str(parents[0]))
+            current = str(parents[0])
+        if not chain:
+            raise ValueError("no parent folder")
+        _drive_cache[key] = (time.time(), chain)
+        return chain
+    return resolve
+
+
+async def _federated_call(
+    principal: Principal, tool: asyncpg.Record, connection: asyncpg.Record,
+    args: dict[str, Any], trace: audit.Trace,
+) -> dict[str, Any]:
+    found = fedcat.block_for(principal, connection)
+    if found is None:
+        # Not in the principal's block, or under the connection's tier when
+        # the block exists: the same answer as no such tool (never reveal).
+        if principal.federation_scope and principal.effective_tier < connection["tier"]:
+            return _tool_error("TIER_REQUIRED", f"{connection['name']} is tier {connection['tier']}",
+                               required=connection["tier"], effective=principal.effective_tier,
+                               elevate=auth.elevation_hints(principal))
+        raise RpcError(INVALID_PARAMS, f"unknown tool {tool['tool_name']!r}")
+    _, block = found
+    cfg = json.loads(connection["config"])
+    upstream_name = tool["upstream_name"]
+    if not guards_mod.tool_allowed(block, upstream_name):
+        raise RpcError(INVALID_PARAMS, f"unknown tool {tool['tool_name']!r}")
+    if len(json.dumps(args)) > guards_mod.MAX_ARGS_BYTES:
+        # Refused before evaluation (FED-020): a guard walks these.
+        return _tool_error("ARGUMENTS_TOO_LARGE", f"arguments over {guards_mod.MAX_ARGS_BYTES} bytes")
+    compiled = guards_mod.compile_guards(cfg.get("guards"))
+    matching = [g for g in compiled if g.matches(upstream_name)]
+    if not matching and cfg.get("default", "deny") != "allow":
+        raise RpcError(INVALID_PARAMS, f"unknown tool {tool['tool_name']!r}")
+    target = f"{connection['name']}:{upstream_name}"
+
+    async with db.pool().acquire() as conn:
+        upstream = await fedcat.upstream_for(conn, connection)
+        try:
+            guarded, approvals = await guards_mod.evaluate(
+                matching, block, principal.effective_tier, args,
+                resolver=await _drive_resolver(upstream, connection["name"]),
+            )
+        except guards_mod.Denied as exc:
+            await audit.write(
+                conn, trace=trace, principal=principal, via="mcp", verb="federate.denied",
+                target_kind="tool", target=target, outcome="denied", session_id=trace.session_id,
+                detail={"guard": exc.guard, "field": exc.field},
+            )
+            return _tool_error("FEDERATION_DENIED", str(exc), guard=exc.guard, field=exc.field)
+        held = [a for a in approvals if a in (block.get("approval_required") or [])]
+        if held:
+            # Approval-gated calls are WP6 (spec 05 §5); until then the
+            # honest answer is a refusal that names the label.
+            await audit.write(
+                conn, trace=trace, principal=principal, via="mcp", verb="federate.denied",
+                target_kind="tool", target=target, outcome="denied", session_id=trace.session_id,
+                detail={"approval": held[0]},
+            )
+            return _tool_error("APPROVAL_REQUIRED", f"{upstream_name} needs approval ({held[0]})",
+                               label=held[0])
+        # Audited BEFORE forwarding, with the guarded values only (FED-013):
+        # the arguments themselves may be a file body or a command.
+        await audit.write(
+            conn, trace=trace, principal=principal, via="mcp", verb="federate.call",
+            target_kind="tool", target=target, outcome="ok", session_id=trace.session_id,
+            detail=guarded or {"guard": "none"},
+        )
+    t0 = time.monotonic()
+    try:
+        result = await upstream.tools_call(upstream_name, args)
+    except fedclient.UpstreamError as exc:
+        # The upstream is down or broken: a tool error, fast, naming the
+        # outage (FED-012). The listing stays served from the cache.
+        result = _tool_error(exc.code, exc.message)
+    except fedclient.ToolError as exc:
+        result = _tool_error("UPSTREAM_ERROR", f"{exc.code}: {exc.message}")
+    async with db.pool().acquire() as conn:
+        await audit.write(
+            conn, trace=trace, principal=principal, via="mcp", verb="federate.result",
+            target_kind="tool", target=target, outcome="error" if result.get("isError") else "ok",
+            duration_ms=int((time.monotonic() - t0) * 1000), session_id=trace.session_id,
+        )
+    return result
+
+
+async def _resources_list(principal: Principal, _: dict[str, Any], __: audit.Trace) -> dict[str, Any]:
+    if not principal.federation_scope:
+        return {"resources": []}
+    async with db.pool().acquire() as conn:
+        return {"resources": await fedcat.visible_resources(conn, principal, templates=False)}
+
+
+async def _resources_templates_list(principal: Principal, _: dict[str, Any], __: audit.Trace) -> dict[str, Any]:
+    if not principal.federation_scope:
+        return {"resourceTemplates": []}
+    async with db.pool().acquire() as conn:
+        return {"resourceTemplates": await fedcat.visible_resources(conn, principal, templates=True)}
+
+
+async def _resources_read(principal: Principal, params: dict[str, Any], trace: audit.Trace) -> dict[str, Any]:
+    """`datum://{connection}/{upstream uri}`, guarded by the connection's
+    resource_guards against the principal's block (spec 05 §4.5, FED-016)."""
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri.startswith("datum://"):
+        raise RpcError(INVALID_PARAMS, "uri is datum://{connection}/{uri}")
+    name, _, upstream_uri = uri[len("datum://"):].partition("/")
+    async with db.pool().acquire() as conn:
+        connection = await conn.fetchrow(
+            f"SELECT {fedcat.connections._COLUMNS} FROM connections WHERE name = $1 AND type = 'mcp'", name
+        )
+        found = fedcat.block_for(principal, connection) if connection else None
+        if found is None:
+            raise RpcError(INVALID_PARAMS, f"unknown resource {uri!r}")
+        _, block = found
+        cfg = json.loads(connection["config"])
+        rguards = guards_mod.compile_resource_guards(cfg.get("resource_guards"))
+        picked = guards_mod.resource_value(rguards, upstream_uri)
+        target = f"{name}:{upstream_uri}"
+        denied = None
+        if picked is None:
+            if cfg.get("default", "deny") != "allow":
+                denied = "no resource guard covers this uri"
+        else:
+            field, value = picked
+            if field == "commands" or not any(
+                fedcat.guards_mod.grants.matches(p, value) for p in guards_mod._field(block, field)
+            ):
+                denied = f"{value!r} is outside {field}"
+        if denied:
+            await audit.write(
+                conn, trace=trace, principal=principal, via="mcp", verb="federate.denied",
+                target_kind="resource", target=target, outcome="denied", session_id=trace.session_id,
+                detail={"field": picked[0] if picked else None},
+            )
+            raise RpcError(INVALID_PARAMS, f"resource denied: {denied}")
+        await audit.write(
+            conn, trace=trace, principal=principal, via="mcp", verb="federate.call",
+            target_kind="resource", target=target, outcome="ok", session_id=trace.session_id,
+            detail={picked[0]: [picked[1]]} if picked else {"guard": "none"},
+        )
+        upstream = await fedcat.upstream_for(conn, connection)
+    try:
+        result = await upstream.resources_read(upstream_uri)
+    except (fedclient.UpstreamError, fedclient.ToolError) as exc:
+        raise RpcError(INTERNAL_ERROR, f"upstream: {exc}")
+    contents = result.get("contents") or result.get("content") or []
+    for block_ in contents:
+        if isinstance(block_, dict) and isinstance(block_.get("uri"), str):
+            block_["uri"] = f"datum://{name}/{block_['uri']}"
+    return {"contents": contents}
 
 
 async def _job_visible(conn: asyncpg.Connection, principal: Principal, raw_id: str) -> asyncpg.Record:
@@ -881,6 +1077,9 @@ METHODS = {
     "ping": _ping,
     "tools/list": _tools_list,
     "tools/call": _tools_call,
+    "resources/list": _resources_list,
+    "resources/templates/list": _resources_templates_list,
+    "resources/read": _resources_read,
 }
 
 

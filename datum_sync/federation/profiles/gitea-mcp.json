@@ -1,0 +1,22 @@
+{
+  "title": "Gitea MCP server",
+  "description": "gitea/gitea-mcp. Same shape as GitHub: owner/repo from the arguments, writes gated by write:true.",
+  "config": {
+    "url": "https://gitea.example/mcp",
+    "transport": "streamable_http",
+    "resource_kind": "code",
+    "tool_prefix": "gitea",
+    "auth_inject": {"type": "bearer", "secret_field": "token"},
+    "refresh_seconds": 300,
+    "default": "deny",
+    "guards": [
+      {"tools": ["get_file_content", "list_*", "get_*", "search_*"],
+       "checks": [{"grant": "repos", "value": {"join": ["$.owner", "$.repo"], "sep": "/"}}]},
+      {"tools": ["create_*", "edit_*", "update_*", "fork_repository", "merge_pull_request"],
+       "checks": [{"grant": "repos", "value": {"join": ["$.owner", "$.repo"], "sep": "/"}}],
+       "requires": {"write": true}},
+      {"tools": ["delete_*"], "checks": [{"grant": "repos", "value": {"join": ["$.owner", "$.repo"], "sep": "/"}}],
+       "requires": {"write": true, "tier": 5}}
+    ]
+  }
+}

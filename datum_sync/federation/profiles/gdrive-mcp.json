@@ -1,0 +1,25 @@
+{
+  "title": "Google Drive MCP server",
+  "description": "Files under granted folders. A file id is resolved to its folder chain through the server's own get_file (cached 10 min); a failure to resolve is a deny. Sharing needs share:true.",
+  "config": {
+    "url": "https://gdrive-mcp.example/mcp",
+    "transport": "streamable_http",
+    "resource_kind": "documents",
+    "tool_prefix": "drive",
+    "auth_inject": {"type": "bearer", "secret_field": "token"},
+    "refresh_seconds": 300,
+    "default": "deny",
+    "guards": [
+      {"tools": ["get_file", "read_file", "export_file"],
+       "checks": [{"grant": "folders", "value": {"path": "$.fileId", "resolve": "drive_folder"}}]},
+      {"tools": ["search", "list_folder", "list_files"],
+       "checks": [{"grant": "folders", "value": {"path": "$.folderId"}}]},
+      {"tools": ["create_file", "update_file", "upload_file"],
+       "checks": [{"grant": "folders", "value": {"path": "$.folderId"}}],
+       "requires": {"write": true}},
+      {"tools": ["share_*"],
+       "checks": [{"grant": "folders", "value": {"path": "$.fileId", "resolve": "drive_folder"}}],
+       "requires": {"share": true}}
+    ]
+  }
+}

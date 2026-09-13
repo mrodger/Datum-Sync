@@ -2527,6 +2527,170 @@ CASES = [
         "    uris = body.get(\"redirect_uris\")\n",
         "tests/test_elevation.py::test_registration_without_scope_is_accepted_and_authorize_still_validates",
     ),
+    # -- Federation (WP5, spec 05 §8). FED-009 and FED-010 (approval-gated
+    # calls) arrive with WP6.
+    (
+        "FED-001",
+        "federated tools are listed only for connections in the principal's block",
+        "datum_sync/federation/catalogue.py",
+        "    if not block or row[\"name\"] not in (block.get(\"connections\") or []):\n"
+        "        return None\n",
+        "    if not block:\n"
+        "        return None\n",
+        "tests/test_federation.py::test_tools_list_is_the_block_filtered_cache",
+    ),
+    (
+        "FED-002",
+        "the block's tools allow/deny applies to the listing",
+        "datum_sync/federation/catalogue.py",
+        "            if not guards_mod.tool_allowed(block, t[\"upstream_name\"]):\n"
+        "                continue\n",
+        "            if False:\n"
+        "                continue\n",
+        "tests/test_federation.py::test_tools_list_is_the_block_filtered_cache",
+    ),
+    (
+        "FED-003",
+        "default deny hides unguarded tools",
+        "datum_sync/federation/catalogue.py",
+        "            if not matching and not default_allow:\n"
+        "                continue\n",
+        "            if False:\n"
+        "                continue\n",
+        "tests/test_federation.py::test_tools_list_is_the_block_filtered_cache",
+    ),
+    (
+        "FED-004",
+        "a value outside the grant glob is denied before any upstream request",
+        "datum_sync/federation/guards.py",
+        "                    if not any(grants.matches(p, v) for p in patterns):\n",
+        "                    if False:\n",
+        "tests/test_federation.py::test_a_value_outside_the_grant_is_denied_before_any_upstream_request",
+    ),
+    (
+        "FED-005",
+        "a missing guarded argument is a deny unless the check is optional",
+        "datum_sync/federation/guards.py",
+        "                if c.optional:\n                    continue\n",
+        "                if True:\n                    continue\n",
+        "tests/test_federation.py::test_a_missing_guarded_argument_is_a_deny",
+    ),
+    (
+        "FED-006",
+        "requires.write is enforced against the block",
+        "datum_sync/federation/guards.py",
+        "    if requires.get(\"write\") and not block.get(\"write\"):\n"
+        "        return \"the block is read-only\"\n",
+        "    if False:\n"
+        "        return \"the block is read-only\"\n",
+        "tests/test_federation.py::test_requires_write_is_enforced",
+    ),
+    (
+        "FED-007",
+        "requires.tier is checked against the effective tier",
+        "datum_sync/federation/guards.py",
+        "    if \"tier\" in requires and tier < requires[\"tier\"]:\n",
+        "    if False:\n",
+        "tests/test_federation.py::test_requires_tier_reads_the_effective_tier",
+    ),
+    (
+        "FED-008",
+        "command deny regexes are tested before allow",
+        "datum_sync/federation/guards.py",
+        "    if any(p.search(value) for p in deny):\n        return False\n"
+        "    return any(p.search(value) for p in allow)\n",
+        "    if any(p.search(value) for p in allow):\n        return True\n"
+        "    return not any(p.search(value) for p in deny)\n",
+        "tests/test_federation.py::test_commands_are_denied_before_allowed",
+    ),
+    (
+        "FED-011",
+        "the upstream credential is scrubbed from every result",
+        "datum_sync/federation/client.py",
+        "                text = scrub(block[key], secrets)\n",
+        "                text = block[key]\n",
+        "tests/test_federation.py::test_the_inbound_authorization_is_never_forwarded_and_the_secret_never_returned",
+    ),
+    (
+        "FED-012",
+        "an upstream that is down fails the call fast as a tool error",
+        "datum_sync/mcp.py",
+        "    except fedclient.UpstreamError as exc:\n",
+        "    except () as exc:\n",
+        "tests/test_federation.py::test_an_upstream_that_is_down_lists_from_cache_and_fails_the_call_fast",
+    ),
+    (
+        "FED-013",
+        "only the guarded values reach the audit detail, never the arguments",
+        "datum_sync/mcp.py",
+        "            detail=guarded or {\"guard\": \"none\"},\n",
+        "            detail={\"arguments\": args, **guarded},\n",
+        "tests/test_federation.py::test_a_value_outside_the_grant_is_denied_before_any_upstream_request",
+    ),
+    (
+        "FED-014",
+        "a Drive file that cannot be resolved to a folder is denied",
+        "datum_sync/federation/guards.py",
+        "                    if not chain:\n"
+        "                        raise Denied(f\"could not resolve {v!r} to a folder ({g.label})\", g.label, c.grant)\n",
+        "                    if not chain:\n"
+        "                        chain = list(_field(block, \"folders\"))\n",
+        "tests/test_federation.py::test_drive_files_resolve_to_their_folder_and_failures_deny",
+    ),
+    (
+        "FED-015",
+        "a child's federation blocks must narrow the parent's",
+        "datum_sync/grants.py",
+        "    wider += _fed_narrows(child.get(\"federation_scope\"), parent.get(\"federation_scope\"))\n",
+        "    pass\n",
+        "tests/test_federation.py::test_child_federation_blocks_must_narrow_the_parents",
+    ),
+    (
+        "FED-016",
+        "resources/read is guarded by the connection's resource_guards",
+        "datum_sync/mcp.py",
+        "        if denied:\n"
+        "            await audit.write(\n"
+        "                conn, trace=trace, principal=principal, via=\"mcp\", verb=\"federate.denied\",\n"
+        "                target_kind=\"resource\",",
+        "        if False:\n"
+        "            await audit.write(\n"
+        "                conn, trace=trace, principal=principal, via=\"mcp\", verb=\"federate.denied\",\n"
+        "                target_kind=\"resource\",",
+        "tests/test_federation.py::test_resources_are_listed_rewritten_and_read_under_a_guard",
+    ),
+    (
+        "FED-017",
+        "join denies when any path resolves to something other than one string",
+        "datum_sync/federation/guards.py",
+        "        if len(found) != 1 or not isinstance(found[0], str):\n",
+        "        if False:\n",
+        "tests/test_federation.py::test_join_denies_a_non_scalar_path",
+    ),
+    (
+        "FED-018",
+        "allow_private_origin needs tier 5 at save",
+        "datum_sync/connections.py",
+        "    if config.get(\"allow_private_origin\") and caller_tier is not None and caller_tier < 5:\n",
+        "    if False:\n",
+        "tests/test_federation.py::test_private_origin_needs_tier_5_at_save",
+    ),
+    (
+        "FED-019",
+        "a name clash with a workspace tool drops the upstream tool and audits it",
+        "datum_sync/federation/catalogue.py",
+        "            if gateway_name in taken:\n",
+        "            if False:\n",
+        "tests/test_federation.py::test_a_clash_with_a_workspace_tool_drops_the_upstream_tool",
+    ),
+    (
+        "FED-020",
+        "arguments over the size cap are refused before evaluation",
+        "datum_sync/mcp.py",
+        "    if len(json.dumps(args)) > guards_mod.MAX_ARGS_BYTES:\n",
+        "    if False:\n",
+        "tests/test_federation.py::test_arguments_over_the_cap_are_refused_before_evaluation",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding

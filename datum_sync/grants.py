@@ -202,16 +202,18 @@ def _fed_narrows(child: dict | None, parent: dict | None) -> list[str]:
                 wider.append(f"{prefix}.{flag}")
         if _tools_wider(block.get("tools"), pblock.get("tools")):
             wider.append(f"{prefix}.tools")
+        # `paths` is checked by guards on any block (a code block's
+        # paths.write governs push_files), so it narrows on any block.
+        cp, pp = block.get("paths") or {}, pblock.get("paths") or {}
+        for access in ("read", "write"):
+            if _covered(list(cp.get(access) or []), list(pp.get(access) or [])):
+                wider.append(f"{prefix}.paths.{access}")
         if kind == "compute":
             cc, pc = block.get("commands") or {}, pblock.get("commands") or {}
             if not set(cc.get("allow") or []) <= set(pc.get("allow") or []):
                 wider.append(f"{prefix}.commands.allow")
             if not set(pc.get("deny") or []) <= set(cc.get("deny") or []):
                 wider.append(f"{prefix}.commands.deny")
-            cp, pp = block.get("paths") or {}, pblock.get("paths") or {}
-            for access in ("read", "write"):
-                if _covered(list(cp.get(access) or []), list(pp.get(access) or [])):
-                    wider.append(f"{prefix}.paths.{access}")
             if not set(pblock.get("approval_required") or []) <= set(
                 block.get("approval_required") or []
             ):

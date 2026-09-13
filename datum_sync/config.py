@@ -211,6 +211,14 @@ DEVICE_POLL_INTERVAL_SECONDS = int(os.getenv("DEVICE_POLL_INTERVAL_SECONDS", "5"
 # Registration hygiene (spec 04 §5).
 OAUTH_REGISTER_PER_HOUR = int(os.getenv("OAUTH_REGISTER_PER_HOUR", "30"))
 RETENTION_UNUSED_OAUTH_CLIENT_DAYS = int(os.getenv("RETENTION_UNUSED_OAUTH_CLIENT_DAYS", "30"))
+# Federation (spec 05). Listing an upstream is quick or it is down; a call
+# may take as long as the tool does, under the client's own 60 s timer.
+FEDERATION_REFRESH_SECONDS = int(os.getenv("FEDERATION_REFRESH_SECONDS", "300"))
+FEDERATION_TICK_SECONDS = int(os.getenv("FEDERATION_TICK_SECONDS", "30"))
+FEDERATION_LIST_TIMEOUT_SECONDS = float(os.getenv("FEDERATION_LIST_TIMEOUT_SECONDS", "5"))
+FEDERATION_CALL_TIMEOUT_SECONDS = float(os.getenv("FEDERATION_CALL_TIMEOUT_SECONDS", "60"))
+FEDERATION_MAX_RESULT_BYTES = int(os.getenv("FEDERATION_MAX_RESULT_BYTES", str(1024 * 1024)))
+DRIVE_RESOLVE_TTL_SECONDS = int(os.getenv("DRIVE_RESOLVE_TTL_SECONDS", "600"))
 # How often the worker runs the lifecycle housekeeping. Daily by design; the
 # tests set it low.
 LIFECYCLE_TICK_SECONDS = int(os.getenv("LIFECYCLE_TICK_SECONDS", str(24 * 3600)))

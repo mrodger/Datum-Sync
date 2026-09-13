@@ -1,0 +1,20 @@
+{
+  "title": "Local git MCP server",
+  "description": "A git MCP server over checkouts on the gateway's LAN (allow_private_origin needs tier 5). Repositories are named by path.",
+  "config": {
+    "url": "http://git-mcp.lan:8080/mcp",
+    "transport": "streamable_http",
+    "resource_kind": "code",
+    "tool_prefix": "git",
+    "allow_private_origin": true,
+    "refresh_seconds": 300,
+    "default": "deny",
+    "guards": [
+      {"tools": ["git_status", "git_log", "git_diff*", "git_show", "git_branch"],
+       "checks": [{"grant": "repos", "value": {"path": "$.repo_path"}}]},
+      {"tools": ["git_add", "git_commit", "git_checkout", "git_create_branch", "git_reset"],
+       "checks": [{"grant": "repos", "value": {"path": "$.repo_path"}}],
+       "requires": {"write": true}}
+    ]
+  }
+}

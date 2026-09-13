@@ -59,6 +59,9 @@ def test_verb_covers_every_dispatchable_method():
         "ping": "mcp.ping",
         "tools/list": "mcp.tools.list",
         "tools/call": "mcp.tools.call",
+        "resources/list": "mcp.resources.list",
+        "resources/templates/list": "mcp.resources.templates.list",
+        "resources/read": "mcp.resources.read",
     }
     assert all("/" not in v for v in verbs.values())
 

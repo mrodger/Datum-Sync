@@ -43,6 +43,11 @@ PASSWORD = os.environ.get("DS_SMOKE_PASSWORD", "")
 SCHEDULE = "_ui-smoke-schedule"
 AUTOMATION = "_ui-smoke-automation"
 CONNECTION = "_ui-smoke-connection"
+MCP_CONNECTION = "_ui-smoke-mcp"
+# The mock upstream (tests/mock_mcp_server.py) the federation pass saves a
+# connection against. Set DS_SMOKE_MOCK_MCP to an already-running one;
+# otherwise the smoke starts its own on this port.
+MOCK_MCP_PORT = int(os.environ.get("DS_SMOKE_MOCK_MCP_PORT", "8299"))
 
 # Not created by this script: it is whatever `Testing/site` publishes, because a
 # service name belongs to the workspace that declares it. Running the smoke
@@ -141,6 +146,7 @@ def main() -> int:
             services(page)
             workspaces(page)
             principals(page)
+            federation(page)
         except Exception as exc:            # noqa: BLE001 - recorded, not raised
             # Recorded rather than propagated, because cleanup has to run and a
             # `finally` that calls cleanup will throw away this exception the
@@ -525,9 +531,11 @@ def principals(page) -> None:
     # `button:` rather than `text=Approve`: text= is a case-insensitive
     # substring, and the decided row's "approved" badge matches it too.
     page.click(f"tr:has-text('{code}') >> button:has-text('Approve')")
-    page.wait_for_selector(f"tr:has-text('{code}') >> button:has-text('Approve')", state="detached")
+    # The decided row is the fact to wait for: the button detaches the moment
+    # route() clears the view, before the re-render has fetched anything.
+    page.wait_for_selector(f"tr:has-text('{code}') >> .badge:has-text('approved')")
     check("approving moves the request to recent decisions",
-          page.locator(f"tr:has-text('{code}') >> .badge:has-text('approved')").count() == 1)
+          page.locator(f"tr:has-text('{code}') >> button:has-text('Approve')").count() == 0)
 
     # RFC 8628 §3.5: honour the interval, and `slow_down` if it grew.
     elevated = {}
@@ -564,6 +572,83 @@ def principals(page) -> None:
     r = api("delete", f"/rest/v1/principals/{name}")
     print(f"  {'ok  ' if r.status == 200 else 'note'} {name} "
           f"{'deleted' if r.status == 200 else 'left retired (delete is tier 5: ' + str(r.status) + ')'}")
+
+
+def federation(page) -> None:
+    """Save an mcp connection against the mock upstream from a profile, see
+    its catalogue on the MCP Servers screen, and ask the screen why the
+    smoke account cannot see a tool (spec/agent-auth-plane/08 §5, §9).
+
+    Needs tier 5: the mock listens on loopback, so the connection carries
+    `allow_private_origin`, which only tier 5 may set. A tier-4 smoke
+    account gets a note, not a failure -- the denied-call path is covered
+    by tests/test_federation.py against the same mock.
+    """
+    import subprocess
+
+    print("\nfederation (v2 only)")
+    api = lambda method, path, **kw: getattr(page.request, method)(BASE + path, **kw)  # noqa: E731
+    me = api("get", "/rest/v1/whoami").json()
+    if me.get("effective_tier", 0) < 5:
+        print(f"  note federation pass skipped: {me.get('name')} is tier {me.get('effective_tier')}, "
+              "allow_private_origin needs 5")
+        return
+    mock_url = os.environ.get("DS_SMOKE_MOCK_MCP")
+    proc = None
+    if not mock_url:
+        proc = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(__file__), "mock_mcp_server.py"),
+                                 str(MOCK_MCP_PORT)])
+        mock_url = f"http://127.0.0.1:{MOCK_MCP_PORT}"
+        time.sleep(1.5)
+    try:
+        profiles = api("get", "/rest/v1/federation/profiles").json()["items"]
+        github = next(p for p in profiles if p["id"] == "github-mcp")
+        config = dict(github["config"], url=mock_url + "/github/mcp", allow_private_origin=True)
+
+        page.goto(BASE + "/ui/v2#/connections?new=1")
+        page.wait_for_selector("#conn-name")
+        page.fill("#conn-name", MCP_CONNECTION)
+        page.select_option("#conn-type", "mcp")
+        page.wait_for_selector("#conn-profile option[value='github-mcp']", state="attached")
+        page.select_option("#conn-profile", "github-mcp")
+        check("a profile fills the config", '"guards"' in page.input_value("#conn-config"))
+        page.fill("#conn-config", json.dumps(config))
+        page.select_option("#conn-tier", "2")
+        page.fill("#conn-secret", json.dumps({"token": "smoke-upstream-token"}))
+        page.click("#view button[type=submit]")
+        # Create lands on the list, which renders only after the POST -- and
+        # the POST includes the catalogue refresh. `data-ready` cannot tell
+        # the list from the form (both are 'connections'); the new row can.
+        page.wait_for_selector(f"#view tr:has-text('{MCP_CONNECTION}')")
+        page.goto(BASE + f"/ui/v2#/connections/{MCP_CONNECTION}")
+        page.wait_for_selector(f"#view > [data-ready='connections/{MCP_CONNECTION}']")
+        summary = page.locator("#conn-federation").inner_text()
+        check("saving refreshed the catalogue", "tools cached" in summary, summary)
+
+        page.goto(BASE + "/ui/v2#/mcp")
+        page.wait_for_selector("#view > [data-ready='mcp']")
+        check("MCP Servers lists the upstream",
+              page.locator(f"#fed-count-{MCP_CONNECTION}").inner_text() == "5",
+              page.locator(f"#fed-count-{MCP_CONNECTION}").inner_text())
+        check("the upstream is ok",
+              page.locator(f"[data-connection='{MCP_CONNECTION}'] .badge").first.inner_text().lower() == "ok")
+        page.click(f"#fed-refresh-{MCP_CONNECTION}")
+        # The click disables the button and route() replaces it: an enabled
+        # one is the re-render, `data-ready` is still the old screen's.
+        page.wait_for_selector(f"#fed-refresh-{MCP_CONNECTION}:not([disabled])")
+
+        page.fill("#fed-as", USER)
+        page.click("#view form.panel button[type=submit]")
+        why = page.locator(f"[data-connection='{MCP_CONNECTION}'] .hint:has-text('federation block')").first
+        why.wait_for()
+        check("the screen says why the principal cannot see a tool", why.count() >= 1)
+    finally:
+        # Removed here rather than in cleanup(): the mock goes away with this
+        # pass, and cleanup() drives the v1 list, which this type predates.
+        r = api("delete", f"/rest/v1/connections/{MCP_CONNECTION}")
+        check("the mcp connection is removed", r.status in (200, 404), str(r.status))
+        if proc is not None:
+            proc.terminate()
 
 
 def cleanup(page) -> None:

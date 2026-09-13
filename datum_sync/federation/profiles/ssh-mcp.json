@@ -1,0 +1,30 @@
+{
+  "title": "SSH / VM MCP server",
+  "description": "Commands and files on named hosts. Commands pass the compute block's deny regexes first, then allow; restarts and deploys are approval-gated.",
+  "config": {
+    "url": "http://ssh-mcp.lan:8080/mcp",
+    "transport": "streamable_http",
+    "resource_kind": "compute",
+    "tool_prefix": "vm",
+    "allow_private_origin": true,
+    "auth_inject": {"type": "bearer", "secret_field": "token"},
+    "refresh_seconds": 300,
+    "timeout_seconds": 120,
+    "default": "deny",
+    "guards": [
+      {"tools": ["run_command", "exec"],
+       "checks": [{"grant": "hosts", "value": {"path": "$.host"}},
+                  {"grant": "commands", "value": {"path": "$.command"}}]},
+      {"tools": ["read_file", "list_dir", "tail"],
+       "checks": [{"grant": "hosts", "value": {"path": "$.host"}},
+                  {"grant": "paths.read", "value": {"path": "$.path"}}]},
+      {"tools": ["write_file", "upload"],
+       "checks": [{"grant": "hosts", "value": {"path": "$.host"}},
+                  {"grant": "paths.write", "value": {"path": "$.path"}}],
+       "requires": {"write": true}},
+      {"tools": ["restart_service", "deploy"],
+       "checks": [{"grant": "hosts", "value": {"path": "$.host"}}],
+       "requires": {"write": true, "approval": "restart"}}
+    ]
+  }
+}

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,7 @@ import asyncpg
 
 from datum_sync import crypto
 
-TYPES = ("database", "http", "email_smtp", "email_imap", "file", "oauth_client")
+TYPES = ("database", "http", "email_smtp", "email_imap", "file", "oauth_client", "mcp")
 SCOPES = ("global", "repository", "workspace")
 _AUTH_INJECT_TYPES = frozenset({"bearer", "basic", "header", "query_param"})
 ACCESS = ("read", "write")
@@ -63,7 +64,12 @@ _REQUIRED_CONFIG = {
     "email_imap": ("host",),
     "file": ("root",),
     "oauth_client": ("token_url", "client_id"),
+    "mcp": ("url",),
 }
+
+# An upstream MCP server (spec/agent-auth-plane/05 §1).
+MCP_RESOURCE_KINDS = ("code", "compute", "documents", "other")
+_MCP_PREFIX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,15}$")
 
 
 class ConnectionStoreError(Exception):
@@ -74,7 +80,7 @@ class ConnectionStoreError(Exception):
 _COLUMNS = """
     id, name, type, tier, scope, scope_targets, access, description, config,
     created_by, created_at, updated_at,
-    last_test_at, last_test_ok, last_test_error,
+    last_test_at, last_test_ok, last_test_error, federation_status,
     (secret IS NOT NULL) AS has_secret
 """
 
@@ -86,8 +92,14 @@ def validate(
     access: str,
     tier: int,
     config: dict[str, Any],
+    caller_tier: int | None = None,
 ) -> None:
-    """Reject what the database would take but `resolve` or `test` could not use."""
+    """Reject what the database would take but `resolve` or `test` could not use.
+
+    `caller_tier` is whoever is saving: one setting, `allow_private_origin`
+    on an mcp connection, is a tier-5 decision (FED-018). None means the
+    shell, which is unrestricted, as `repository sync` is.
+    """
     if type_ not in TYPES:
         raise ConnectionStoreError(f"unknown type {type_!r}; expected one of {', '.join(TYPES)}")
     if scope not in SCOPES:
@@ -123,11 +135,14 @@ def validate(
             f"a {type_} connection needs config: {', '.join(missing)}"
         )
 
+    if type_ == "mcp":
+        _validate_mcp(config, caller_tier)
+
     auth_inject = config.get("auth_inject")
     if auth_inject is not None:
-        if type_ != "http":
+        if type_ not in ("http", "mcp"):
             raise ConnectionStoreError(
-                "auth_inject is only valid for http connections"
+                "auth_inject is only valid for http and mcp connections"
             )
         if not isinstance(auth_inject, dict):
             raise ConnectionStoreError("auth_inject must be an object")
@@ -137,6 +152,33 @@ def validate(
                 f"auth_inject.type must be one of "
                 f"{', '.join(sorted(_AUTH_INJECT_TYPES))}"
             )
+
+
+def _validate_mcp(config: dict[str, Any], caller_tier: int | None) -> None:
+    from datum_sync.federation import guards as guards_mod
+
+    if config.get("transport", "streamable_http") != "streamable_http":
+        raise ConnectionStoreError("transport is streamable_http (stdio upstreams are a process)")
+    if config.get("resource_kind", "other") not in MCP_RESOURCE_KINDS:
+        raise ConnectionStoreError(
+            f"resource_kind is one of {', '.join(MCP_RESOURCE_KINDS)}")
+    prefix = config.get("tool_prefix")
+    if prefix is not None and not (isinstance(prefix, str) and _MCP_PREFIX.match(prefix)):
+        raise ConnectionStoreError("tool_prefix is 1-16 characters of [A-Za-z0-9_-]")
+    if config.get("default", "deny") not in ("deny", "allow"):
+        raise ConnectionStoreError("default is deny or allow")
+    if config.get("allow_private_origin") and caller_tier is not None and caller_tier < 5:
+        # Company MCP servers live on the LAN, and pointing the gateway at a
+        # LAN address is the SSRF the proxy refuses; only tier 5 may say so.
+        raise ConnectionStoreError("allow_private_origin may be set only by tier 5")
+    for key in ("refresh_seconds", "timeout_seconds"):
+        if key in config and not (isinstance(config[key], (int, float)) and config[key] > 0):
+            raise ConnectionStoreError(f"{key} is a positive number")
+    try:
+        guards_mod.compile_guards(config.get("guards"))
+        guards_mod.compile_resource_guards(config.get("resource_guards"))
+    except guards_mod.GuardError as exc:
+        raise ConnectionStoreError(f"guards: {exc}") from None
 
 
 def matches_scope(row: asyncpg.Record, repository: str, workspace: str) -> bool:
@@ -160,10 +202,11 @@ async def create(
     access: str = "read",
     description: str | None = None,
     created_by: str | None = None,
+    caller_tier: int | None = None,
 ) -> asyncpg.Record:
     config = config or {}
     scope_targets = scope_targets or []
-    validate(type_, scope, scope_targets, access, tier, config)
+    validate(type_, scope, scope_targets, access, tier, config, caller_tier)
 
     # Sealed before the INSERT, so a missing key fails the request instead of
     # leaving a connection row with no credentials that looks fine in the list.
@@ -194,7 +237,7 @@ _PATCHABLE = ("type", "tier", "scope", "scope_targets", "access", "description",
 
 
 async def update(
-    conn: asyncpg.Connection, name: str, changes: dict[str, Any]
+    conn: asyncpg.Connection, name: str, changes: dict[str, Any], caller_tier: int | None = None
 ) -> asyncpg.Record | None:
     """Apply a partial update.
 
@@ -222,7 +265,7 @@ async def update(
     merged.update({k: v for k, v in changes.items() if k != "secret"})
 
     validate(merged["type"], merged["scope"], merged["scope_targets"],
-             merged["access"], merged["tier"], merged["config"])
+             merged["access"], merged["tier"], merged["config"], caller_tier)
 
     args = [
         name, merged["type"], merged["tier"], merged["scope"],
@@ -316,7 +359,7 @@ async def resolve(
 # report that they have none. A test that returns green because it did nothing
 # is worse than no test: it is the same screen as a working connection.
 
-_TESTABLE = ("database", "http", "file")
+_TESTABLE = ("database", "http", "file", "mcp")
 TEST_TIMEOUT_SECONDS = 10
 
 
@@ -350,6 +393,22 @@ async def _test_http(cfg: dict[str, Any]) -> None:
         raise ConnectionStoreError(f"authentication rejected: HTTP {r.status_code}")
 
 
+async def _test_mcp(cfg: dict[str, Any]) -> None:
+    """initialize against the upstream; the catalogue refresh is the worker's."""
+    from datum_sync.federation import client as fedclient
+
+    secret = {k: cfg.pop(k) for k in list(cfg) if k not in _MCP_CONFIG_KEYS}
+    upstream = fedclient.Upstream(cfg.get("name", "?"), cfg, secret)
+    await upstream.initialize()
+
+
+_MCP_CONFIG_KEYS = frozenset({
+    "name", "type", "access", "url", "transport", "resource_kind", "tool_prefix", "headers",
+    "auth_inject", "refresh_seconds", "timeout_seconds", "allow_private_origin", "guards",
+    "resource_guards", "default", "profile",
+})
+
+
 async def _test_file(cfg: dict[str, Any]) -> None:
     root = Path(cfg["root"])
     if not root.is_dir():
@@ -370,7 +429,7 @@ async def test(conn: asyncpg.Connection, name: str) -> dict[str, Any]:
     if blob is not None:
         cfg.update(crypto.open_(name, blob))
 
-    runner = {"database": _test_database, "http": _test_http, "file": _test_file}
+    runner = {"database": _test_database, "http": _test_http, "file": _test_file, "mcp": _test_mcp}
     ok, error = True, None
     try:
         await asyncio.wait_for(runner[row["type"]](cfg), TEST_TIMEOUT_SECONDS)
@@ -407,4 +466,6 @@ def public(row: asyncpg.Record) -> dict[str, Any]:
         "last_test_at": row["last_test_at"],
         "last_test_ok": row["last_test_ok"],
         "last_test_error": row["last_test_error"],
+        "federation_status": (json.loads(row["federation_status"])
+                              if isinstance(row["federation_status"], str) else row["federation_status"]),
     }

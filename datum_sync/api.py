@@ -46,6 +46,7 @@ from datum_sync import (
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
+from datum_sync.federation import catalogue as fedcat, routes as federation_routes
 
 log = logging.getLogger("datum_sync")
 
@@ -160,6 +161,7 @@ app.include_router(lifecycle.router)
 app.include_router(enrol.router)
 app.include_router(sessions.router)
 app.include_router(device.router)
+app.include_router(federation_routes.router)
 
 
 @app.middleware("http")
@@ -498,6 +500,7 @@ async def health() -> dict[str, Any]:
             worker = await execute.worker_is_running(conn)
             overdue = await lifecycle.reviews_overdue(conn)
             pending = await lifecycle.pending_count(conn)
+            federation = [fedcat.health(r) for r in await fedcat.mcp_connections(conn)]
     except Exception as e:
         raise ApiError(
             503, "SERVICE_UNAVAILABLE", f"database unreachable: {e}"
@@ -517,6 +520,8 @@ async def health() -> dict[str, Any]:
         # them without reading the Review screen.
         "reviews_overdue": overdue,
         "pending_enrolments": pending,
+        # Per upstream (spec 05 §6): ok, stale or down, with the cached count.
+        "federation": federation,
     }
 
 
@@ -1712,6 +1717,7 @@ async def create_connection(
                 access=body.get("access", "read"),
                 description=body.get("description"),
                 created_by=caller.name,
+                caller_tier=caller.effective_tier,
             )
         except connections.ConnectionStoreError as e:
             raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
@@ -1719,7 +1725,17 @@ async def create_connection(
             raise ApiError(
                 409, "ALREADY_EXISTS", f"a connection named {body['name']!r} exists"
             ) from None
+        row = await _refresh_if_mcp(conn, row)
     return _connection_json(row)
+
+
+async def _refresh_if_mcp(conn, row):
+    """An mcp connection is refreshed on save (spec 05 §3.1), so the screen
+    that saved it shows the catalogue -- or the error -- at once."""
+    if row is None or row["type"] != "mcp":
+        return row
+    await fedcat.refresh(conn, row)
+    return await connections.get(conn, row["name"])
 
 
 @app.get("/rest/v1/connections/{name}")
@@ -1749,9 +1765,10 @@ async def update_connection(
 
     async with db.pool().acquire() as conn:
         try:
-            row = await connections.update(conn, name, body)
+            row = await connections.update(conn, name, body, caller_tier=caller.effective_tier)
         except connections.ConnectionStoreError as e:
             raise ApiError(400, "INVALID_PARAMETER", str(e)) from None
+        row = await _refresh_if_mcp(conn, row)
     if row is None:
         raise ApiError(404, "NOT_FOUND", f"no connection named {name!r}")
     return _connection_json(row)

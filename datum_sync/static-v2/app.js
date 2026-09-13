@@ -2438,7 +2438,7 @@ async function editAutomation(view, id) {
 // ---------------------------------------------------------------------------
 
 const CONNECTION_TYPES = ['database', 'http', 'email_smtp', 'email_imap', 'file',
-                          'oauth_client'];
+                          'oauth_client', 'mcp'];
 
 /* Shown as a hint, never enforced here. The server validates, and a second copy
  * of the rule in the browser is a second copy that can disagree with it -- the
@@ -2451,6 +2451,7 @@ const CONFIG_HINTS = {
     email_imap: 'host, port, username',
     file: 'root',
     oauth_client: 'token_url, client_id',
+    mcp: 'url, resource_kind, tool_prefix, guards (pick a profile to start from)',
 };
 
 /* Flow's page-level tabs on Connections & Parameters.
@@ -2474,6 +2475,14 @@ const CONN_TABS = [
     { id: 'web', label: 'Web Connections', href: '#/connections?tab=web' },
     { id: 'params', label: 'Deployment Parameters', href: '#/connections?tab=params' },
 ];
+
+function federationSummary(st) {
+    if (!st) return 'not refreshed yet';
+    if (st.last_error) return 'error: ' + st.last_error;
+    return st.tool_count + ' tools cached ' + when(st.last_ok_at)
+        + (st.clashes && st.clashes.length ? ' · ' + st.clashes.length + ' name clash(es)' : '')
+        + (st.warnings && st.warnings.length ? ' · ' + st.warnings.length + ' guard warning(s)' : '');
+}
 
 function scopeSummary(c) {
     return c.scope === 'global'
@@ -2563,6 +2572,20 @@ function connectionForm(c) {
     const status = el('div', {});
     const save = el('button', { type: 'submit' }, fresh ? 'Create connection' : 'Save');
 
+    // An upstream MCP server starts from a profile (spec 05 §4.4): a config
+    // template with guards written against that server's documented tool
+    // names. Picking one fills the box; it is editable afterwards.
+    const profile = el('select', { id: 'conn-profile' }, el('option', { value: '' }, 'Choose a profile…'));
+    const profileField = el('div', { class: 'field' },
+        el('label', { for: 'conn-profile' }, 'Profile'), profile,
+        el('div', { class: 'hint' }, 'Fills Config with the profile’s url, prefix and guards. Edit the url and the '
+            + 'secret afterwards; allow_private_origin needs tier 5.'));
+    let profiles = null;
+    profile.addEventListener('change', () => {
+        const chosen = (profiles || []).find((x) => x.id === profile.value);
+        if (chosen) config.value = JSON.stringify(chosen.config, null, 2);
+    });
+
     function syncHints() {
         clear(configHint).append(document.createTextNode(
             'Non-secret fields, returned by the API and shown on the right. '
@@ -2571,6 +2594,14 @@ function connectionForm(c) {
         // combination -- so the field is disabled rather than ignored.
         targets.disabled = scope.value === 'global';
         if (targets.disabled) targets.value = '';
+        profileField.hidden = type.value !== 'mcp';
+        if (type.value === 'mcp' && profiles === null) {
+            profiles = [];
+            api('/federation/profiles').then((r) => {
+                profiles = r.items;
+                for (const x of r.items) profile.append(el('option', { value: x.id }, x.title));
+            }).catch(() => { profiles = null; });
+        }
     }
     type.addEventListener('change', syncHints);
     scope.addEventListener('change', syncHints);
@@ -2605,6 +2636,7 @@ function connectionForm(c) {
                 'Shown under the name in the list.')),
         el('div', { class: 'card' },
             el('h2', {}, 'Configuration'),
+            profileField,
             fieldOf('conn-config', 'Config', config, configHint),
             fieldOf('conn-secret', 'Secret', secret,
                 'Sealed on save and never returned by any route, so this box '
@@ -2866,7 +2898,11 @@ async function screenConnection(view, name) {
             el('dd', { class: 'error' }, c.last_test_error || '\u2014'),
             el('dt', {}, 'Created by'), el('dd', {}, c.created_by || '\u2014'),
             el('dt', {}, 'Created'), el('dd', {}, when(c.created_at)),
-            el('dt', {}, 'Updated'), el('dd', {}, when(c.updated_at))),
+            el('dt', {}, 'Updated'), el('dd', {}, when(c.updated_at)),
+            ...(c.type === 'mcp' ? [
+                el('dt', {}, 'Catalogue'),
+                el('dd', { id: 'conn-federation' }, federationSummary(c.federation_status)),
+            ] : [])),
         el('p', { class: 'hint' },
             'The name cannot be changed: it is the additional data the secret '
             + 'is sealed against, so renaming would make the stored credential '
@@ -3738,31 +3774,82 @@ async function screenNotifications(view) {
 // ---------------------------------------------------------------------------
 
 async function screenMcpServers(view) {
-    const { items } = await api('/mcp-servers');
+    // spec/agent-auth-plane/08 §5. Every `mcp` connection with its cached
+    // catalogue, guard coverage and clashes; with a principal in the picker,
+    // whether that principal would see each tool and why not. Nothing here
+    // talks to an upstream except the Refresh button, which runs the same
+    // refresh the worker tick does.
+    const q = hashQuery();
+    const asName = (q.get('as') || '').trim();
+    const data = await api('/federation' + (asName ? '?as=' + encodeURIComponent(asName) : ''));
+    const failure = el('div', {});
 
     actionBar(view, 'MCP Servers', {
-        desc: 'Servers seen in the MCP call log. Populated from usage \u2014 not a registry.',
-        search: items.length ? 'Search by target' : null,
+        desc: 'Upstream MCP servers this gateway federates: an mcp connection each, with the tools it '
+            + 'caches and the guards that check their arguments. Add one under Connections.',
     });
 
-    if (!items.length) {
+    const asInput = el('input', { type: 'text', id: 'fed-as', value: asName, placeholder: 'principal name' });
+    const asForm = el('form', { class: 'panel', onsubmit: (ev) => {
+        ev.preventDefault();
+        const v = asInput.value.trim();
+        go('#/mcp' + (v ? '?as=' + encodeURIComponent(v) : ''));
+    } },
+        el('h2', {}, 'As principal'),
+        el('div', { class: 'field' }, el('label', { for: 'fed-as' }, 'Show the catalogue as'), asInput,
+            el('div', { class: 'hint' }, 'What that principal’s tools/list would contain, and why a tool is missing from it.')),
+        el('div', { class: 'action-bar' }, el('div', { class: 'actions' },
+            el('button', { type: 'submit' }, 'Show'),
+            asName ? action('Clear', () => go('#/mcp')) : null)));
+    view.append(failure, asForm);
+
+    if (!data.items.length) {
         view.append(el('div', { class: 'empty-state' },
             el('div', { class: 'es-icon' }, icon('mcp', 48)),
-            el('h3', {}, 'No MCP calls recorded'),
-            el('p', {}, 'Server activity appears here as calls are made.')));
+            el('h3', {}, 'No upstream MCP servers'),
+            el('p', {}, 'Create a connection of type mcp and pick a profile; its tools appear here after the first refresh.')));
         return;
     }
 
-    view.append(table(
-        [{ label: 'Target', sortable: true, sorted: true },
-         { label: 'Calls', sortable: true },
-         { label: 'Errors', sortable: true },
-         { label: 'Last seen', sortable: true }],
-        items.map((s) => el('tr', {},
-            el('td', {}, s.target),
-            el('td', {}, s.calls),
-            el('td', {}, s.errors || '\u2014'),
-            el('td', {}, when(s.last_seen))))));
+    for (const s of data.items) {
+        const refresh = el('button', { type: 'button', class: 'secondary', id: 'fed-refresh-' + s.name, onclick: async () => {
+            refresh.disabled = true;
+            clear(failure);
+            try { await api('/federation/' + encodeURIComponent(s.name) + '/refresh', { method: 'POST' }); route(); }
+            catch (err) { failure.append(banner(err)); refresh.disabled = false; }
+        } }, icon('refresh', 15), ' ', 'Refresh');
+        const badge = s.status === 'ok' ? el('span', { class: 'badge running' }, 'ok')
+            : s.status === 'stale' ? el('span', { class: 'badge paused' }, 'stale')
+            : el('span', { class: 'badge failed' }, 'down');
+        const cov = s.coverage;
+        const rows = s.tools.map((t) => el('tr', {},
+            el('td', {}, el('code', {}, t.tool_name), el('div', { class: 'hint' }, t.description || '')),
+            el('td', {}, t.upstream_name),
+            el('td', {}, t.guards.length ? t.guards.join(' · ') : el('span', { class: 'hint' },
+                t.listed ? 'none (default allow)' : 'none — hidden')),
+            asName ? el('td', {}, t.visible
+                ? el('span', { class: 'badge enabled' }, 'visible')
+                : el('span', {}, el('span', { class: 'badge cancelled' }, 'hidden'), ' ', el('span', { class: 'hint' }, t.why || '')))
+                : null));
+        view.append(el('div', { class: 'panel', 'data-connection': s.name },
+            el('div', { class: 'page-header' },
+                el('h2', {}, el('a', { href: '#/connections/' + encodeURIComponent(s.name) }, s.name), ' ', badge),
+                el('div', { class: 'actions' }, refresh)),
+            el('dl', { class: 'kv' },
+                el('dt', {}, 'Kind'), el('dd', {}, s.resource_kind + ' · prefix ' + s.tool_prefix + ' · tier ' + s.tier + ' · default ' + s.default),
+                el('dt', {}, 'Tools'), el('dd', { id: 'fed-count-' + s.name }, String(s.tool_count)),
+                el('dt', {}, 'Coverage'), el('dd', {}, cov.guarded + ' guarded · ' + cov.unguarded + ' unguarded · ' + cov.hidden + ' hidden by default-deny'),
+                el('dt', {}, 'Last refresh'), el('dd', {}, s.last_ok_at ? when(s.last_ok_at) : 'never'
+                    + (s.last_error ? ' · ' + s.last_error : '')),
+                el('dt', {}, 'Clashes'), el('dd', {}, s.clashes.length
+                    ? s.clashes.map((c) => c.upstream + ' → ' + c.tool_name).join(', ') : '—'),
+                el('dt', {}, 'Warnings'), el('dd', {}, s.warnings.length ? s.warnings.join('; ') : '—'),
+                ...(asName ? [el('dt', {}, 'In block'), el('dd', {}, s.in_block ? 'yes' : 'no — ' + asName + '’s federation_scope does not name it')] : [])),
+            s.last_error ? el('p', { class: 'error' }, s.last_error) : null,
+            rows.length
+                ? table(['Tool', 'Upstream name', 'Guards'].concat(asName ? ['For ' + asName] : []), rows)
+                : el('p', { class: 'hint' }, 'No tools cached yet.')));
+    }
 }
 
 // ---------------------------------------------------------------------------

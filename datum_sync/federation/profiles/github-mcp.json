@@ -1,0 +1,28 @@
+{
+  "title": "GitHub MCP server",
+  "description": "github/github-mcp-server (or GitHub Enterprise). Guards name repositories as owner/repo; writes need write:true on the code block and, when files are named, paths.write on it; deleting needs tier 5.",
+  "config": {
+    "url": "https://mcp.github.example/mcp",
+    "transport": "streamable_http",
+    "resource_kind": "code",
+    "tool_prefix": "gh",
+    "auth_inject": {"type": "bearer", "secret_field": "token"},
+    "refresh_seconds": 300,
+    "timeout_seconds": 60,
+    "default": "deny",
+    "guards": [
+      {"tools": ["get_file_contents", "list_commits", "search_code", "get_pull_request*", "list_pull_requests", "get_issue", "list_issues", "list_branches", "get_commit"],
+       "checks": [{"grant": "repos", "value": {"join": ["$.owner", "$.repo"], "sep": "/"}}]},
+      {"tools": ["push_files", "create_or_update_file", "create_branch", "create_pull_request", "merge_pull_request", "create_issue", "add_issue_comment"],
+       "checks": [{"grant": "repos", "value": {"join": ["$.owner", "$.repo"], "sep": "/"}},
+                  {"grant": "paths.write", "value": {"path": "$.files[*].path"}, "optional": true}],
+       "requires": {"write": true}},
+      {"tools": ["delete_*"], "checks": [{"grant": "repos", "value": {"join": ["$.owner", "$.repo"], "sep": "/"}}],
+       "requires": {"write": true, "tier": 5}},
+      {"tools": ["search_repositories", "search_users", "get_me"], "checks": []}
+    ],
+    "resource_guards": [
+      {"uri": "repo://*", "grant": "repos", "value": {"regex_group": "^repo://([^/]+/[^/]+)"}}
+    ]
+  }
+}

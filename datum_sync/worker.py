@@ -52,6 +52,7 @@ class Worker:
         self._pool: asyncpg.Pool | None = None
         # Far enough in the past that the first poll runs the housekeeping.
         self._last_lifecycle = time.monotonic() - config.LIFECYCLE_TICK_SECONDS
+        self._last_federation = time.monotonic() - config.FEDERATION_TICK_SECONDS
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -93,6 +94,7 @@ class Worker:
             await self._tick_schedules()
             await self._tick_automations()
             await self._tick_lifecycle()
+            await self._tick_federation()
 
             while len(running) < self.concurrency:
                 job = await self._claim()
@@ -191,6 +193,29 @@ class Worker:
         if done["expired"] or done["restricted"]:
             print(f"lifecycle: expired {done['expired']}, restricted {done['restricted']}",
                   flush=True)
+
+    async def _tick_federation(self) -> None:
+        """Refresh the federated catalogue for every upstream that is due.
+
+        The catalogue is what `tools/list` reads (spec 05 §3.1), so this is
+        the only place an upstream is asked for its tools; a listing never
+        waits on one. Failures land on the connection's status row.
+        """
+        assert self._pool is not None
+        now = time.monotonic()
+        if now - self._last_federation < config.FEDERATION_TICK_SECONDS:
+            return
+        self._last_federation = now
+        try:
+            from datum_sync.federation import catalogue
+
+            async with self._pool.acquire() as conn:
+                n = await catalogue.refresh_due(conn)
+        except Exception as exc:  # noqa: BLE001 - housekeeping is never fatal
+            print(f"federation tick failed: {type(exc).__name__}: {exc}", flush=True)
+            return
+        if n:
+            print(f"federation: refreshed {n} upstream(s)", flush=True)
 
     async def _tick_automations(self) -> None:
         """Consider every finished job no automation has seen yet.
