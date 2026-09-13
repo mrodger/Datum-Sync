@@ -95,7 +95,7 @@ against the upstream with injected auth, 5 s timeout, and upserts
 federated_tools (
   connection     TEXT REFERENCES connections(name) ON DELETE CASCADE,
   upstream_name  TEXT,
-  tool_name      TEXT UNIQUE,          -- "{prefix}__{upstream_name}", unsafe → "_", ≤128
+  tool_name      TEXT UNIQUE,          -- "{prefix}__{upstream_name}", unsafe → "_", ≤48 (12 §1: client prefixes must fit in 64)
   description    TEXT, input_schema JSONB, annotations JSONB,
   guarded        BOOLEAN,              -- some guard matches this tool
   fetched_at     TIMESTAMPTZ, PRIMARY KEY (connection, upstream_name)
@@ -307,3 +307,4 @@ first. Not in this build plan.
 | FED-018 | private-origin upstream requires tier 5 at save | tier check removed |
 | FED-019 | name clash with a workspace tool: workspace wins, upstream tool dropped and audited | insert allowed |
 | FED-020 | argument size cap | cap removed |
+| MCP-020 | tool names ≤ 48 chars, `[A-Za-z0-9_.-]`, stable 6-char hash suffix on truncation collision | truncation removed |

@@ -71,7 +71,7 @@ screen (`08 §2–3`); `browser_smoke.py` enrols and approves an agent.
 
 **Build:** migration 020; `datum_sync/sessions.py`; `Mcp-Session-Id` on
 `initialize`, required thereafter for agents, `DELETE /mcp`;
-`SESSION_LIMIT`; `audit_log.session_id`; sessions ended on revoke/restrict;
+`SESSION_LIMIT` with same-credential supersession; tool-name cap at 48; `audit_log.session_id`; sessions ended on revoke/restrict;
 `jobs.grant_snapshot` written and read by the worker for connection
 resolution and attribution; `job_status` / `job_result` / `job_list` /
 `session_info` built-ins; Sessions panel and self-service screen;
@@ -80,17 +80,18 @@ resolution and attribution; `job_status` / `job_result` / `job_list` /
 **Accept:**
 - Two `initialize` calls with a baseline token: the second → `-32000` naming the first session's id and age; after `DELETE /mcp` on the first, the second succeeds.
 - A request with another principal's session id → 404, no hint.
+- A second `initialize` on the **same** token without `DELETE` supersedes the first (Claude Code reconnect); on a different token it is refused. Five `initialize`/`tools/call`/`DELETE` cycles on one token (Datum-3.0 shape) never hit the limit. `tests/harness_conformance.py` cases 1, 2 and 5.
 - Revoking the token mid-session → the next request 401 and the session row shows `revoked`.
 - The worker resolves a job's connections against `grant_snapshot.max_tier`; narrowing the principal after submit does not change a running job.
 - `jobs_per_hour=2`: third submit in an hour → 429 `JOB_LIMIT`.
-- Guards: SESS-001…004, TIER-010 (extended to `concurrent_jobs`).
+- Guards: SESS-001…006, MCP-020, TIER-010 (extended to `concurrent_jobs`).
 
 ## WP4 — OAuth elevation
 
 **Build:** migration 021 (device codes; `denied` outcome); scope vocabulary
 and `scope_tier` in `auth`; `datum_sync/device.py` for `/oauth/device` and
-the device grant on `/oauth/token`; consent page scope description and
-`on_behalf_of`; registration rate limit and pruning; Approvals › Elevations
+the device grant on `/oauth/token`; consent page scope description, scope
+picker and `on_behalf_of`; Connect panel snippets; registration rate limit and pruning; Approvals › Elevations
 screen; `elevate` built-in; `browser_smoke.py` elevates an agent by device
 code.
 
@@ -100,7 +101,8 @@ code.
 - Scope `mcp` on a tier-5 principal cannot submit a job.
 - `on_behalf_of` by a non-sponsor → 403 on the consent page, no code minted.
 - 31st registration in an hour → 429.
-- Guards: ELEV-001…010.
+- A Codex-shaped registration (no `scope`, versioned `client_name`) followed by an authorize with `scope=mcp:operate` succeeds; a Claude-Code-shaped authorize with no scope shows the picker. `tests/harness_conformance.py` cases 3, 4 and 6.
+- Guards: ELEV-001…012.
 
 ## WP5 — Federation (two sessions)
 

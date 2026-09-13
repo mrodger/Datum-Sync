@@ -154,7 +154,7 @@ CREATE TABLE mcp_sessions (
     started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     ended_at         TIMESTAMPTZ,
-    end_reason       TEXT CHECK (end_reason IN ('client','idle','revoked','limit','restart'))
+    end_reason       TEXT CHECK (end_reason IN ('client','idle','revoked','limit','restart','superseded'))
 );
 CREATE INDEX mcp_sessions_live_idx ON mcp_sessions (principal_id, last_seen_at) WHERE ended_at IS NULL;
 
@@ -271,6 +271,7 @@ work package.
 | `POLICY_ELEVATION_AUTO_APPROVE_SCOPES` | `mcp` |
 | `POLICY_PENDING_CALL_TTL_HOURS` | 72 |
 | `SESSION_IDLE_SECONDS` (MCP) | 900 |
+| `POLICY_CONSENT_SCOPE_PICKER` | on |
 | `FEDERATION_REFRESH_SECONDS` (default per connection) | 300 |
 | `FEDERATION_LIST_TIMEOUT_SECONDS` | 5 |
 | `FEDERATION_CALL_MAX_BYTES` | 1048576 |

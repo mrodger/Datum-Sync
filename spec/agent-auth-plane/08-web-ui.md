@@ -52,6 +52,10 @@ Every destructive action confirms and shows the audit verb it will write.
   button opening the narrow-inline form.
 - **Elevate on behalf** button (humans only): starts the PKCE flow with
   `on_behalf_of` for a registered client the operator picks.
+- **Connect** panel: the per-harness onboarding snippets from `12 §4`
+  (Claude Code, Codex, Datum-3.0), rendered from `connect-snippets.js`
+  with this principal's gateway URL filled in and a placeholder for the
+  token. Shown once more with the real token on the claim response.
 
 ## 3. Enrolment
 

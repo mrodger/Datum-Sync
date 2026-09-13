@@ -16,7 +16,7 @@ principal rather than a sub-identity:
 | `parent_id` | `INTEGER NULL REFERENCES service_accounts(id)` | Delegation tree. NULL is a root. Depth ≤ `POLICY_MAX_DELEGATION_DEPTH` (4). |
 | `state` | `TEXT NOT NULL CHECK (state IN ('pending','active','restricted','disabled','retired','rejected'))` default `'active'` | Lifecycle, §4. Replaces `disabled` in a second migration; until then `disabled` is a generated read of `state <> 'active' AND state <> 'restricted'`. |
 | `proxy_grants` | `TEXT[] NOT NULL DEFAULT '{}'` | Moved from `agents`. Connections this principal may forward through. |
-| `limits` | `JSONB NOT NULL DEFAULT '{}'` | `{concurrent_sessions, jobs_per_hour, concurrent_jobs}`; a missing key means the policy default. `rate_limit_per_min` stays a column because it is enforced and tested as one. |
+| `limits` | `JSONB NOT NULL DEFAULT '{}'` | `{concurrent_sessions, session_idle_seconds, jobs_per_hour, concurrent_jobs}`; a missing key means the policy default. `rate_limit_per_min` stays a column because it is enforced and tested as one. |
 | `federation_scope` | `JSONB NULL` | The `code`/`compute`/`documents`/`mcp` blocks from `05 §2`. NULL means no federated access — same direction as `vault_scope`. |
 | `metadata` | `JSONB NOT NULL DEFAULT '{}'` | model, host, owner contact, purpose. Free-form, shown in the UI, never an authority input. |
 | `restricted_from` | `JSONB NULL` | Snapshot of the authority columns taken at restrict, for exact restore. |
@@ -187,13 +187,13 @@ and to require it thereafter. This is used for exactly two things:
 **counting** and **audit grouping**. No tool state lives in a session; every
 request is still fully authenticated by its bearer token, as today.
 
-`mcp_sessions(id UUID PK, principal_id, credential_kind, client_name,
+`mcp_sessions(id UUID PK, principal_id, credential_kind, token_id, client_name,
 client_version, protocol_version, started_at, last_seen_at, ended_at,
-end_reason CHECK IN ('client','idle','revoked','limit','restart'))`.
+end_reason CHECK IN ('client','idle','revoked','limit','restart','superseded'))`.
 
 Rules:
 
-- `initialize` counts live sessions for the principal (`ended_at IS NULL AND last_seen_at > now() - SESSION_IDLE_SECONDS`). At or over `limits.concurrent_sessions` (policy default 1 for baseline, 4 for elevated) → JSON-RPC error `-32000 SESSION_LIMIT` with `data: {active: [{session_id, started_at, idle_seconds, client_name}]}`. Otherwise INSERT and return `Mcp-Session-Id`. Guard `SESS-001`.
+- `initialize` counts live sessions for the principal (`ended_at IS NULL AND last_seen_at > now() - idle_window`, where `idle_window` is `limits.session_idle_seconds` or `SESSION_IDLE_SECONDS`). At or over `limits.concurrent_sessions` (policy default 1 for baseline, 4 for elevated): if a live session belongs to the **same credential row**, the oldest such session is ended with `end_reason='superseded'` and the new one admitted (a reconnecting client is the same conversation — `12 §2`); otherwise → JSON-RPC error `-32000 SESSION_LIMIT` with `data: {active: [{session_id, started_at, idle_seconds, client_name}]}`. On admission INSERT and return `Mcp-Session-Id`. Guards `SESS-001`, `SESS-005`.
 - Every other `/mcp` request MUST carry `Mcp-Session-Id`; a missing header → `400 SESSION_REQUIRED` (HTTP, not JSON-RPC, per the transport); an unknown or ended id → `404` so the client re-initialises. A session id presented with a different principal's token → `404`, never a hint (guard `SESS-002`).
 - Each request bumps `last_seen_at`. `DELETE /mcp` with the header ends it (`client`). Idle sessions end lazily: they are counted as ended when `last_seen_at` is stale, and the daily tick stamps `ended_at`/`idle` for the record.
 - Revoking the credential or restricting the principal ends its sessions (`revoked`) in the same transaction — a live session is not a way to outlive a revocation (guard `SESS-003`).
@@ -298,6 +298,8 @@ to its operator what it cannot do and what to ask for.
 | SESS-002 | session id bound to its principal | principal comparison removed |
 | SESS-003 | revocation ends live sessions | session update removed from revoke |
 | SESS-004 | agents cannot skip `initialize` | grace branch widened to agents |
+| SESS-005 | supersession only for the same credential row | credential comparison removed |
+| SESS-006 | per-principal idle window applied | `limits.session_idle_seconds` ignored |
 | TIER-001 | submit requires tier 3 on REST and MCP | `require_tier` removed from `jobs.submit` |
 | TIER-002 | token cap lowers effective tier | `min()` with `token_tier_cap` removed |
 | TIER-003 | scope cap lowers effective tier | `min()` with `scope_tier` removed |

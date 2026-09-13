@@ -67,9 +67,9 @@ adds a ceiling to each.
 | Credential | an `account_tokens` row minted for the agent principal, label e.g. `baseline`, with `max_tier` cap (default 2) | an `oauth_tokens` access token bound to the agent principal, minted by the device flow (`04 §3`) or PKCE, carrying a scope |
 | Lifetime | long-lived, revocable by label | `ACCESS_TOKEN_TTL_SECONDS` (1 h), refresh rotated; family revoked on reuse |
 | Effective tier | `min(principal.max_tier, token.max_tier)` | `min(principal.max_tier, scope_tier(scope))` |
-| Sessions | `limits.concurrent_sessions` default **1** | `limits.concurrent_sessions` default 4, per policy |
+| Sessions | `limits.concurrent_sessions` default **1**; a reconnect on the same credential supersedes rather than collides (`12 §2`) | `limits.concurrent_sessions` default 4, per policy |
 | Tools visible | `whoami`, `job_status/result`, tier-1/2 vault reads in scope, `memory_*` own namespace (if memory is built), workspaces in scope that need tier ≤ 2 | everything the effective grant reaches: submit, vault write, proxy, federated code/compute/documents, delegation |
-| Human in the loop | once, at enrolment approval | at every elevation when `policy.elevation.require_approval` matches the requested scope (default: `mcp:operate` and above) |
+| Human in the loop | once, at enrolment approval | at every elevation: the consent page (Claude Code, Codex) or the Approvals screen (device flow) for `mcp:operate` and above |
 | Where enforced | `auth.resolve` computes the ceiling; `require_tier()` refuses verbs; session middleware refuses the second session | same functions — elevation only changes the inputs |
 
 The rule that makes this real, and that `01 §4.1` shows is missing today:

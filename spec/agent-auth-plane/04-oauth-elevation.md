@@ -74,6 +74,15 @@ decided_by, decision CHECK IN ('approved','denied'), consumed_at, last_polled_at
 The audit rows: `oauth.device.request`, `oauth.device.approve|deny`
 (governance), `oauth.device.consume`.
 
+## 3.1 Clients that cannot drive the device flow
+
+Claude Code and Codex elevate only through their built-in PKCE login
+(`12 §1`). For them the consent page is the elevation step: §4's scope
+picker lets the human choose `mcp:operate` there, and `on_behalf_of` binds
+the token to the agent. The device flow is for clients with no browser at
+all (the Datum-3.0 bridge, scripts). Both paths mint the same
+`oauth_tokens` row and are indistinguishable downstream.
+
 ## 4. Consent page binding
 
 Today the consent page signs in a human and binds the grant to that human's
@@ -81,8 +90,16 @@ account. Two additions:
 
 - The `scope` field is shown as a plain-language list of what it unlocks
   for **this** account, with the effective ceiling after the account's own
-  tier is applied. The page MUST NOT say "gains no permissions of its own"
-  once scopes are enforced.
+  tier is applied. When the request carries no scope, or when
+  `POLICY_CONSENT_SCOPE_PICKER` is on (default), the page offers a
+  **scope picker** defaulting to the narrowest scope the principal can use
+  and never listing one above its ceiling (guard `ELEV-011`). The chosen
+  value is what `oauth_codes.scope` records. The page MUST NOT say "gains no
+  permissions of its own" once scopes are enforced.
+- Registration (`POST /oauth/register`) accepts a body with no `scope` and
+  a `client_name` containing spaces or slashes; scope is validated at
+  authorize, never at register (guard `ELEV-012`). Codex registers without
+  scopes and requests them later (`12 §3.4`).
 - An optional `on_behalf_of=<agent name>` query parameter (also a form
   field) lets an operator authorise a client for one of their agents. The
   signed-in human must be the agent's sponsor or tier ≥4, and the requested
@@ -126,3 +143,5 @@ every upstream, with its own credential. Recorded in `11 D-11`.
 | ELEV-008 | `slow_down` on fast polling | interval check removed |
 | ELEV-009 | refresh cannot widen scope | scope copy replaced by request value |
 | ELEV-010 | unused clients pruned; referenced ones kept | `NOT EXISTS` clause removed |
+| ELEV-011 | scope picker never offers a scope above the ceiling | filter removed |
+| ELEV-012 | register accepts no-scope bodies; authorize still validates | check moved |

@@ -9,8 +9,9 @@
 A specification for turning Datum-Sync into the product described in one
 sentence:
 
-> A production-grade authentication plane and MCP gateway through which many
-> people and many AI agents reach company resources. A registered agent runs
+> A production-grade, harness-agnostic authentication plane and MCP gateway
+> through which many people and many AI agents (Claude Code, Codex, the
+> Datum-3.0 harness, and anything else that speaks MCP) reach company resources. A registered agent runs
 > in a **baseline** configuration on its own (one session at a time, a narrow
 > grant, its own namespace). To reach broader services it must connect to the
 > gateway over MCP and elevate through OAuth, with a human in the loop.
@@ -40,6 +41,7 @@ live schema plus a change to a module that already exists.
 9. `09-build-plan.md` — work packages sized for a worker session, each with an acceptance gate and its guard ids.
 10. `10-worker-brief.md` — the brief to hand a worker model with any single work package.
 11. `11-decision-log.md` — every choice made here that a reader might want to relitigate, with the reason.
+12. `12-client-harnesses.md` — what Claude Code, Codex and Datum-3.0 can each do on the wire, and the gateway defaults that absorb their differences. Read before `03 §5` and `04` if the client side is your concern.
 
 ## Conventions
 
