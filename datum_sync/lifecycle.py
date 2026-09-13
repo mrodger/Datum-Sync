@@ -440,8 +440,31 @@ async def daily(conn: asyncpg.Connection) -> dict[str, Any]:
             detail={"reason": "inactivity", "days": config.POLICY_INACTIVITY_RESTRICT_DAYS},
         )
 
+    # Unused OAuth clients (spec 04 §5). Dynamic registration is open by
+    # necessity, so the table grows on its own; a client with no grant, no
+    # device request and no code after the retention window was never used.
+    global pruned_last_run
+    pruned = await conn.fetch(
+        """
+        DELETE FROM oauth_clients c
+         WHERE c.created_at < now() - make_interval(days => $1)
+           AND NOT EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.client_id = c.client_id)
+           AND NOT EXISTS (SELECT 1 FROM oauth_device_codes d WHERE d.client_id = c.client_id)
+           AND NOT EXISTS (SELECT 1 FROM oauth_codes o WHERE o.client_id = c.client_id)
+        RETURNING client_id
+        """,
+        config.RETENTION_UNUSED_OAUTH_CLIENT_DAYS,
+    )
+    pruned_last_run = len(pruned)
+    out["pruned_clients"] = pruned_last_run
+
     out["reviews_overdue"] = await reviews_overdue(conn)
     return out
+
+
+# How many clients the last housekeeping run removed; shown on the
+# Authentication Services screen. Per process, like the tick itself.
+pruned_last_run = 0
 
 
 async def reviews_overdue(conn: asyncpg.Connection) -> int:

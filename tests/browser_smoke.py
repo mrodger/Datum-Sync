@@ -454,6 +454,9 @@ def principals(page) -> None:
     page.wait_for_selector("#view > [data-ready='enrolment']")
     check("enrolment renders", page.locator("#view h1").first.inner_text() == "Enrolment")
     page.fill("#code-label", "ui-smoke-code")
+    # Tier 3 on the template so the agent has somewhere to elevate to; its
+    # baseline token is still capped at 2 (spec 04 §1).
+    page.select_option("#g-tier", "3")
     page.click("#view button[type=submit]:has-text('Mint code')")
     page.wait_for_selector("#code-value")
     code = page.locator("#code-value").inner_text().strip()
@@ -501,6 +504,57 @@ def principals(page) -> None:
     page.wait_for_selector("#lc-restrict")
     me = api("get", "/rest/v1/whoami", headers=bearer).json()
     check("restore brings the tier back", me.get("effective_tier") == 2, str(me.get("effective_tier")))
+
+    # Elevation by device code (spec 04 §3): the agent asks with its baseline
+    # token, a person approves on the Approvals screen, the agent polls.
+    r = api("post", "/oauth/device", headers=bearer,
+            form={"client_id": "datum-sync-elevate", "scope": "mcp:operate"})
+    asked = r.json()
+    check("an elevation request is minted", r.status == 200 and "-" in asked.get("user_code", ""),
+          str(asked)[:120])
+    grant = {"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+             "client_id": "datum-sync-elevate", "device_code": asked.get("device_code", "")}
+    r = api("post", "/oauth/token", form=grant)
+    check("the poll is pending before approval",
+          r.status == 400 and r.json().get("error") == "authorization_pending", str(r.json())[:120])
+
+    code = asked.get("user_code", "")
+    page.goto(BASE + f"/ui/v2#/approvals?code={code}")
+    page.wait_for_selector("#view > [data-ready='approvals']")
+    check("approvals renders", page.locator("#view h1").first.inner_text() == "Approvals")
+    # `button:` rather than `text=Approve`: text= is a case-insensitive
+    # substring, and the decided row's "approved" badge matches it too.
+    page.click(f"tr:has-text('{code}') >> button:has-text('Approve')")
+    page.wait_for_selector(f"tr:has-text('{code}') >> button:has-text('Approve')", state="detached")
+    check("approving moves the request to recent decisions",
+          page.locator(f"tr:has-text('{code}') >> .badge:has-text('approved')").count() == 1)
+
+    # RFC 8628 §3.5: honour the interval, and `slow_down` if it grew.
+    elevated = {}
+    for _ in range(4):
+        time.sleep(asked.get("interval", 5))
+        r = api("post", "/oauth/token", form=grant)
+        if r.status == 200:
+            elevated = r.json()
+            break
+        if r.json().get("error") != "slow_down":
+            break
+    check("the approved poll mints a token", bool(elevated.get("access_token")), str(r.json())[:120])
+    up = {"authorization": f"Bearer {elevated.get('access_token', '')}"}
+    me = api("get", "/rest/v1/whoami", headers=up).json()
+    check("the elevated token acts at tier 3 as the agent",
+          me.get("name") == name and me.get("effective_tier") == 3 and me.get("source") == "oauth",
+          str({k: me.get(k) for k in ("name", "effective_tier", "source")}))
+    r = api("post", "/oauth/token", form=grant)
+    check("a replayed device code is refused", r.status == 400 and r.json().get("error") == "invalid_grant",
+          str(r.json())[:120])
+    r = api("get", "/rest/v1/whoami", headers=up)
+    check("the replay revoked the elevated token", r.status == 401, str(r.status))
+
+    page.goto(BASE + f"/ui/v2#/admin/{name}")
+    page.wait_for_selector(f"#view > [data-ready='admin/{name}']")
+    check("the Connect panel names the gateway",
+          BASE + "/mcp" in page.locator("#connect-snippet").inner_text())
 
     page.once("dialog", lambda d: d.accept())
     page.click("#lc-retire")

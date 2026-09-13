@@ -29,6 +29,7 @@
  *     mountTable() onwards.
  */
 import { ICONS } from '/v2/icons.js';
+import { CONNECT_SNIPPETS } from '/v2/connect-snippets.js';
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -329,6 +330,7 @@ const SECTIONS = [
     // is the check.
     { id: 'admin',          label: 'Principals',          minTier: 3, group: true },
     { id: 'enrolment',      label: 'Enrolment',           minTier: 3 },
+    { id: 'approvals',      label: 'Approvals',           minTier: 3 },
     { id: 'auth-services',  label: 'Authentication Services', adminOnly: true },
     { id: 'system-config',  label: 'System Configuration',   adminOnly: true },
     { id: 'queue-control',  label: 'Queue Control',           adminOnly: true },
@@ -405,6 +407,7 @@ const SCREENS = {
     workspaces:       [screenWorkspaces],
     admin:            [screenPrincipals, screenPrincipal],
     enrolment:        [screenEnrolment],
+    approvals:        [screenApprovals],
     // live sections
     notifications:    [screenNotifications],
     analytics:        [screenAnalytics],
@@ -3303,7 +3306,8 @@ async function screenPrincipal(view, name) {
                     el('p', { class: 'hint' }, 'Shown once. Copy it now.'
                         + (result.max_tier ? ' Capped at tier ' + result.max_tier + '.' : '')),
                     el('pre', { id: 'token-value' }, result.token),
-                    el('button', { type: 'button', class: 'secondary', onclick: () => route() }, 'Done')));
+                    el('button', { type: 'button', class: 'secondary', onclick: () => route() }, 'Done')),
+                    connectPanel(result.token));
             } catch (err) { mintErr.append(banner(err)); }
         } },
             el('div', { class: 'field' }, el('label', { for: 'token-label' }, 'Label'), tokenLabelInput),
@@ -3342,9 +3346,32 @@ async function screenPrincipal(view, name) {
         failure,
         tokenDisplay,
         el('div', { class: 'split' },
-            el('div', {}, details, effective, tokensPanel, sessionsPanel),
+            el('div', {}, details, effective, tokensPanel, sessionsPanel, connectPanel(null)),
             editor),
     ]);
+}
+
+/* The Connect panel (spec 12 §4): one snippet per harness, the gateway URL
+ * filled in and the token too when there is one to fill -- which is only in
+ * the moment after a mint, since it is shown once. Templates are data in
+ * connect-snippets.js; this only substitutes. */
+function connectPanel(token) {
+    const url = location.origin + '/mcp';
+    const fill = (t) => t.replaceAll('{url}', url).replaceAll('{token}', token || '${DATUM_SYNC_TOKEN}');
+    const pick = el('select', { id: 'connect-harness' },
+        ...CONNECT_SNIPPETS.map((x) => el('option', { value: x.id }, x.label)));
+    const pre = el('pre', { id: 'connect-snippet' }, fill(CONNECT_SNIPPETS[0].text));
+    pick.onchange = () => {
+        const chosen = CONNECT_SNIPPETS.find((x) => x.id === pick.value) || CONNECT_SNIPPETS[0];
+        pre.textContent = fill(chosen.text);
+    };
+    return el('div', { class: 'panel' },
+        el('h2', {}, 'Connect'),
+        el('p', { class: 'hint' }, token
+            ? 'Filled in with the token above. Baseline tokens work in every harness; elevation is an OAuth login or a device code.'
+            : 'How a client reaches this gateway. Mint a token above to see it filled in; ${DATUM_SYNC_TOKEN} stands in otherwise.'),
+        el('div', { class: 'field' }, el('label', { for: 'connect-harness' }, 'Harness'), pick),
+        pre);
 }
 
 async function newPrincipal(view) {
@@ -3739,15 +3766,117 @@ async function screenMcpServers(view) {
 }
 
 // ---------------------------------------------------------------------------
+// approvals
+// ---------------------------------------------------------------------------
+//
+// spec/agent-auth-plane/04 §3. An agent asks for a wider scope through the
+// device flow; the request waits here for a person. Approval may narrow the
+// scope, never widen it -- the picker only offers what was asked for. The
+// Calls tab is the seat for federated pending calls (WP6).
+
+async function screenApprovals(view) {
+    const q = hashQuery();
+    const tab = q.get('tab') || 'elevations';
+    actionBar(view, 'Approvals', {
+        desc: 'Decisions that wait for a person: elevation requests from agents, and calls a guard held back.',
+    });
+    view.append(pageTabs([
+        { id: 'elevations', label: 'Elevations', href: '#/approvals' },
+        { id: 'calls',      label: 'Calls',      href: '#/approvals?tab=calls' },
+    ], tab));
+    if (tab === 'calls') {
+        view.append(el('div', { class: 'panel' },
+            el('h2', {}, 'Calls'),
+            el('p', { class: 'hint' }, 'Federated calls a guard holds for approval arrive here once federation is built (spec 05 §6).')));
+        return;
+    }
+    return approvalsElevations(view, (q.get('code') || '').trim().toUpperCase());
+}
+
+async function approvalsElevations(view, highlight) {
+    const [pending, approved, denied] = await Promise.all([
+        api('/elevations'), api('/elevations?status=approved'), api('/elevations?status=denied'),
+    ]);
+    const failure = el('div', {});
+
+    function scopeLabel(x) {
+        return x.scope + ' (tier ' + x.requested_tier + ')';
+    }
+    function pendingRow(x) {
+        const asked = x.scope.split(' ');
+        const scopeSelect = el('select', { id: 'el-scope-' + x.id },
+            ...asked.map((s) => el('option', { value: s, selected: s === x.scope }, s)));
+        const approve = el('button', { type: 'button', id: 'el-approve-' + x.id, onclick: async () => {
+            approve.disabled = true;
+            clear(failure);
+            try {
+                await api('/elevations/' + x.id + '/approve', { method: 'POST', json: { scope: scopeSelect.value } });
+                route();
+            } catch (err) { failure.append(banner(err)); approve.disabled = false; }
+        } }, 'Approve');
+        const deny = el('button', { type: 'button', class: 'secondary', id: 'el-deny-' + x.id, onclick: async () => {
+            const reason = window.prompt('Deny ' + x.principal + '’s request for ' + x.scope + '. Reason:');
+            if (reason == null || !reason.trim()) return;
+            clear(failure);
+            try { await api('/elevations/' + x.id + '/deny', { method: 'POST', json: { reason } }); route(); }
+            catch (err) { failure.append(banner(err)); }
+        } }, 'Deny');
+        const unlocks = Object.values(x.unlocks || {}).join('; ');
+        return el('tr', {},
+            el('td', {}, el('code', {}, x.user_code),
+                x.user_code === highlight ? el('span', { class: 'badge running' }, 'this one') : null),
+            el('td', {}, cellName('engine', el('a', { href: '#/admin/' + encodeURIComponent(x.principal) }, x.principal),
+                x.principal_kind + (x.sponsor ? ' · sponsor ' + x.sponsor : '') + ' · tier ' + x.principal_max_tier)),
+            el('td', {}, x.client_name || x.client_id),
+            el('td', {}, scopeLabel(x), unlocks ? el('div', { class: 'hint' }, unlocks) : null),
+            el('td', {}, when(x.requested_at), el('div', { class: 'hint' }, 'expires ' + when(x.expires_at))),
+            el('td', {}, asked.length > 1 ? scopeSelect : null, ' ', approve, ' ', deny));
+    }
+    function decidedRow(x) {
+        return el('tr', {},
+            el('td', {}, el('code', {}, x.user_code)),
+            el('td', {}, el('a', { href: '#/admin/' + encodeURIComponent(x.principal) }, x.principal)),
+            el('td', {}, scopeLabel(x) + (x.approved_scope && x.approved_scope !== x.scope ? ' → ' + x.approved_scope : '')),
+            el('td', {}, x.status === 'approved' || x.status === 'consumed'
+                ? el('span', { class: 'badge complete' }, x.status)
+                : el('span', { class: 'badge failed' }, x.status)),
+            el('td', {}, (x.decided_by || '—') + (x.reason ? ' · ' + x.reason : '')),
+            el('td', {}, when(x.decided_at)));
+    }
+    const recent = approved.items.concat(denied.items)
+        .sort((a, b) => (b.decided_at || '').localeCompare(a.decided_at || '')).slice(0, 20);
+
+    append(view, [
+        failure,
+        el('div', { class: 'panel' },
+            el('h2', {}, 'Pending'),
+            highlight ? el('p', { class: 'hint' }, 'Looking for user code ' + highlight + '.') : null,
+            pending.items.length
+                ? table(['User code', 'Principal', 'Client', 'Requested', 'Asked', ''], pending.items.map(pendingRow))
+                : el('p', { class: 'hint' }, 'Nothing waiting. An agent that calls the elevate tool, or POSTs /oauth/device, appears here.')),
+        el('div', { class: 'panel' },
+            el('h2', {}, 'Recent decisions'),
+            recent.length
+                ? table(['User code', 'Principal', 'Scope', 'Outcome', 'Decided by', 'When'], recent.map(decidedRow))
+                : el('p', { class: 'hint' }, 'No decisions yet.')),
+    ]);
+}
+
+// ---------------------------------------------------------------------------
 // authentication services
 // ---------------------------------------------------------------------------
 
 async function screenAuthServices(view) {
-    const { items } = await api('/auth/clients');
+    const data = await api('/auth/clients');
+    const { items } = data;
 
     actionBar(view, 'Authentication Services', {
-        desc: 'Registered OAuth 2.1 clients. Register new clients via the command line.',
+        desc: 'Registered OAuth 2.1 clients. Registration is open (RFC 7591), so the table grows on its own; '
+            + 'a client that never held a grant is pruned after ' + data.retention_days + ' days.',
     });
+    view.append(el('p', { class: 'hint', id: 'clients-hygiene' },
+        data.total + ' registered · ' + data.unused + ' never used · '
+        + data.pruned_last_run + ' pruned by the last housekeeping run.'));
 
     if (!items.length) {
         view.append(el('div', { class: 'empty-state' },
@@ -3758,13 +3887,15 @@ async function screenAuthServices(view) {
     }
 
     view.append(table(
-        ['Client ID', 'Name', 'Redirect URIs', 'Grant types', 'Active grants', 'Registered'],
+        ['Client ID', 'Name', 'Redirect URIs', 'Grant types', 'Active grants', 'Device requests', 'Last grant', 'Registered'],
         items.map((c) => el('tr', {},
             el('td', {}, el('code', {}, c.client_id)),
             el('td', {}, c.name || '\u2014'),
             el('td', {}, c.redirect_uris.join(', ')),
             el('td', {}, c.grant_types.join(', ')),
             el('td', {}, c.active_grants),
+            el('td', {}, c.device_requests),
+            el('td', {}, c.unused ? el('span', { class: 'badge cancelled' }, 'unused') : when(c.last_grant_at)),
             el('td', {}, when(c.created_at))))));
 }
 

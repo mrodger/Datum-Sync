@@ -31,6 +31,7 @@ import hashlib
 import html
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -39,7 +40,7 @@ import asyncpg
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from datum_sync import auth, config, db
+from datum_sync import audit, auth, config, db
 
 router = APIRouter()
 
@@ -48,6 +49,28 @@ router = APIRouter()
 CODE_CHALLENGE_METHOD = "S256"
 
 GRANT_TYPES = ["authorization_code", "refresh_token"]
+# The device grant (RFC 8628) is accepted at /oauth/token but not offered at
+# registration: a registering client asks for the two above and the gateway
+# adds the third, which is how Claude Code and Codex register today.
+DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+
+# Registration hygiene (spec 04 §5): a global sliding window, not per
+# address. Behind the tunnel every caller is one address, so a per-address
+# limit would either lock everyone out at once or do nothing; registration is
+# rare enough that one bucket for the box is the honest control.
+_registrations: list[float] = []
+
+
+def _register_allowed(now: float | None = None) -> int:
+    """0 if a registration may proceed now, else seconds to wait."""
+    now = time.monotonic() if now is None else now
+    window = 3600.0
+    recent = [t for t in _registrations if now - t < window]
+    _registrations[:] = recent
+    if len(recent) >= config.OAUTH_REGISTER_PER_HOUR:
+        return max(1, int(window - (now - recent[0])) + 1)
+    _registrations.append(now)
+    return 0
 
 
 def _now() -> datetime:
@@ -95,6 +118,7 @@ async def protected_resource_metadata() -> dict[str, Any]:
         "resource": auth.MCP_RESOURCE,
         "authorization_servers": [config.PUBLIC_URL],
         "bearer_methods_supported": ["header"],
+        "scopes_supported": list(auth.SCOPE_TIERS),
     }
 
 
@@ -108,9 +132,12 @@ async def authorization_server_metadata() -> dict[str, Any]:
         "registration_endpoint": f"{config.PUBLIC_URL}/oauth/register",
         "revocation_endpoint": f"{config.PUBLIC_URL}/oauth/revoke",
         "response_types_supported": ["code"],
-        "grant_types_supported": GRANT_TYPES,
+        "grant_types_supported": GRANT_TYPES + [DEVICE_GRANT],
+        "device_authorization_endpoint": f"{config.PUBLIC_URL}/oauth/device",
         "code_challenge_methods_supported": [CODE_CHALLENGE_METHOD],
         "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "scopes_supported": list(auth.SCOPE_TIERS),
+        "resource_indicators_supported": True,
     }
 
 
@@ -150,6 +177,14 @@ async def register(body: dict[str, Any]) -> JSONResponse:
     on its own, because every token still requires a human to log in at the
     consent screen with an account that exists here.
     """
+    wait = _register_allowed()
+    if wait:
+        raise OAuthError(
+            "too_many_registrations",
+            f"registration limit of {config.OAUTH_REGISTER_PER_HOUR} per hour reached; "
+            f"retry in {wait} seconds",
+            status=429,
+        )
     uris = body.get("redirect_uris")
     if not isinstance(uris, list) or not uris:
         raise OAuthError("invalid_redirect_uri", "redirect_uris is required")
@@ -161,7 +196,7 @@ async def register(body: dict[str, Any]) -> JSONResponse:
         )
 
     grants = body.get("grant_types") or ["authorization_code", "refresh_token"]
-    unsupported = sorted(set(grants) - set(GRANT_TYPES))
+    unsupported = sorted(set(grants) - set(GRANT_TYPES) - {DEVICE_GRANT})
     if unsupported:
         raise OAuthError(
             "invalid_client_metadata", f"unsupported grant_types: {unsupported}"
@@ -311,23 +346,58 @@ def _page(inner: str) -> str:
     )
 
 
-def _consent_page(client_name: str, hidden: dict[str, str], error: str | None) -> str:
+def _scope_options(selected: str, picker: bool) -> str:
+    """The scope block: a picker when the client left the choice to the
+    person (spec 12 §3.2), otherwise a statement of what was asked.
+
+    Each option says what it unlocks. The account's own tier caps the
+    result after sign-in (`device.clamp_scope`), and the page says so: the
+    account is not known until the password is typed, so the cap cannot be
+    applied to the list itself.
+    """
+    if not picker:
+        tier = auth.scope_tier(selected) or 2
+        return (
+            f"<div class=scope>Requested scope <strong>{html.escape(selected)}</strong>: "
+            f"{html.escape(auth.TIER_VERBS[tier])}. Capped by your account's tier.</div>"
+        )
+    options = "".join(
+        f'<option value="{html.escape(s)}"{" selected" if s == selected else ""}>'
+        f'{html.escape(s)} \u2014 tier {t}: {html.escape(auth.TIER_VERBS[t])}</option>'
+        for s, t in auth.SCOPE_TIERS.items()
+    )
+    return (
+        "<label for=s>Scope</label>"
+        f'<select id=s name=scope>{options}</select>'
+        "<div class=scope>The scope sets the ceiling for this connection. "
+        "Your account's own tier caps it. Choose the narrowest that does the job; "
+        "you can authorise again for more.</div>"
+    )
+
+
+def _consent_page(
+    client_name: str, hidden: dict[str, str], error: str | None, *, picker: bool = False
+) -> str:
     fields = "".join(
         f'<input type=hidden name="{html.escape(k)}" value="{html.escape(v)}">'
         for k, v in hidden.items()
-        if v is not None
+        if v is not None and not (k == "scope" and picker)
     )
     banner = f'<div class=err>{html.escape(error)}</div>' if error else ""
     name = html.escape(client_name or "An application")
+    on_behalf = hidden.get("on_behalf_of") or ""
+    who = (
+        f"<div class=scope>Authorising for agent <strong>{html.escape(on_behalf)}</strong>. "
+        "Sign in as its sponsor (or an administrator); the token binds to the agent.</div>"
+        if on_behalf else ""
+    )
     return _page(
         f"<h1>Authorize {name}</h1>"
         "<p>Sign in with your Datum-Sync account to continue.</p>"
-        f"{banner}"
-        f"<div class=scope><strong>{name}</strong> will be able to run and read "
-        "the workspaces your account can already reach. It gains no permissions "
-        "of its own.</div>"
+        f"{banner}{who}"
         '<form method=post action="/oauth/authorize" autocomplete=off>'
         f"{fields}"
+        f"{_scope_options(hidden.get('scope') or 'mcp', picker)}"
         "<label for=u>Account</label>"
         "<input id=u name=username autocomplete=username autofocus required>"
         "<label for=p>Password</label>"
@@ -359,18 +429,29 @@ async def authorize_form(request: Request):
         if not _CHALLENGE_RE.match(challenge):
             raise OAuthError("invalid_request", "a valid PKCE code_challenge is required")
         resource = _check_resource(q.get("resource"))
+        # Unknown scopes are refused here, where the client can be told
+        # (ELEV-002); registration never sees a scope (Codex registers with
+        # none and asks later, spec 12 §3.4).
+        from datum_sync import device
+
+        scope = device.validate_scope(q.get("scope"))
     except OAuthError as exc:
         return _error_redirect(redirect_uri, exc.error, exc.description, state)
 
+    # The picker: offered when the client left the choice open (no scope in
+    # the request) or whenever policy says so. Claude Code and Codex elevate
+    # through this page, so the choice has to be here (spec 12 §3.2).
+    picker = config.POLICY_CONSENT_SCOPE_PICKER or not q.get("scope")
     hidden = {
         "client_id": client["client_id"],
         "redirect_uri": redirect_uri,
         "code_challenge": challenge,
         "resource": resource,
         "state": state or "",
-        "scope": q.get("scope") or "",
+        "scope": scope,
+        "on_behalf_of": (q.get("on_behalf_of") or "").strip(),
     }
-    return HTMLResponse(_consent_page(client["client_name"], hidden, None))
+    return HTMLResponse(_consent_page(client["client_name"], hidden, None, picker=picker))
 
 
 @router.post("/oauth/authorize")
@@ -384,6 +465,7 @@ async def authorize_submit(
     resource: str = Form(""),
     state: str = Form(""),
     scope: str = Form(""),
+    on_behalf_of: str = Form(""),
 ):
     """The consent screen posts back.
 
@@ -403,13 +485,17 @@ async def authorize_submit(
         except OAuthError as exc:
             return _fail_page(exc.description)
 
+        from datum_sync import device
+
         try:
             if not _CHALLENGE_RE.match(code_challenge):
                 raise OAuthError("invalid_request", "invalid PKCE code_challenge")
             audience = _check_resource(resource or None)
+            scope = device.validate_scope(scope)
         except OAuthError as exc:
             return _error_redirect(redirect_uri, exc.error, exc.description, state)
 
+        on_behalf_of = on_behalf_of.strip()
         hidden = {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
@@ -417,6 +503,7 @@ async def authorize_submit(
             "resource": audience,
             "state": state,
             "scope": scope,
+            "on_behalf_of": on_behalf_of,
         }
         try:
             account = await auth.authenticate_password(conn, username, password)
@@ -443,6 +530,33 @@ async def authorize_submit(
                 status_code=401,
             )
 
+        # Who the grant binds to: the person who signed in, or -- with
+        # on_behalf_of -- one of their agents (spec 04 §4, ELEV-004). The
+        # scope is then capped by the target's tier, never by the picker
+        # alone (ELEV-011): the account was not known when the list rendered.
+        target_id, target_tier, target_name = account["id"], account["max_tier"], account["name"]
+        if on_behalf_of:
+            from datum_sync import grants as grants_mod  # noqa: F401  -- for the tier rule below
+            agent = await conn.fetchrow(
+                "SELECT id, name, kind, state, parent_id, max_tier FROM service_accounts WHERE name = $1",
+                on_behalf_of,
+            )
+            allowed = (
+                agent is not None and agent["kind"] == "agent" and agent["state"] == "active"
+                and (agent["parent_id"] == account["id"] or account["max_tier"] >= 4)
+            )
+            if not allowed:
+                return HTMLResponse(
+                    _consent_page(client["client_name"], hidden,
+                                  f"{on_behalf_of!r} is not an active agent you sponsor.",
+                                  picker=False),
+                    status_code=403,
+                )
+            target_id, target_tier, target_name = agent["id"], agent["max_tier"], agent["name"]
+            # A sponsor cannot hand its agent more than it could set on it.
+            target_tier = min(target_tier, account["max_tier"])
+        scope = device.clamp_scope(scope, target_tier)
+
         code = secrets.token_urlsafe(32)
         await conn.execute(
             """
@@ -453,12 +567,19 @@ async def authorize_submit(
             """,
             code,
             client_id,
-            account["id"],
+            target_id,
             redirect_uri,
             code_challenge,
             audience,
             scope or None,
             _now() + timedelta(seconds=config.AUTH_CODE_TTL_SECONDS),
+        )
+        trace = getattr(request.state, "trace", None) or audit.Trace.mint(None)
+        await audit.write_anon(
+            conn, trace=trace, via="oauth", verb="oauth.consent", target_kind="principal",
+            target=target_name, outcome="ok", actor_name=account["name"],
+            detail={"client_id": client_id, "scope": scope,
+                    "on_behalf_of": on_behalf_of or None},
         )
 
     params = {"code": code}
@@ -580,8 +701,10 @@ async def token(
     client_id: str | None = Form(None),
     client_secret: str | None = Form(None),
     resource: str | None = Form(None),
+    device_code: str | None = Form(None),
+    scope: str | None = Form(None),
 ) -> JSONResponse:
-    if grant_type not in GRANT_TYPES:
+    if grant_type not in GRANT_TYPES and grant_type != DEVICE_GRANT:
         raise OAuthError("unsupported_grant_type", f"unsupported grant_type {grant_type!r}")
 
     async with db.pool().acquire() as conn:
@@ -591,8 +714,16 @@ async def token(
             body = await _exchange_code(
                 conn, client, code, redirect_uri, code_verifier, resource
             )
+        elif grant_type == DEVICE_GRANT:
+            from datum_sync import device
+
+            try:
+                body = await device.exchange_device_code(conn, client, device_code)
+            except _Reuse as reuse:
+                await _revoke_family(conn, reuse.client_id, reuse.account_id)
+                raise OAuthError("invalid_grant", reuse.message) from None
         else:
-            body = await _rotate_refresh(conn, client, refresh_token, resource)
+            body = await _rotate_refresh(conn, client, refresh_token, resource, scope)
 
     return JSONResponse(
         content=body, headers={"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -676,12 +807,13 @@ async def _rotate_refresh(
     client: asyncpg.Record,
     refresh_token: str | None,
     resource: str | None,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     if not refresh_token:
         raise OAuthError("invalid_request", "refresh_token is required")
 
     try:
-        return await _rotate_refresh_txn(conn, client, refresh_token, resource)
+        return await _rotate_refresh_txn(conn, client, refresh_token, resource, scope)
     except _Reuse as reuse:
         await _revoke_family(conn, reuse.client_id, reuse.account_id)
         raise OAuthError("invalid_grant", reuse.message) from None
@@ -692,6 +824,7 @@ async def _rotate_refresh_txn(
     client: asyncpg.Record,
     refresh_token: str,
     resource: str | None,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     async with conn.transaction():
         row = await conn.fetchrow(
@@ -730,8 +863,22 @@ async def _rotate_refresh_txn(
         if account is None or account["disabled"]:
             raise OAuthError("invalid_grant", "account is no longer active")
 
+        # RFC 6749 §6: a refresh may ask for a narrower scope, never a wider
+        # one (ELEV-009). The grant's scope is what the person consented to;
+        # the request value is only ever a subset of it.
+        granted = row["scope"] or "mcp"
+        if scope and scope.strip():
+            from datum_sync import device
+
+            asked = device.validate_scope(scope)
+            if not set(asked.split()) <= set(granted.split()):
+                raise OAuthError(
+                    "invalid_scope", f"the grant covers {granted!r}; a refresh cannot widen it"
+                )
+            granted = asked
         body = await _mint(
-            conn, client["client_id"], row["account_id"], row["resource"], row["scope"]
+            conn, client["client_id"], row["account_id"], row["resource"],
+            granted if row["scope"] else None,
         )
         replacement = await conn.fetchval(
             "SELECT id FROM oauth_tokens WHERE token_hash = $1",

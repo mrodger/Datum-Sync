@@ -198,6 +198,19 @@ DEFAULT_CONCURRENT_JOBS = int(os.getenv("DEFAULT_CONCURRENT_JOBS", "2"))
 # How long an MCP tools/call waits for a workspace before returning a job
 # handle (spec 07 §6). Under the 60 s per-request timer the clients apply.
 MCP_WAIT_SECONDS = int(os.getenv("MCP_WAIT_SECONDS", "45"))
+# OAuth elevation (spec 04). Scopes a device request may take without a
+# person: those that unlock nothing beyond the baseline.
+POLICY_ELEVATION_AUTO_APPROVE_SCOPES = frozenset(
+    s for s in os.getenv("POLICY_ELEVATION_AUTO_APPROVE_SCOPES", "mcp").split() if s
+)
+# Whether the consent page offers the scope choice (spec 12 §3.2). On by
+# default: Claude Code and Codex elevate through this page.
+POLICY_CONSENT_SCOPE_PICKER = os.getenv("POLICY_CONSENT_SCOPE_PICKER", "on").lower() not in ("off", "0", "false")
+DEVICE_CODE_TTL_SECONDS = int(os.getenv("DEVICE_CODE_TTL_SECONDS", "600"))
+DEVICE_POLL_INTERVAL_SECONDS = int(os.getenv("DEVICE_POLL_INTERVAL_SECONDS", "5"))
+# Registration hygiene (spec 04 §5).
+OAUTH_REGISTER_PER_HOUR = int(os.getenv("OAUTH_REGISTER_PER_HOUR", "30"))
+RETENTION_UNUSED_OAUTH_CLIENT_DAYS = int(os.getenv("RETENTION_UNUSED_OAUTH_CLIENT_DAYS", "30"))
 # How often the worker runs the lifecycle housekeeping. Daily by design; the
 # tests set it low.
 LIFECYCLE_TICK_SECONDS = int(os.getenv("LIFECYCLE_TICK_SECONDS", str(24 * 3600)))

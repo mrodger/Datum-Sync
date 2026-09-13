@@ -150,6 +150,9 @@ def _clear_password_attempts():
     because the coupling is invisible at the call site -- a test does not have
     to mention the limiter to be affected by it.
     """
+    from datum_sync import oauth
     auth.reset_attempts()
+    oauth._registrations.clear()
     yield
     auth.reset_attempts()
+    oauth._registrations.clear()

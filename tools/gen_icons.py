@@ -44,6 +44,7 @@ NAV = [
     # Regenerating picks up the real glyph; until then icons.js carries the
     # `create` path under this key (see spec/agent-auth-plane/_report-WP2.md).
     ('enrolment',      'Enrolment',               'user-plus',              ['user-circle-plus', 'plus']),
+    ('approvals',      'Approvals',               'check-circle',           ['seal-check', 'check-square']),
     ('auth-services',  'Authentication Services', 'key',                    ['fingerprint', 'lock-key']),
     ('system-config',  'System Configuration',    'gear-six',               ['sliders', 'wrench']),
     ('queue-control',  'Queue Control',           'list-numbers',           ['queue', 'traffic-signal']),

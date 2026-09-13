@@ -40,7 +40,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.datastructures import UploadFile
 
 from datum_sync import (
-    agents, audit, auth, automations, config, connections, crypto, db, enrol, errors,
+    agents, audit, auth, automations, config, connections, crypto, db, device, enrol, errors,
     events, execute, jobs, lifecycle, mcp, oauth, principals, ratelimit, schedules,
     services, sessions, tokens, ui, uploads,
 )
@@ -159,6 +159,7 @@ app.include_router(principals.router)
 app.include_router(lifecycle.router)
 app.include_router(enrol.router)
 app.include_router(sessions.router)
+app.include_router(device.router)
 
 
 @app.middleware("http")
@@ -2323,18 +2324,31 @@ async def list_auth_clients(caller: Principal = Caller) -> dict[str, Any]:
         rows = await conn.fetch(
             """SELECT c.client_id, c.client_name, c.redirect_uris,
                       c.grant_types, c.created_at,
-                      count(t.id) FILTER (
-                          WHERE t.kind = 'refresh' AND t.revoked_at IS NULL
-                            AND t.rotated_to IS NULL
-                      ) AS active_grants
+                      (SELECT count(*) FROM oauth_tokens t
+                        WHERE t.client_id = c.client_id AND t.kind = 'refresh'
+                          AND t.revoked_at IS NULL AND t.rotated_to IS NULL) AS active_grants,
+                      (SELECT max(t.created_at) FROM oauth_tokens t
+                        WHERE t.client_id = c.client_id) AS last_grant_at,
+                      (SELECT count(*) FROM oauth_device_codes d
+                        WHERE d.client_id = c.client_id) AS device_requests,
+                      (SELECT count(*) FROM oauth_codes o
+                        WHERE o.client_id = c.client_id) AS codes
                FROM oauth_clients c
-               LEFT JOIN oauth_tokens t ON t.client_id = c.client_id
-               GROUP BY c.client_id
                ORDER BY c.created_at DESC LIMIT 100"""
         )
         total = await conn.fetchval("SELECT count(*) FROM oauth_clients")
+        unused = await conn.fetchval(
+            """
+            SELECT count(*) FROM oauth_clients c
+             WHERE NOT EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.client_id = c.client_id)
+               AND NOT EXISTS (SELECT 1 FROM oauth_device_codes d WHERE d.client_id = c.client_id)
+            """
+        )
     return {
         "total": total,
+        "unused": unused,
+        "pruned_last_run": lifecycle.pruned_last_run,
+        "retention_days": config.RETENTION_UNUSED_OAUTH_CLIENT_DAYS,
         "items": [
             {
                 "client_id": r["client_id"],
@@ -2342,6 +2356,11 @@ async def list_auth_clients(caller: Principal = Caller) -> dict[str, Any]:
                 "redirect_uris": list(r["redirect_uris"]),
                 "grant_types": list(r["grant_types"]),
                 "active_grants": r["active_grants"],
+                "device_requests": r["device_requests"],
+                "last_grant_at": r["last_grant_at"].isoformat() if r["last_grant_at"] else None,
+                # The same three references housekeeping checks before pruning.
+                "unused": r["last_grant_at"] is None and r["device_requests"] == 0
+                          and r["codes"] == 0,
                 "created_at": r["created_at"].isoformat(),
             }
             for r in rows

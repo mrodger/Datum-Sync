@@ -535,8 +535,21 @@ JOB_CANCEL_TOOL = {
                     "required": ["job_id"]},
     "annotations": {"datumMinTier": 3},
 }
+ELEVATE_TOOL = {
+    "name": "elevate",
+    "title": "Elevate",
+    "description": "Ask for a wider OAuth scope (mcp, mcp:operate, mcp:admin) through the "
+                   "device flow. Returns a user code for a person to approve on the "
+                   "Approvals screen and a device code to poll /oauth/token with "
+                   "(grant_type urn:ietf:params:oauth:grant-type:device_code, "
+                   "client_id datum-sync-elevate).",
+    "inputSchema": {"type": "object", "properties": {
+        "scope": {"type": "string", "enum": ["mcp", "mcp:operate", "mcp:admin"]}},
+        "required": ["scope"]},
+    "annotations": {"datumMinTier": 1},
+}
 _BUILTIN_TOOL_NAMES = frozenset({
-    "whoami", "session_info", "job_status", "job_result", "job_list", "job_cancel",
+    "whoami", "session_info", "job_status", "job_result", "job_list", "job_cancel", "elevate",
 })
 
 
@@ -545,6 +558,9 @@ async def _tools_list(
 ) -> dict[str, Any]:
     tier = principal.effective_tier
     tools: list[dict[str, Any]] = [WHOAMI_TOOL, SESSION_INFO_TOOL]
+    # Shown only when there is something to unlock.
+    if auth.elevation_hints(principal):
+        tools.append(ELEVATE_TOOL)
     if tier >= 2:
         tools += [JOB_STATUS_TOOL, JOB_RESULT_TOOL, JOB_LIST_TOOL]
     if tier >= 3:
@@ -794,6 +810,31 @@ async def _builtin_call(
                             "structuredContent": {"job_id": str(row["id"]), "status": row["status"]},
                             "isError": True}
                 return await _job_handle(conn, principal, raw_id)
+        if name == "elevate":
+            from datum_sync import device
+            from datum_sync.oauth import OAuthError
+
+            scope = args.get("scope")
+            if not isinstance(scope, str):
+                raise RpcError(INVALID_PARAMS, "scope is required")
+            try:
+                async with db.pool().acquire() as conn:
+                    body = await device.elevate(conn, principal, scope)
+            except OAuthError as exc:
+                return {"content": [{"type": "text", "text": f"{exc.error}: {exc.description}"}],
+                        "isError": True}
+            text = (
+                "Approved automatically." if body["auto_approved"] else
+                f"Ask a person to approve user code {body['user_code']} at "
+                f"{body['verification_uri']}."
+            ) + (
+                f"\nThen POST {config.PUBLIC_URL}/oauth/token with grant_type="
+                f"{device.DEVICE_GRANT}, client_id={device.ELEVATE_CLIENT_ID} and the "
+                f"device_code below, no faster than every {body['interval']}s."
+            )
+            body.pop("elevation_id", None)
+            return {"content": [{"type": "text", "text": text}],
+                    "structuredContent": body, "isError": False}
         if name == "job_list":
             auth.require_tier(principal, 2, "job_list")
             limit = args.get("limit", 10)

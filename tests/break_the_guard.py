@@ -2431,6 +2431,102 @@ CASES = [
         "        pass\n",
         "tests/test_sessions.py::test_job_limits_are_counted_in_the_database",
     ),
+    # -- OAuth elevation (WP4, spec 04 §6). ELEV-001 is TIER-003: the scope
+    # cap on the effective tier was built with the tier model, so the guard
+    # is registered once, under the id that got there first.
+    (
+        "ELEV-002",
+        "an unknown scope is refused at authorize as invalid_scope",
+        "datum_sync/oauth.py",
+        "        scope = device.validate_scope(q.get(\"scope\"))\n",
+        "        scope = q.get(\"scope\") or \"mcp\"\n",
+        "tests/test_elevation.py::test_an_unknown_scope_is_refused_at_authorize",
+    ),
+    (
+        "ELEV-003",
+        "an approver may narrow the requested scope, never widen it",
+        "datum_sync/device.py",
+        "            if not set(approved.split()) <= asked or "
+        "auth.scope_tier(approved) > auth.scope_tier(row[\"scope\"]):\n",
+        "            if False:\n",
+        "tests/test_elevation.py::test_an_approver_may_narrow_but_never_widen",
+    ),
+    (
+        "ELEV-004",
+        "on_behalf_of binds only to an agent the signer sponsors, or at tier 4",
+        "datum_sync/oauth.py",
+        "                and (agent[\"parent_id\"] == account[\"id\"] or account[\"max_tier\"] >= 4)\n",
+        "                and True\n",
+        "tests/test_elevation.py::test_on_behalf_of_needs_the_sponsor_or_tier_4",
+    ),
+    (
+        "ELEV-005",
+        "a device authorisation request carries the principal's own credential",
+        "datum_sync/api.py",
+        "        \"/oauth/revoke\",\n",
+        "        \"/oauth/revoke\",\n        \"/oauth/device\",\n",
+        "tests/test_elevation.py::test_the_device_request_needs_a_bearer",
+    ),
+    (
+        "ELEV-006",
+        "a device code is single-use; presenting it again revokes the family",
+        "datum_sync/device.py",
+        "        if row[\"consumed_at\"] is not None:\n",
+        "        if False:\n",
+        "tests/test_elevation.py::test_a_device_code_is_single_use_and_reuse_revokes_the_family",
+    ),
+    (
+        "ELEV-007",
+        "no token mints before a person (or policy) has approved",
+        "datum_sync/device.py",
+        "            elif row[\"decision\"] is None:\n"
+        "                error = oauth.OAuthError(\"authorization_pending\", \"not approved yet\")\n",
+        "            elif False:\n"
+        "                pass\n",
+        "tests/test_elevation.py::test_the_device_flow_end_to_end",
+    ),
+    (
+        "ELEV-008",
+        "polling faster than the interval is answered slow_down and the interval grows",
+        "datum_sync/device.py",
+        "            if last is not None and (_now() - last).total_seconds() < interval:\n",
+        "            if False:\n",
+        "tests/test_elevation.py::test_polling_faster_than_the_interval_is_slowed",
+    ),
+    (
+        "ELEV-009",
+        "a refresh may narrow the grant's scope, never widen it",
+        "datum_sync/oauth.py",
+        "            if not set(asked.split()) <= set(granted.split()):\n",
+        "            if False:\n",
+        "tests/test_elevation.py::test_a_refresh_cannot_widen_the_scope",
+    ),
+    (
+        "ELEV-010",
+        "housekeeping prunes unused OAuth clients and keeps referenced ones",
+        "datum_sync/lifecycle.py",
+        "           AND NOT EXISTS (SELECT 1 FROM oauth_device_codes d WHERE d.client_id = c.client_id)\n",
+        "           AND true\n",
+        "tests/test_elevation.py::test_unused_clients_are_pruned_and_referenced_ones_kept",
+    ),
+    (
+        "ELEV-011",
+        "the consent page's chosen scope is clamped by the target principal's tier",
+        "datum_sync/oauth.py",
+        "        scope = device.clamp_scope(scope, target_tier)\n",
+        "        pass\n",
+        "tests/test_elevation.py::test_the_chosen_scope_is_clamped_by_the_principals_tier",
+    ),
+    (
+        "ELEV-012",
+        "registration accepts a body with no scope; authorize is where scope is checked",
+        "datum_sync/oauth.py",
+        "    uris = body.get(\"redirect_uris\")\n",
+        "    if \"scope\" not in body:\n"
+        "        raise OAuthError(\"invalid_request\", \"scope is required\")\n"
+        "    uris = body.get(\"redirect_uris\")\n",
+        "tests/test_elevation.py::test_registration_without_scope_is_accepted_and_authorize_still_validates",
+    ),
 ]
 
 # Not covered here, and deliberately not faked: the semaphore bounding
