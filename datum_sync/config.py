@@ -183,6 +183,14 @@ REQUIRE_HTTPS = os.getenv("REQUIRE_HTTPS", "false").lower() in ("1", "true", "ye
 POLICY_MAX_DELEGATION_DEPTH = int(os.getenv("POLICY_MAX_DELEGATION_DEPTH", "4"))
 # The tier cap on the token an enrolment claim mints (the baseline credential).
 POLICY_BASELINE_TIER = int(os.getenv("POLICY_BASELINE_TIER", "2"))
+# Lifecycle (spec 03 §4). Days, except the claim window.
+POLICY_REVIEW_INTERVAL_DAYS = int(os.getenv("POLICY_REVIEW_INTERVAL_DAYS", "90"))
+POLICY_INACTIVITY_RESTRICT_DAYS = int(os.getenv("POLICY_INACTIVITY_RESTRICT_DAYS", "30"))
+POLICY_PENDING_TTL_DAYS = int(os.getenv("POLICY_PENDING_TTL_DAYS", "7"))
+POLICY_CLAIM_TTL_HOURS = int(os.getenv("POLICY_CLAIM_TTL_HOURS", "24"))
+# How often the worker runs the lifecycle housekeeping. Daily by design; the
+# tests set it low.
+LIFECYCLE_TICK_SECONDS = int(os.getenv("LIFECYCLE_TICK_SECONDS", str(24 * 3600)))
 
 REPOSITORIES_PATH = _path("REPOSITORIES_PATH", "./repositories")
 RESOURCES_PATH = _path("RESOURCES_PATH", "./resources")

@@ -40,9 +40,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.datastructures import UploadFile
 
 from datum_sync import (
-    agents, audit, auth, automations, config, connections, crypto, db, errors, events,
-    execute, jobs, mcp, oauth, principals, ratelimit, schedules, services, tokens, ui,
-    uploads,
+    agents, audit, auth, automations, config, connections, crypto, db, enrol, errors,
+    events, execute, jobs, lifecycle, mcp, oauth, principals, ratelimit, schedules,
+    services, tokens, ui, uploads,
 )
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
@@ -79,6 +79,10 @@ PUBLIC_PATHS = frozenset(
         "/oauth/authorize",
         "/oauth/token",
         "/oauth/revoke",
+        # Enrolment. The registrant has no credential yet; the enrolment code
+        # is its credential, and enrol.py rate-limits and audits by it.
+        "/enrol",
+        "/enrol/claim",
         # The interface description, not the data behind it. Every route it
         # lists still refuses an unauthenticated call.
         "/docs",
@@ -152,6 +156,8 @@ oauth.install(app)
 ui.install(app)
 app.include_router(mcp.router)
 app.include_router(principals.router)
+app.include_router(lifecycle.router)
+app.include_router(enrol.router)
 
 
 @app.middleware("http")
@@ -488,6 +494,8 @@ async def health() -> dict[str, Any]:
         async with db.pool().acquire() as conn:
             await conn.fetchval("SELECT 1")
             worker = await execute.worker_is_running(conn)
+            overdue = await lifecycle.reviews_overdue(conn)
+            pending = await lifecycle.pending_count(conn)
     except Exception as e:
         raise ApiError(
             503, "SERVICE_UNAVAILABLE", f"database unreachable: {e}"
@@ -503,6 +511,10 @@ async def health() -> dict[str, Any]:
         "database": "ok",
         "worker": "running" if worker else "down",
         "audit_dropped": audit.dropped(),
+        # Review obligations (spec 03 §4.3): counts, so a monitor can alert on
+        # them without reading the Review screen.
+        "reviews_overdue": overdue,
+        "pending_enrolments": pending,
     }
 
 

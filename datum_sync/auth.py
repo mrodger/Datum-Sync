@@ -322,6 +322,24 @@ DEV_PRINCIPAL = Principal(
 )
 
 
+# What the worker acts as when housekeeping writes an audit row (restricting
+# an idle agent, expiring a registration). Not a database row and not a
+# credential: nothing can authenticate as it. `kind` is 'system', which
+# audit.write maps to its own actor_kind so these rows are never mistaken for
+# an account's or an agent's.
+SYSTEM_PRINCIPAL = Principal(
+    account_id=0,
+    name="system:worker",
+    max_tier=5,
+    repo_scope=["*"],
+    is_admin=True,
+    vault_scope=None,
+    rate_limit_per_min=None,
+    source="system",
+    kind="system",
+)
+
+
 def vault_scope_of(row: asyncpg.Record) -> dict | None:
     """The `vault_scope` column as a dict.
 

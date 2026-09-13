@@ -164,6 +164,10 @@ async def write(
         # parent; the key is still `account`, which is what it has always
         # meant here.
         detail = {**(detail or {}), "account": principal.parent_name}
+    elif principal.kind == "system":
+        # The worker's housekeeping (lifecycle.daily). actor_id NULL: there
+        # is no row, and 0 would look like one that was deleted.
+        actor_kind, actor_id, actor_name = "system", None, principal.name
     else:
         actor_kind, actor_id, actor_name = "account", principal.account_id, principal.name
 

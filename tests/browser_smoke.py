@@ -28,9 +28,11 @@ obvious rather than merely shorter.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
+import time
 
 from playwright.sync_api import sync_playwright
 
@@ -138,6 +140,7 @@ def main() -> int:
             connections(page)
             services(page)
             workspaces(page)
+            principals(page)
         except Exception as exc:            # noqa: BLE001 - recorded, not raised
             # Recorded rather than propagated, because cleanup has to run and a
             # `finally` that calls cleanup will throw away this exception the
@@ -428,6 +431,85 @@ def workspaces(page) -> None:
     # joining on something that does not match.
     check("a workspace that has run does not say Never", "Never" not in site,
           repr(site))
+
+
+def principals(page) -> None:
+    """Enrol an agent through the v2 Enrolment screen, approve it, claim its
+    token, restrict and restore it on the Principal screen, then retire it.
+
+    spec/agent-auth-plane/08 §9. The registrant's half -- /enrol and
+    /enrol/claim -- goes through `page.request` because that is what a
+    registrant is: a process with no browser and no cookie. Everything a
+    person does goes through the screens.
+
+    The name carries a timestamp so a run that dies mid-way leaves a retired
+    row that the next run does not collide with; a tier-5 smoke account
+    deletes it at the end, a tier-4 one leaves it retired.
+    """
+    print("\nprincipals (v2 only)")
+    name = f"ui-smoke-agent-{int(time.time())}"
+    api = lambda method, path, **kw: getattr(page.request, method)(BASE + path, **kw)  # noqa: E731
+
+    page.goto(BASE + "/ui/v2#/enrolment")
+    page.wait_for_selector("#view > [data-ready='enrolment']")
+    check("enrolment renders", page.locator("#view h1").first.inner_text() == "Enrolment")
+    page.fill("#code-label", "ui-smoke-code")
+    page.click("#view button[type=submit]:has-text('Mint code')")
+    page.wait_for_selector("#code-value")
+    code = page.locator("#code-value").inner_text().strip()
+    check("a code is shown once", len(code) > 20)
+
+    r = api("post", "/enrol", data={"code": code, "name": name,
+                                     "metadata": {"model": "smoke", "host": "here"}})
+    body = r.json()
+    check("enrolling lands the agent pending", r.status == 201 and body.get("state") == "pending",
+          str(body)[:120])
+    claim = body.get("claim_code", "")
+    r = api("post", "/enrol/claim", data={"claim_code": claim})
+    check("a claim before approval is refused", r.status == 409, str(r.status))
+
+    page.goto(BASE + "/ui/v2#/enrolment?tab=pending")
+    page.wait_for_selector("#view > [data-ready='enrolment']")
+    page.wait_for_selector(f"tr:has-text('{name}')")
+    page.click(f"tr:has-text('{name}') >> text=Approve")
+    page.wait_for_selector(f"tr:has-text('{name}')", state="detached")
+    check("approving clears the pending row", page.locator(f"tr:has-text('{name}')").count() == 0)
+
+    r = api("post", "/enrol/claim", data={"claim_code": claim})
+    token = r.json().get("token", "")
+    check("the claim mints the token once", r.status == 200 and bool(token), str(r.status))
+    r = api("post", "/enrol/claim", data={"claim_code": claim})
+    check("a second claim is refused", r.status == 401, str(r.status))
+    bearer = {"authorization": f"Bearer {token}"}
+    me = api("get", "/rest/v1/whoami", headers=bearer).json()
+    check("the token is a baseline credential on an agent",
+          me.get("kind") == "agent" and me.get("effective_tier") == 2 and me.get("token_tier_cap") == 2,
+          str({k: me.get(k) for k in ("kind", "effective_tier", "token_tier_cap")}))
+
+    page.goto(BASE + f"/ui/v2#/admin/{name}")
+    page.wait_for_selector(f"#view > [data-ready='admin/{name}']")
+    # Badges are upper-cased by CSS, and inner_text() reports what is rendered.
+    check("the detail screen shows the state",
+          page.locator("#view .page-header .badge").inner_text().lower() == "active")
+    page.once("dialog", lambda d: d.accept("smoke"))
+    page.click("#lc-restrict")
+    page.wait_for_selector("#lc-restore")
+    me = api("get", "/rest/v1/whoami", headers=bearer).json()
+    check("restricted acts at tier 1", me.get("state") == "restricted" and me.get("effective_tier") == 1,
+          str({k: me.get(k) for k in ("state", "effective_tier")}))
+    page.click("#lc-restore")
+    page.wait_for_selector("#lc-restrict")
+    me = api("get", "/rest/v1/whoami", headers=bearer).json()
+    check("restore brings the tier back", me.get("effective_tier") == 2, str(me.get("effective_tier")))
+
+    page.once("dialog", lambda d: d.accept())
+    page.click("#lc-retire")
+    page.wait_for_selector("#view .page-header .badge:has-text('retired')")
+    r = api("get", "/rest/v1/whoami", headers=bearer)
+    check("retiring kills the token", r.status == 401, str(r.status))
+    r = api("delete", f"/rest/v1/principals/{name}")
+    print(f"  {'ok  ' if r.status == 200 else 'note'} {name} "
+          f"{'deleted' if r.status == 200 else 'left retired (delete is tier 5: ' + str(r.status) + ')'}")
 
 
 def cleanup(page) -> None:

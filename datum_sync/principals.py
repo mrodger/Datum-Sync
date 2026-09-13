@@ -43,6 +43,7 @@ _COLS = f"""
     {auth.PRINCIPAL_COLS},
     sa.description, sa.metadata, sa.created_at, sa.last_used_at, sa.created_by,
     sa.review_due_at, sa.last_reviewed_at, sa.last_reviewed_by, sa.restricted_reason,
+    sa.restricted_from,
     sa.password_hash IS NOT NULL AS has_password,
     EXISTS (SELECT 1 FROM account_tokens t
              WHERE t.account_id = sa.id AND t.revoked_at IS NULL

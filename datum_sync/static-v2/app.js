@@ -324,12 +324,27 @@ const SECTIONS = [
     { id: 'resources',      label: 'Resources',           stub: true },
     { id: 'analytics',      label: 'Analytics',           adminOnly: true },
     { id: 'services',       label: 'Services' },
-    { id: 'admin',          label: 'Admin',               adminOnly: true, group: true },
+    // `minTier` rather than `adminOnly`: a tier-3 sponsor sees these two,
+    // scoped to its own subtree by the API. The nav is a courtesy; the API
+    // is the check.
+    { id: 'admin',          label: 'Principals',          minTier: 3, group: true },
+    { id: 'enrolment',      label: 'Enrolment',           minTier: 3 },
     { id: 'auth-services',  label: 'Authentication Services', adminOnly: true },
     { id: 'system-config',  label: 'System Configuration',   adminOnly: true },
     { id: 'queue-control',  label: 'Queue Control',           adminOnly: true },
     { id: 'migration',      label: 'Backup & Restore',        adminOnly: true, stub: true },
 ];
+
+/* One rule for the nav and the router. `adminOnly` is tier 4 (is_admin is
+ * derived from the tier since migration 016); `minTier` is stated. Read from
+ * `effective_tier`, which is what the API enforces: an administrator holding
+ * a baseline token sees what that token can do. */
+function sectionDenied(section) {
+    const tier = me.effective_tier != null ? me.effective_tier : (me.is_admin ? 4 : 1);
+    if (section.minTier) return tier < section.minTier;
+    if (section.adminOnly) return tier < 4;
+    return false;
+}
 
 function buildNav() {
     const nav = clear($('nav'));
@@ -338,7 +353,7 @@ function buildNav() {
         // refuses `adminOnly` by hash as well; this just declutters. Until
         // chunk 10 the sentence above said the same thing and nothing did it:
         // the four stubs in this group rendered for anybody who typed the URL.
-        if (section.adminOnly && !me.is_admin) continue;
+        if (sectionDenied(section)) continue;
         // The label belongs to the group below it, so hiding Admin hides the
         // label too rather than leaving a divider with nothing under it.
         if (section.group) nav.append(el('div', { class: 'nav-group-label' }, 'Admin'));
@@ -388,7 +403,8 @@ const SCREENS = {
     connections:      [screenConnections, screenConnection],
     services:         [screenServices],
     workspaces:       [screenWorkspaces],
-    admin:            [screenAdmin, screenAccount],
+    admin:            [screenPrincipals, screenPrincipal],
+    enrolment:        [screenEnrolment],
     // live sections
     notifications:    [screenNotifications],
     analytics:        [screenAnalytics],
@@ -452,10 +468,10 @@ async function route() {
     // so the refusal reads as a closed door rather than as a screen that
     // broke. It goes through the normal path rather than returning early, so
     // the denial sets `data-ready` and can be waited on like any other screen.
-    const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);
+    const denied = SECTIONS.some((s) => s.id === section && (s.adminOnly || s.minTier) && sectionDenied(s));
     const screen = denied
         ? (v) => v.append(notBuiltNode('Not available',
-            'This section is for administrator accounts.'))
+            'This section needs a higher tier than this credential holds.'))
         : screens[Math.min(rest.length, screens.length - 1)];
     try {
         const leave = (await screen(view, ...rest)) || null;
@@ -2956,352 +2972,516 @@ async function screenServices(view) {
 // admin
 // ---------------------------------------------------------------------------
 
-async function screenAccount(view, accountName) {
-    const [acct, { items: agentList }, { items: tokenList }] = await Promise.all([
-        api('/accounts/' + encodeURIComponent(accountName)),
-        api('/accounts/' + encodeURIComponent(accountName) + '/agents'),
-        api('/accounts/' + encodeURIComponent(accountName) + '/tokens'),
-    ]);
+// ---------------------------------------------------------------------------
+// principals
+// ---------------------------------------------------------------------------
+//
+// spec/agent-auth-plane/08 §2. The Admin group's list is every principal --
+// humans, agents and their tree -- and the detail screen is where a grant is
+// edited, with the parent's value beside each field so the narrowing rule is
+// visible while typing. The lifecycle verbs are buttons that appear for the
+// states they apply to; the API refuses the rest with INVALID_TRANSITION.
 
-    const accountPath = '/accounts/' + encodeURIComponent(accountName);
+const STATE_BADGE = {
+    active: 'enabled', pending: 'queued', restricted: 'paused',
+    disabled: 'cancelled', retired: 'cancelled', rejected: 'failed',
+};
+
+function stateBadge(state) {
+    return el('span', { class: 'badge ' + (STATE_BADGE[state] || 'queued') }, state);
+}
+
+function listOrDash(arr) {
+    return arr && arr.length ? arr.join(', ') : el('span', { class: 'hint' }, '—');
+}
+
+function tierOptions(selected, max) {
+    return [1, 2, 3, 4, 5].filter((t) => t <= (max || 5)).map((t) =>
+        el('option', { value: String(t), selected: t === selected ? '' : null }, 'Tier ' + t));
+}
+
+/* A JSON field with the parent's value greyed beside it. Returns
+ * { node, read } where read() parses the textarea or throws a message. */
+function jsonField(id, label, value, parentValue, hint) {
+    const ta = el('textarea', { id, rows: '4', spellcheck: 'false' },
+        value == null ? '' : JSON.stringify(value, null, 1));
+    const node = el('div', { class: 'field' },
+        el('label', { for: id }, label),
+        ta,
+        parentValue !== undefined
+            ? el('div', { class: 'hint' }, 'parent: ',
+                el('code', {}, parentValue == null ? 'none' : JSON.stringify(parentValue)))
+            : null,
+        hint ? el('div', { class: 'hint' }, hint) : null);
+    return { node, read: () => {
+        const raw = ta.value.trim();
+        if (!raw || raw === 'null') return null;
+        try { return JSON.parse(raw); } catch (e) { throw new Error(label + ': not valid JSON'); }
+    } };
+}
+
+function listField(id, label, value, parentValue, placeholder) {
+    const input = el('input', { type: 'text', id, value: (value || []).join(', '), placeholder: placeholder || '' });
+    const node = el('div', { class: 'field' },
+        el('label', { for: id }, label), input,
+        parentValue !== undefined
+            ? el('div', { class: 'hint' }, 'parent: ', el('code', {}, (parentValue || []).join(', ') || 'none'))
+            : null);
+    return { node, read: () => input.value.split(',').map((x) => x.trim()).filter(Boolean) };
+}
+
+/* The grant editor. `current` is the row, `parent` the parent's effective
+ * authority (or null for a root). Submits through `save(body)`. */
+function grantForm(current, parent, save, opts) {
+    const o = opts || {};
+    const pv = (k) => (parent ? parent[k] : undefined);
+    const tier = el('select', { id: 'g-tier' }, ...tierOptions(current.max_tier, o.maxTier));
+    const repos = listField('g-repos', 'Repositories', current.repo_scope, pv('repo_scope'), '* or NAME, NAME');
+    const vault = jsonField('g-vault', 'Vault scope', current.vault_scope, pv('vault_scope'),
+        '{"read": ["dev/**"], "write": [], "deny": []}  — null for no access');
+    const proxy = listField('g-proxy', 'Proxy grants', current.proxy_grants, pv('proxy_grants'), 'connection names');
+    const fed = jsonField('g-fed', 'Federation scope', current.federation_scope, pv('federation_scope'),
+        'code / compute / documents / mcp blocks, or null');
+    const limits = jsonField('g-limits', 'Limits', current.limits, pv('limits'),
+        '{"concurrent_sessions": 1, "jobs_per_hour": 20, "concurrent_jobs": 1}');
+    const rate = el('input', { type: 'number', id: 'g-rate', min: '1',
+        value: current.rate_limit_per_min == null ? '' : String(current.rate_limit_per_min),
+        placeholder: 'blank = unlimited' });
+    const err = el('div', {});
+    const form = el('form', { class: 'panel', onsubmit: async (e) => {
+        e.preventDefault();
+        clear(err);
+        let body;
+        try {
+            body = {
+                max_tier: parseInt(tier.value, 10),
+                repo_scope: repos.read(),
+                vault_scope: vault.read(),
+                proxy_grants: proxy.read(),
+                federation_scope: fed.read(),
+                limits: limits.read() || {},
+                rate_limit_per_min: rate.value.trim() ? parseInt(rate.value, 10) : null,
+            };
+        } catch (ex) {
+            err.append(banner({ code: 'INVALID', message: ex.message }));
+            return;
+        }
+        try {
+            await save(body);
+        } catch (ex) {
+            err.append(banner(ex));
+            const field = ex.detail && (ex.detail.field || (ex.detail.fields || [])[0]);
+            if (field) err.append(el('p', { class: 'hint' }, 'field: ' + field));
+        }
+    } },
+        el('h2', {}, o.title || 'Grant'),
+        err,
+        el('div', { class: 'field' }, el('label', { for: 'g-tier' }, 'Tier'), tier,
+            parent ? el('div', { class: 'hint' }, 'parent: ', el('code', {}, 'Tier ' + parent.max_tier)) : null),
+        repos.node, vault.node, proxy.node, fed.node, limits.node,
+        el('div', { class: 'field' }, el('label', { for: 'g-rate' }, 'Rate limit (per minute)'), rate,
+            parent ? el('div', { class: 'hint' }, 'parent: ',
+                el('code', {}, parent.rate_limit_per_min == null ? 'unlimited' : String(parent.rate_limit_per_min))) : null),
+        el('div', { class: 'action-bar' }, el('div', { class: 'actions' },
+            el('button', { type: 'submit' }, o.submitLabel || 'Save grant'))));
+    return form;
+}
+
+async function screenPrincipals(view) {
+    const q = hashQuery();
+    const params = new URLSearchParams();
+    for (const k of ['kind', 'state', 'parent']) if (q.get(k)) params.set(k, q.get(k));
+    const { items } = await api('/principals' + (params.toString() ? '?' + params : ''));
+
+    actionBar(view, 'Principals', {
+        desc: 'Every human, agent and system principal, with the tree it sits in. '
+            + 'Agents enrol through the Enrolment screen; humans are created here or with the accounts CLI.',
+        search: 'Search principals by name',
+        actions: me.effective_tier >= 3 ? [el('a', { id: 'create', class: 'button', href: '#/admin/' + NEW }, 'Create')] : [],
+    });
+
+    view.append(pageTabs([
+        { id: '',           label: 'All',        href: '#/admin' },
+        { id: 'human',      label: 'Humans',     href: '#/admin?kind=human' },
+        { id: 'agent',      label: 'Agents',     href: '#/admin?kind=agent' },
+        { id: 'pending',    label: 'Pending',    href: '#/admin?state=pending' },
+        { id: 'restricted', label: 'Restricted', href: '#/admin?state=restricted' },
+    ], q.get('kind') || q.get('state') || ''));
+
+    view.append(table([
+        { label: 'Principal', sortable: true, sorted: true },
+        { label: 'Kind', sortable: true },
+        { label: 'State', sortable: true },
+        { label: 'Tier', sortable: true },
+        { label: 'Parent', sortable: true },
+        { label: 'Scope', sortable: true },
+        { label: 'Credentials', sortable: true },
+        { label: 'Last used', sortable: true },
+        { label: 'Review due', sortable: true },
+    ], items.map((p) => el('tr', {},
+        el('td', {}, cellName(p.kind === 'agent' ? 'engine' : 'avatar',
+            el('a', { href: '#/admin/' + encodeURIComponent(p.name) }, p.name),
+            [p.is_admin ? 'administrator' : null,
+             p.children_count ? p.children_count + ' child' + (p.children_count === 1 ? '' : 'ren') : null]
+                .filter(Boolean).join(' · ') || null)),
+        el('td', {}, p.kind),
+        el('td', {}, stateBadge(p.state)),
+        el('td', {}, 'Tier ' + p.max_tier),
+        el('td', {}, p.parent ? el('a', { href: '#/admin/' + encodeURIComponent(p.parent) }, p.parent) : el('span', { class: 'hint' }, 'root')),
+        el('td', {}, p.repo_scope.join(', ') || 'none'),
+        el('td', {}, [p.has_token ? 'token' : null, p.has_password ? 'password' : null]
+            .filter(Boolean).join(' + ') || el('span', { class: 'hint' }, '—')),
+        el('td', {}, when(p.last_used_at)),
+        el('td', {}, p.review_due_at
+            ? (new Date(p.review_due_at) < new Date()
+                ? el('span', { class: 'badge failed' }, 'overdue')
+                : when(p.review_due_at))
+            : el('span', { class: 'hint' }, '—'))))));
+
+    view.append(pagerBar(items.length));
+    mountTable(view);
+}
+
+async function screenPrincipal(view, name) {
+    if (name === NEW) return newPrincipal(view);
+
+    const p = await api('/principals/' + encodeURIComponent(name));
+    const path = '/principals/' + encodeURIComponent(name);
     const failure = el('div', {});
     const tokenDisplay = el('div', {});
+    const parentEff = p.parent
+        ? (await api('/principals/' + encodeURIComponent(p.parent))).effective
+        : null;
 
-    function vaultScopeRows(vs) {
-        if (!vs) {
-            return [el('dt', {}, 'Vault scope'), el('dd', {}, 'unrestricted')];
+    // -- lifecycle verbs, by state ------------------------------------------
+    async function act(verb, body, query) {
+        clear(failure);
+        try {
+            await api(path + '/' + verb + (query || ''), { method: 'POST', json: body || {} });
+            route();
+        } catch (err) {
+            failure.append(banner(err));
         }
-        const fmt = (arr) => arr && arr.length
-            ? arr.join(', ')
-            : el('span', { class: 'hint' }, '\u2014');
-        return [
-            el('dt', {}, 'Vault read'),  el('dd', {}, fmt(vs.read)),
-            el('dt', {}, 'Vault write'), el('dd', {}, fmt(vs.write)),
-            el('dt', {}, 'Vault deny'),  el('dd', {}, fmt(vs.deny)),
-        ];
+    }
+    function withReason(verb, label) {
+        return el('button', { type: 'button', class: 'secondary', id: 'lc-' + verb, onclick: () => {
+            const reason = window.prompt(label + ' ' + name + '. Reason:');
+            if (reason == null || !reason.trim()) return;
+            act(verb, { reason: reason.trim() });
+        } }, label);
+    }
+    const verbs = [];
+    if (p.state === 'pending') {
+        verbs.push(el('button', { type: 'button', id: 'lc-approve', onclick: () => act('approve') }, 'Approve'));
+        verbs.push(withReason('reject', 'Reject'));
+    }
+    if (p.state === 'active') {
+        verbs.push(withReason('restrict', 'Restrict'));
+        verbs.push(el('button', { type: 'button', class: 'secondary', id: 'lc-disable',
+            onclick: () => { if (window.confirm('Disable ' + name + '? Every credential stops working.')) act('disable'); } }, 'Disable'));
+        verbs.push(el('button', { type: 'button', class: 'secondary', id: 'lc-review', onclick: () => {
+            const note = window.prompt('Review note for ' + name + ':');
+            if (note == null) return;
+            act('review', { note });
+        } }, 'Mark reviewed'));
+    }
+    if (p.state === 'restricted') {
+        verbs.push(el('button', { type: 'button', id: 'lc-restore', onclick: () => act('restore') }, 'Restore'));
+    }
+    if (p.state === 'disabled') {
+        verbs.push(el('button', { type: 'button', id: 'lc-enable', onclick: () => act('enable') }, 'Enable'));
+    }
+    if (p.state !== 'retired' && me.effective_tier >= 4) {
+        verbs.push(el('button', { type: 'button', class: 'danger-fill', id: 'lc-retire', onclick: () => {
+            if (!window.confirm('Retire ' + name + '?\n\nEvery credential is revoked; the row and its history stay. '
+                + (p.children.length ? 'Its ' + p.children.length + ' child(ren) are retired too.' : ''))) return;
+            act('retire', null, p.children.length ? '?cascade=true' : '');
+        } }, 'Retire'));
+    }
+    if (me.effective_tier >= 5) {
+        verbs.push(el('button', { type: 'button', class: 'danger-fill', id: 'lc-delete', onclick: async () => {
+            if (!window.confirm('Permanently delete ' + name + '? This is for mistakes; retire is the lifecycle.')) return;
+            try { await api(path, { method: 'DELETE' }); go('#/admin'); }
+            catch (err) { failure.append(banner(err)); }
+        } }, 'Delete'));
     }
 
+    // -- details ---------------------------------------------------------------
     const details = el('div', { class: 'panel' },
         el('h2', {}, 'Details'),
         el('dl', { class: 'kv' },
-            el('dt', {}, 'Tier'),        el('dd', {}, 'Tier ' + acct.max_tier),
-            el('dt', {}, 'Admin'),       el('dd', {}, acct.is_admin ? 'yes' : 'no'),
-            el('dt', {}, 'Disabled'),    el('dd', {}, acct.disabled ? 'yes' : 'no'),
+            el('dt', {}, 'Kind'),      el('dd', {}, p.kind),
+            el('dt', {}, 'State'),     el('dd', {}, stateBadge(p.state),
+                p.restricted_reason ? el('span', { class: 'hint' }, ' ' + p.restricted_reason) : null),
+            el('dt', {}, 'Tier'),      el('dd', {}, 'Tier ' + p.max_tier
+                + (p.effective_tier !== p.max_tier ? ' (effective ' + p.effective_tier + ')' : '')),
+            el('dt', {}, 'Parent'),    el('dd', {}, p.parent
+                ? el('a', { href: '#/admin/' + encodeURIComponent(p.parent) }, p.parent) : 'root'),
+            el('dt', {}, 'Ancestors'), el('dd', {}, p.ancestors.join(' ← ') || '—'),
+            el('dt', {}, 'Children'),  el('dd', {}, p.children.length
+                ? p.children.map((c, i) => [i ? ', ' : null, el('a', { href: '#/admin/' + encodeURIComponent(c) }, c)]).flat()
+                : '—'),
             el('dt', {}, 'Credentials'), el('dd', {},
-                [acct.has_token ? 'token' : null,
-                 acct.has_password ? 'password' : null].filter(Boolean).join(' + ')
-                || el('span', { class: 'hint' }, '\u2014')),
-            el('dt', {}, 'Last used'), el('dd', {}, when(acct.last_used_at)),
-            el('dt', {}, 'Created'),   el('dd', {}, when(acct.created_at)),
-            ...vaultScopeRows(acct.vault_scope)));
+                [p.has_token ? 'token' : null, p.has_password ? 'password' : null].filter(Boolean).join(' + ')
+                || el('span', { class: 'hint' }, '—')),
+            el('dt', {}, 'Last used'), el('dd', {}, when(p.last_used_at)),
+            el('dt', {}, 'Created'),   el('dd', {}, when(p.created_at) + (p.created_by ? ' by ' + p.created_by : '')),
+            el('dt', {}, 'Review due'), el('dd', {}, p.review_due_at ? when(p.review_due_at) : '—'),
+            el('dt', {}, 'Last reviewed'), el('dd', {}, p.last_reviewed_at
+                ? when(p.last_reviewed_at) + ' by ' + p.last_reviewed_by : '—'),
+            el('dt', {}, 'Metadata'),  el('dd', {}, Object.keys(p.metadata).length
+                ? JSON.stringify(p.metadata) : '—')),
+        verbs.length ? el('div', { class: 'action-bar' }, el('div', { class: 'actions' }, verbs)) : null);
 
-    // Tokens table + mint form.
+    // Effective, when it differs from the row.
+    const eff = p.effective;
+    const differs = JSON.stringify({ t: eff.max_tier, r: eff.repo_scope, v: eff.vault_scope, p: eff.proxy_grants })
+        !== JSON.stringify({ t: p.max_tier, r: p.repo_scope, v: p.vault_scope, p: p.proxy_grants });
+    const effective = el('div', { class: 'panel' },
+        el('h2', {}, 'Effective authority'),
+        differs ? el('p', { class: 'hint' }, 'Narrowed by an ancestor or by the state; the row itself is unchanged.') : null,
+        el('dl', { class: 'kv' },
+            el('dt', {}, 'Tier'),         el('dd', {}, 'Tier ' + eff.max_tier),
+            el('dt', {}, 'Repositories'), el('dd', {}, listOrDash(eff.repo_scope)),
+            el('dt', {}, 'Vault'),        el('dd', {}, eff.vault_scope ? JSON.stringify(eff.vault_scope) : 'none'),
+            el('dt', {}, 'Proxy'),        el('dd', {}, listOrDash(eff.proxy_grants)),
+            el('dt', {}, 'Federation'),   el('dd', {}, eff.federation_scope ? JSON.stringify(eff.federation_scope) : 'none'),
+            el('dt', {}, 'Limits'),       el('dd', {}, JSON.stringify(eff.limits || {})),
+            el('dt', {}, 'Rate limit'),   el('dd', {}, eff.rate_limit_per_min == null ? 'unlimited' : eff.rate_limit_per_min + '/min')));
+
+    // -- grant editor -----------------------------------------------------------
+    const editor = grantForm(p, parentEff, async (body) => {
+        await api(path, { method: 'PATCH', json: body });
+        route();
+    }, { title: 'Grant', maxTier: p.kind === 'agent' ? 3 : 5 });
+
+    // -- tokens ------------------------------------------------------------------
     function tokenRow(t) {
-        const revokeBtn = el('button', { type: 'button', class: 'secondary',
-            onclick: async () => {
-                if (!window.confirm(`Revoke token "${t.label}"?`)) return;
-                revokeBtn.disabled = true;
-                try {
-                    await api(accountPath + '/tokens/' + encodeURIComponent(t.label),
-                        { method: 'DELETE' });
-                    row.remove();
-                } catch (err) {
-                    failure.append(banner(err));
-                    revokeBtn.disabled = false;
-                }
-            },
-        }, 'Revoke');
+        const revokeBtn = el('button', { type: 'button', class: 'secondary', onclick: async () => {
+            if (!window.confirm(`Revoke token "${t.label}"?`)) return;
+            revokeBtn.disabled = true;
+            try {
+                await api(path + '/tokens/' + encodeURIComponent(t.label), { method: 'DELETE' });
+                row.remove();
+            } catch (err) { failure.append(banner(err)); revokeBtn.disabled = false; }
+        } }, 'Revoke');
         const row = el('tr', {},
             el('td', {}, t.label),
+            el('td', {}, t.max_tier ? 'Tier ' + t.max_tier : el('span', { class: 'hint' }, 'own')),
             el('td', {}, when(t.created_at)),
             el('td', {}, when(t.last_used_at)),
             el('td', {}, t.expires_at ? when(t.expires_at) : el('span', { class: 'hint' }, 'never')),
-            el('td', {}, revokeBtn));
+            el('td', {}, t.revoked_at ? el('span', { class: 'badge cancelled' }, 'revoked') : revokeBtn));
         return row;
     }
-
-    const tokenLabelInput  = el('input', {
-        type: 'text',   id: 'token-label',   placeholder: 'e.g. ci-deploy', required: true });
-    const tokenExpiresInput = el('input', {
-        type: 'number', id: 'token-expires',  placeholder: 'days (blank = no expiry)', min: '1' });
-    const mintTokenErr = el('div', {});
-
+    const tokenLabelInput = el('input', { type: 'text', id: 'token-label', placeholder: 'e.g. ci-deploy', required: true });
+    const tokenTierSelect = el('select', { id: 'token-tier' },
+        el('option', { value: '' }, "principal's own tier"),
+        ...tierOptions(null, p.max_tier));
+    const tokenExpiresInput = el('input', { type: 'number', id: 'token-expires', placeholder: 'days (blank = no expiry)', min: '1' });
+    const mintErr = el('div', {});
     const tokensPanel = el('div', { class: 'panel' },
         el('h2', {}, 'Tokens'),
-        tokenList.length
-            ? table(['Label', 'Created', 'Last used', 'Expires', ''], tokenList.map(tokenRow))
+        p.tokens.length
+            ? table(['Label', 'Cap', 'Created', 'Last used', 'Expires', ''], p.tokens.map(tokenRow))
             : el('p', { class: 'hint' }, 'No tokens.'),
-        mintTokenErr,
+        mintErr,
         el('form', { onsubmit: async (e) => {
             e.preventDefault();
             const label = tokenLabelInput.value.trim();
             if (!label) return;
-            const daysRaw = tokenExpiresInput.value.trim();
             const body = { label };
-            if (daysRaw) body.expires_days = parseInt(daysRaw, 10);
-            clear(mintTokenErr);
+            if (tokenTierSelect.value) body.max_tier = parseInt(tokenTierSelect.value, 10);
+            const days = tokenExpiresInput.value.trim();
+            if (days) body.expires_at = new Date(Date.now() + parseInt(days, 10) * 86400000).toISOString();
+            clear(mintErr);
             try {
-                const result = await api(accountPath + '/tokens', { method: 'POST', json: body });
+                const result = await api(path + '/tokens', { method: 'POST', json: body });
                 clear(tokenDisplay);
                 tokenDisplay.append(el('div', { class: 'panel' },
-                    el('h2', {}, 'Token \u2014 ' + result.label),
-                    el('p', { class: 'hint' }, 'Shown once. Copy it now.'),
-                    el('pre', {}, result.token),
-                    el('button', { type: 'button', class: 'secondary',
-                        onclick: () => route(),
-                    }, 'Done')));
-                tokenLabelInput.value = '';
-                tokenExpiresInput.value = '';
-            } catch (err) {
-                mintTokenErr.append(banner(err));
-            }
+                    el('h2', {}, 'Token — ' + result.label),
+                    el('p', { class: 'hint' }, 'Shown once. Copy it now.'
+                        + (result.max_tier ? ' Capped at tier ' + result.max_tier + '.' : '')),
+                    el('pre', { id: 'token-value' }, result.token),
+                    el('button', { type: 'button', class: 'secondary', onclick: () => route() }, 'Done')));
+            } catch (err) { mintErr.append(banner(err)); }
         } },
-            el('div', { class: 'field' },
-                el('label', { for: 'token-label' }, 'Label'), tokenLabelInput),
-            el('div', { class: 'field' },
-                el('label', { for: 'token-expires' }, 'Expires (days)'), tokenExpiresInput),
-            el('div', { class: 'action-bar' },
-                el('div', { class: 'actions' },
-                    el('button', { type: 'submit' }, 'Mint token')))));
-
-    // Agents table — static render, no mountTable (small list, no search needed).
-    function agentRow(a) {
-        const agentPath = accountPath + '/agents/' + encodeURIComponent(a.name);
-
-        const mintBtn = el('button', { type: 'button', class: 'secondary',
-            onclick: async () => {
-                mintBtn.disabled = true;
-                clear(failure);
-                try {
-                    const { token } = await api(agentPath + '/token', { method: 'POST' });
-                    clear(tokenDisplay);
-                    tokenDisplay.append(el('div', { class: 'panel' },
-                        el('h2', {}, 'Token \u2014 ' + a.name),
-                        el('p', { class: 'hint' }, 'Shown once. Copy it now.'),
-                        el('pre', {}, token),
-                        el('button', { type: 'button', class: 'secondary',
-                            onclick: () => { clear(tokenDisplay); mintBtn.disabled = false; },
-                        }, 'Dismiss')));
-                } catch (err) {
-                    failure.append(banner(err));
-                    mintBtn.disabled = false;
-                }
-            },
-        }, 'Mint token');
-
-        const revokeBtn = el('button', { type: 'button', class: 'secondary',
-            onclick: async () => {
-                if (!window.confirm(`Revoke agent ${a.name}?\n\nAccess is disabled but the agent can be restored.`)) return;
-                revokeBtn.disabled = true;
-                try {
-                    await api(agentPath, { method: 'PATCH', json: { disabled: true } });
-                    route();
-                } catch (err) {
-                    failure.append(banner(err));
-                    revokeBtn.disabled = false;
-                }
-            },
-        }, a.disabled ? 'Restore' : 'Revoke');
-
-        const delBtn = el('button', { type: 'button', class: 'danger-fill',
-            onclick: async () => {
-                if (!window.confirm(`Permanently delete agent ${a.name}?`)) return;
-                delBtn.disabled = true;
-                try {
-                    await api(agentPath, { method: 'DELETE' });
-                    row.remove();
-                } catch (err) {
-                    failure.append(banner(err));
-                    delBtn.disabled = false;
-                }
-            },
-        }, 'Delete');
-
-        const row = el('tr', {},
-            el('td', {}, cellName('avatar', el('span', {}, a.name),
-                a.disabled ? 'disabled' : null)),
-            el('td', {}, a.proxy_grants && a.proxy_grants.length
-                ? a.proxy_grants.join(', ')
-                : el('span', { class: 'hint' }, '\u2014')),
-            el('td', {}, when(a.last_used_at)),
-            el('td', {}, mintBtn),
-            el('td', {}, revokeBtn),
-            el('td', {}, delBtn));
-        return row;
-    }
-
-    const agentsPanel = el('div', { class: 'panel' },
-        el('h2', {}, 'Agents'));
-    if (agentList.length) {
-        agentsPanel.append(table(
-            ['Agent', 'Proxy grants', 'Last used', '', '', ''],
-            agentList.map(agentRow)));
-    } else {
-        agentsPanel.append(el('p', { class: 'hint' }, 'No agents yet.'));
-    }
-
-    // Create-agent form. Agents are created through the API (not just the CLI)
-    // because each synthetic or integrated agent needs a scoped token, and
-    // minting one from the CLI on every deploy is the thing the UI replaces.
-    const nameInput  = el('input', {
-        type: 'text', id: 'agent-name', placeholder: 'agent-name', required: true });
-    const grantsInput = el('input', {
-        type: 'text', id: 'agent-grants',
-        placeholder: 'connection1, connection2  (blank = no proxy grants)' });
-    const createErr = el('div', {});
-
-    const createForm = el('div', { class: 'panel' },
-        el('h2', {}, 'Create agent'),
-        createErr,
-        el('form', { onsubmit: async (e) => {
-            e.preventDefault();
-            const name = nameInput.value.trim();
-            if (!name) return;
-            const raw = grantsInput.value.trim();
-            const grants = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
-            clear(createErr);
-            try {
-                const agent = await api(accountPath + '/agents', {
-                    method: 'POST',
-                    json: { name, proxy_grants: grants },
-                });
-                // Token is returned only at creation time. Show it before the
-                // route re-render clears the page, so the admin can copy it.
-                clear(tokenDisplay);
-                tokenDisplay.append(el('div', { class: 'panel' },
-                    el('h2', {}, 'Token \u2014 ' + agent.name),
-                    el('p', { class: 'hint' }, 'Shown once. Copy it now.'),
-                    el('pre', {}, agent.token),
-                    el('button', { type: 'button', class: 'secondary',
-                        onclick: () => route(),
-                    }, 'Done')));
-                nameInput.value = '';
-                grantsInput.value = '';
-            } catch (err) {
-                createErr.append(banner(err));
-            }
-        } },
-            el('div', { class: 'field' },
-                el('label', { for: 'agent-name' }, 'Name'), nameInput),
-            el('div', { class: 'field' },
-                el('label', { for: 'agent-grants' }, 'Proxy grants'), grantsInput),
-            el('div', { class: 'action-bar' },
-                el('div', { class: 'actions' },
-                    el('button', { type: 'submit' }, 'Create')))));
+            el('div', { class: 'field' }, el('label', { for: 'token-label' }, 'Label'), tokenLabelInput),
+            el('div', { class: 'field' }, el('label', { for: 'token-tier' }, 'Cap'), tokenTierSelect),
+            el('div', { class: 'field' }, el('label', { for: 'token-expires' }, 'Expires (days)'), tokenExpiresInput),
+            el('div', { class: 'action-bar' }, el('div', { class: 'actions' },
+                el('button', { type: 'submit' }, 'Mint token')))));
 
     append(view, [
-        crumbs(['Admin', '#/admin'], [accountName]),
-        el('div', { class: 'page-header' }, el('h1', {}, accountName)),
+        crumbs(['Principals', '#/admin'], [name]),
+        el('div', { class: 'page-header' }, el('h1', {}, name), stateBadge(p.state)),
         failure,
         tokenDisplay,
-        el('div', { class: 'split' }, details, el('div', {}, tokensPanel, agentsPanel, createForm)),
+        el('div', { class: 'split' },
+            el('div', {}, details, effective, tokensPanel),
+            editor),
     ]);
 }
 
-/* Read-only plus one destructive button, and the asymmetry is the API's, not
- * this screen's: creating an account and minting a token stay in the `accounts`
- * CLI, because an account that can create accounts through the API is one XSS
- * away from being every account. Revocation only ever removes access, so the
- * worst it can be turned into is signing people out.
- *
- * No row checkboxes and no toolbar, for a different reason than Services had.
- * There the API offered no write at all. Here it does -- but Revoke is not a
- * delete of the row, and the checkbox column means "these rows" on five other
- * screens where the button under it removes them. The counters go to zero and
- * the account stays. Revoke also has a per-row availability that a toolbar
- * button cannot express: an account with no sessions and no grants has nothing
- * to revoke, and the button says so by being disabled rather than by being a
- * no-op somebody has to press to discover.
- */
-async function screenAdmin(view) {
-    const { items } = await api('/accounts');
+async function newPrincipal(view) {
+    const parentDefault = me.effective_tier >= 4 ? '' : me.name;
+    const nameInput = el('input', { type: 'text', id: 'p-name', required: true, placeholder: 'name' });
+    const kindSelect = el('select', { id: 'p-kind' },
+        el('option', { value: 'agent' }, 'agent'),
+        me.effective_tier >= 4 ? el('option', { value: 'human' }, 'human') : null);
+    const parentInput = el('input', { type: 'text', id: 'p-parent', value: parentDefault,
+        placeholder: me.effective_tier >= 4 ? 'blank = root' : '' });
+    const descInput = el('input', { type: 'text', id: 'p-desc', placeholder: 'description' });
+    const head = el('div', { class: 'panel' },
+        el('h2', {}, 'Identity'),
+        el('div', { class: 'field' }, el('label', { for: 'p-name' }, 'Name'), nameInput),
+        el('div', { class: 'field' }, el('label', { for: 'p-kind' }, 'Kind'), kindSelect),
+        el('div', { class: 'field' }, el('label', { for: 'p-parent' }, 'Parent (sponsor)'), parentInput),
+        el('div', { class: 'field' }, el('label', { for: 'p-desc' }, 'Description'), descInput));
+    const seed = { max_tier: 2, repo_scope: me.repo_scope, vault_scope: null, proxy_grants: [],
+        federation_scope: null, limits: { concurrent_sessions: 1 }, rate_limit_per_min: null };
+    const form = grantForm(seed, null, async (body) => {
+        const created = await api('/principals', { method: 'POST', json: {
+            name: nameInput.value.trim(), kind: kindSelect.value,
+            parent: parentInput.value.trim() || null, description: descInput.value.trim() || null,
+            ...body,
+        } });
+        go('#/admin/' + encodeURIComponent(created.name));
+    }, { title: 'Grant', submitLabel: 'Create principal' });
+    append(view, [
+        crumbs(['Principals', '#/admin'], ['New']),
+        el('div', { class: 'page-header' }, el('h1', {}, 'New principal')),
+        el('div', { class: 'split' }, form, head),
+    ]);
+}
 
-    actionBar(view, 'Admin', {
-        desc: 'Accounts are created and tokens minted with the accounts CLI. '
-            + 'This screen can only revoke \u2014 it signs an account out '
-            + 'everywhere, and leaves its credentials intact.',
-        search: 'Search accounts by name',
+// ---------------------------------------------------------------------------
+// enrolment
+// ---------------------------------------------------------------------------
+//
+// spec/agent-auth-plane/08 §3. Codes are minted here and shown once; the
+// registrant posts one to /enrol and lands in the Pending tab, where a
+// sponsor approves with edits or rejects with a reason. Approval issues no
+// token: the registrant claims its own.
+
+async function screenEnrolment(view) {
+    const tab = hashQuery().get('tab') || 'codes';
+    actionBar(view, 'Enrolment', {
+        desc: 'An agent enrols with a code a sponsor minted. The code carries the widest grant the agent '
+            + 'may ask for; approval is a person’s act; the token is claimed by the agent, once.',
     });
+    view.append(pageTabs([
+        { id: 'codes',   label: 'Codes',   href: '#/enrolment' },
+        { id: 'pending', label: 'Pending', href: '#/enrolment?tab=pending' },
+    ], tab));
+    if (tab === 'pending') return enrolmentPending(view);
+    return enrolmentCodes(view);
+}
 
-    view.append(table([
-        { label: 'Account', sortable: true, sorted: true },
-        { label: 'Tier', sortable: true },
-        { label: 'Scope', sortable: true },
-        { label: 'Credentials', sortable: true },
-        { label: 'Sessions', sortable: true },
-        { label: 'Grants', sortable: true },
-        { label: 'Last used', sortable: true },
-        // The button's column. Unlabelled and unsortable: there is no value in
-        // it to order by, and a header over a column of buttons would be
-        // naming the action twice.
-        '',
-    ], items.map((a) => {
-        const tierCell = el('td', {}, 'Tier ' + a.max_tier);
-        const canRevoke = a.max_tier > 1;
-        const revoke = el('button', {
-            type: 'button', class: canRevoke ? 'secondary' : 'danger-fill',
-            onclick: async () => {
-                if (a.max_tier > 1) {
-                    if (!window.confirm(
-                        `Revoke ${a.name}?\n\nAccess drops to Tier 1 (read-only). Can be restored.`
-                    )) return;
-                    revoke.disabled = true;
-                    await api('/accounts/' + encodeURIComponent(a.name), {
-                        method: 'PATCH', json: { max_tier: 1 },
-                    });
-                    a.max_tier = 1;
-                    tierCell.textContent = 'Tier 1';
-                    revoke.textContent = 'Delete';
-                    revoke.className = 'danger-fill';
-                    revoke.disabled = false;
-                } else {
-                    if (!window.confirm(`Permanently delete ${a.name}?`)) return;
-                    revoke.disabled = true;
-                    await api('/accounts/' + encodeURIComponent(a.name), { method: 'DELETE' });
-                    if (a.name === me.name) return showSignin('Signed out: account deleted.');
-                    accountRow.remove();
-                }
-            },
-        }, canRevoke ? 'Revoke' : 'Delete');
-        const accountRow = el('tr', {},
-            // `avatar`, not the section glyph every other list passes. On those
-            // the section glyph is a picture of what is in the row -- a folder
-            // for a repository, a calendar for a schedule -- and admin's is a
-            // shield with a tick in it, which on a row of accounts reads as a
-            // permission rather than as a picture. Rendered, all three rows wore
-            // it, two of them over the word "administrator" and the third over
-            // nothing, and the account with the fewest rights was decorated with
-            // the mark of the most. Only the screenshot showed it.
-            el('td', {}, cellName('avatar',
-                el('a', { href: '#/admin/' + encodeURIComponent(a.name) }, a.name),
-                [a.is_admin ? 'administrator' : null,
-                 a.disabled ? 'disabled' : null].filter(Boolean).join(' \u00b7 ')
-                || null)),
-            tierCell,
-            // Since migration 013 this is always an array: `*` is every
-            // repository and prints as itself. The empty case is spelled out
-            // rather than left blank, because an empty cell reads as missing
-            // data and this one means "no repositories at all".
-            el('td', {}, a.repo_scope.join(', ') || 'none'),
-            // What kind, never how much: the API returns booleans because it
-            // stores sha256(token) precisely so it cannot give the token back,
-            // and a prefix would undo that.
-            el('td', {}, [a.has_token ? 'token' : null,
-                          a.has_password ? 'password' : null]
-                         .filter(Boolean).join(' + ')
-                || el('span', { class: 'hint' }, '\u2014')),
-            // Numbers, not strings, and 0 is the common value here: append()
-            // drops null/undefined/false and nothing else, so a zero count
-            // renders rather than emptying the cell.
-            el('td', {}, a.sessions),
-            el('td', {}, a.grants),
-            el('td', {}, when(a.last_used_at)),
-            el('td', {}, revoke));
-        return accountRow;
-    })));
+async function enrolmentCodes(view) {
+    const { items } = await api('/enrolment/codes');
+    const failure = el('div', {});
+    const codeDisplay = el('div', {});
 
-    view.append(pagerBar(items.length));
-    mountTable(view);
+    function codeRow(c) {
+        const revokeBtn = el('button', { type: 'button', class: 'secondary', onclick: async () => {
+            if (!window.confirm('Revoke enrolment code ' + (c.label || c.id) + '?')) return;
+            try { await api('/enrolment/codes/' + c.id, { method: 'DELETE' }); route(); }
+            catch (err) { failure.append(banner(err)); }
+        } }, 'Revoke');
+        return el('tr', {},
+            el('td', {}, cellName('auth-services', el('span', {}, c.label || '#' + c.id),
+                'template tier ' + c.template.max_tier + (c.auto_approve ? ' · auto-approve' : ''))),
+            el('td', {}, c.parent),
+            el('td', {}, c.uses + ' / ' + c.max_uses),
+            el('td', {}, when(c.expires_at)),
+            el('td', {}, c.live ? el('span', { class: 'badge enabled' }, 'live')
+                : el('span', { class: 'badge cancelled' }, c.revoked_at ? 'revoked' : 'spent')),
+            el('td', {}, c.live ? revokeBtn : null));
+    }
+
+    const seed = { max_tier: 2, repo_scope: me.repo_scope, vault_scope: null, proxy_grants: [],
+        federation_scope: null, limits: { concurrent_sessions: 1 }, rate_limit_per_min: null };
+    const labelInput = el('input', { type: 'text', id: 'code-label', placeholder: 'e.g. research-drones' });
+    const usesInput = el('input', { type: 'number', id: 'code-uses', value: '1', min: '1' });
+    const hoursInput = el('input', { type: 'number', id: 'code-hours', value: '72', min: '1' });
+    const autoInput = el('input', { type: 'checkbox', id: 'code-auto' });
+    const parentInput = el('input', { type: 'text', id: 'code-parent', value: me.name });
+    const form = grantForm(seed, null, async (body) => {
+        const created = await api('/enrolment/codes', { method: 'POST', json: {
+            template: body,
+            label: labelInput.value.trim() || null,
+            max_uses: parseInt(usesInput.value, 10) || 1,
+            expires_in_hours: parseInt(hoursInput.value, 10) || 72,
+            auto_approve: autoInput.checked,
+            parent: parentInput.value.trim() || null,
+        } });
+        clear(codeDisplay);
+        codeDisplay.append(el('div', { class: 'panel' },
+            el('h2', {}, 'Enrolment code — ' + (created.label || '#' + created.id)),
+            el('p', { class: 'hint' }, 'Shown once. Hand it to the agent’s operator; the agent posts it to /enrol.'),
+            el('pre', { id: 'code-value' }, created.code),
+            el('pre', {}, 'curl -X POST ' + location.origin + '/enrol -H "content-type: application/json" '
+                + '-d \'{"code":"<code>","name":"<agent-name>","metadata":{"model":"...","host":"..."}}\''),
+            el('button', { type: 'button', class: 'secondary', onclick: () => route() }, 'Done')));
+        view.scrollIntoView();
+    }, { title: 'Template (the widest grant the agent may ask for)', submitLabel: 'Mint code', maxTier: 3 });
+    const meta = el('div', { class: 'panel' },
+        el('h2', {}, 'Code'),
+        el('div', { class: 'field' }, el('label', { for: 'code-label' }, 'Label'), labelInput),
+        el('div', { class: 'field' }, el('label', { for: 'code-parent' }, 'Sponsor (parent)'), parentInput),
+        el('div', { class: 'field' }, el('label', { for: 'code-uses' }, 'Max uses'), usesInput),
+        el('div', { class: 'field' }, el('label', { for: 'code-hours' }, 'Expires (hours)'), hoursInput),
+        me.effective_tier >= 4
+            ? el('div', { class: 'field' }, el('div', { class: 'check' }, autoInput,
+                el('label', { for: 'code-auto' }, 'Auto-approve (tier 4): the agent is active on enrolment and gets its token at once')))
+            : null);
+
+    append(view, [
+        failure, codeDisplay,
+        el('div', { class: 'panel' },
+            el('h2', {}, 'Codes'),
+            items.length
+                ? table(['Code', 'Sponsor', 'Uses', 'Expires', 'State', ''], items.map(codeRow))
+                : el('p', { class: 'hint' }, 'No enrolment codes yet.')),
+        el('div', { class: 'split' }, form, meta),
+    ]);
+}
+
+async function enrolmentPending(view) {
+    const { items } = await api('/enrolment/pending');
+    const failure = el('div', {});
+    function row(p) {
+        const approve = el('button', { type: 'button', onclick: async () => {
+            approve.disabled = true;
+            try { await api('/principals/' + encodeURIComponent(p.name) + '/approve', { method: 'POST', json: {} }); route(); }
+            catch (err) { failure.append(banner(err)); approve.disabled = false; }
+        } }, 'Approve');
+        const reject = el('button', { type: 'button', class: 'secondary', onclick: async () => {
+            const reason = window.prompt('Reject ' + p.name + '. Reason:');
+            if (reason == null || !reason.trim()) return;
+            try { await api('/principals/' + encodeURIComponent(p.name) + '/reject', { method: 'POST', json: { reason } }); route(); }
+            catch (err) { failure.append(banner(err)); }
+        } }, 'Reject');
+        const diff = p.requested && p.template
+            && JSON.stringify(p.requested.repo_scope) === JSON.stringify(p.template.repo_scope)
+            && p.requested.max_tier === p.template.max_tier;
+        return el('tr', {},
+            el('td', {}, cellName('engine', el('a', { href: '#/admin/' + encodeURIComponent(p.name) }, p.name),
+                Object.entries(p.metadata || {}).map(([k, v]) => k + ': ' + v).join(' · ') || null)),
+            el('td', {}, p.parent),
+            el('td', {}, 'Tier ' + p.max_tier + ' · ' + (p.repo_scope.join(', ') || 'no repos')
+                + (diff ? ' (as template)' : ' (narrower than template)')),
+            el('td', {}, when(p.created_at)),
+            el('td', {}, approve, ' ', reject));
+    }
+    append(view, [
+        failure,
+        items.length
+            ? table(['Registrant', 'Sponsor', 'Requested', 'Enrolled', ''], items.map(row))
+            : el('div', { class: 'empty-state' }, el('h3', {}, 'Nothing pending'),
+                el('p', {}, 'Agents that enrol with a code that does not auto-approve appear here.')),
+    ]);
 }
 
 // ---------------------------------------------------------------------------

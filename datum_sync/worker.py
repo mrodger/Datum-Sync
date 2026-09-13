@@ -22,12 +22,14 @@ import contextlib
 import json
 import signal
 import sys
+import time
 import uuid
 from typing import Any
 
 import asyncpg
 
 from datum_sync import (
+    lifecycle,
     automations, config, connections, crypto, jobs, schedules, services, uploads,
 )
 from datum_sync.runner import Runner
@@ -48,6 +50,8 @@ class Worker:
         self.wake = asyncio.Event()
         self._active: dict[uuid.UUID, Runner] = {}
         self._pool: asyncpg.Pool | None = None
+        # Far enough in the past that the first poll runs the housekeeping.
+        self._last_lifecycle = time.monotonic() - config.LIFECYCLE_TICK_SECONDS
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -88,6 +92,7 @@ class Worker:
         while not self.stopping.is_set():
             await self._tick_schedules()
             await self._tick_automations()
+            await self._tick_lifecycle()
 
             while len(running) < self.concurrency:
                 job = await self._claim()
@@ -164,6 +169,28 @@ class Worker:
             else:
                 print(f"schedule {entry['schedule']!r} submitted job "
                       f"{entry['job_id']}", flush=True)
+
+    async def _tick_lifecycle(self) -> None:
+        """Lifecycle housekeeping, at most once per LIFECYCLE_TICK_SECONDS.
+
+        Same poll, same reasoning as the schedule tick: no timer, no second
+        process, and a failure is printed rather than fatal. Once a day is
+        the design; the interval is a setting so the tests do not wait one.
+        """
+        assert self._pool is not None
+        now = time.monotonic()
+        if now - self._last_lifecycle < config.LIFECYCLE_TICK_SECONDS:
+            return
+        self._last_lifecycle = now
+        try:
+            async with self._pool.acquire() as conn:
+                done = await lifecycle.daily(conn)
+        except Exception as exc:  # noqa: BLE001 - housekeeping is never fatal
+            print(f"lifecycle tick failed: {type(exc).__name__}: {exc}", flush=True)
+            return
+        if done["expired"] or done["restricted"]:
+            print(f"lifecycle: expired {done['expired']}, restricted {done['restricted']}",
+                  flush=True)
 
     async def _tick_automations(self) -> None:
         """Consider every finished job no automation has seen yet.

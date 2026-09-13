@@ -40,7 +40,10 @@ NAV = [
     ('resources',      'Resources',               'file-text',              ['hard-drives', 'files']),
     ('analytics',      'Analytics',               'chart-bar',              ['chart-line', 'presentation-chart']),
     ('services',       'Services',                'globe',                  ['globe-hemisphere-west', 'cloud']),
-    ('admin',          'Admin',                   'shield-check',           ['gear', 'user-gear']),
+    ('admin',          'Principals',              'shield-check',           ['gear', 'user-gear']),
+    # Regenerating picks up the real glyph; until then icons.js carries the
+    # `create` path under this key (see spec/agent-auth-plane/_report-WP2.md).
+    ('enrolment',      'Enrolment',               'user-plus',              ['user-circle-plus', 'plus']),
     ('auth-services',  'Authentication Services', 'key',                    ['fingerprint', 'lock-key']),
     ('system-config',  'System Configuration',    'gear-six',               ['sliders', 'wrench']),
     ('queue-control',  'Queue Control',           'list-numbers',           ['queue', 'traffic-signal']),

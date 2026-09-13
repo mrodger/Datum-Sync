@@ -1438,7 +1438,7 @@ CASES = [
         "UI-025",
         "the router's refusal of the admin sections",
         "datum_sync/static-v2/app.js",
-        "const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);",
+        "const denied = SECTIONS.some((s) => s.id === section && (s.adminOnly || s.minTier) && sectionDenied(s));",
         "const denied = false;",
         "tests/test_ui.py::"
         "test_the_v2_admin_group_is_refused_by_the_router_not_just_hidden",
@@ -1450,8 +1450,8 @@ CASES = [
         "UI-026",
         "reading the admin sections off SECTIONS rather than naming one",
         "datum_sync/static-v2/app.js",
-        "const denied = !me.is_admin && SECTIONS.some((s) => s.id === section && s.adminOnly);",
-        "const denied = !me.is_admin && section === 'admin';",
+        "const denied = SECTIONS.some((s) => s.id === section && (s.adminOnly || s.minTier) && sectionDenied(s));",
+        "const denied = section === 'admin' && !me.is_admin;",
         "tests/test_ui.py::"
         "test_the_v2_admin_group_is_refused_by_the_router_not_just_hidden",
     ),
@@ -2277,6 +2277,83 @@ CASES = [
         "            auth.require_tier(principal, 3, \"vault_write\")\n",
         "            pass\n",
         "tests/test_tier.py::test_vault_write_needs_tier_3",
+    ),
+    (
+        "PRIN-008",
+        "a restricted principal is forced to tier 1",
+        "datum_sync/auth.py",
+        "    if state == \"restricted\":\n"
+        "        authority = grants.restricted(authority)\n",
+        "    if False:\n"
+        "        authority = grants.restricted(authority)\n",
+        "tests/test_lifecycle.py::test_restricted_is_forced_to_tier_1",
+    ),
+    (
+        "PRIN-009",
+        "pending, retired and rejected do not authenticate",
+        "datum_sync/auth.py",
+        "    if state in (\"pending\", \"retired\", \"rejected\"):\n",
+        "    if False:\n",
+        "tests/test_lifecycle.py::test_non_active_states_do_not_authenticate",
+    ),
+    (
+        "PRIN-010",
+        "restore puts back the stored snapshot, not the live row",
+        "datum_sync/lifecycle.py",
+        "    stored = auth.json_of(row, \"restricted_from\")\n",
+        "    stored = auth._row_authority(row)\n",
+        "tests/test_lifecycle.py::test_restore_puts_back_exactly_what_was_stored",
+    ),
+    (
+        "PRIN-011",
+        "retire revokes every credential",
+        "datum_sync/lifecycle.py",
+        "    await _revoke_everything(conn, row[\"account_id\"])\n"
+        "    await _set_state(conn, row[\"account_id\"], \"retired\")\n",
+        "    await _set_state(conn, row[\"account_id\"], \"retired\")\n",
+        "tests/test_lifecycle.py::test_retire_revokes_every_credential_and_keeps_the_row",
+    ),
+    (
+        "ENRL-001",
+        "an enrolment code is counted per use and expires",
+        "datum_sync/enrol.py",
+        "                and crow[\"uses\"] < crow[\"max_uses\"]\n",
+        "                and True\n",
+        "tests/test_enrol.py::test_a_code_is_counted_and_expires",
+    ),
+    (
+        "ENRL-002",
+        "the requested authority must narrow the code's template",
+        "datum_sync/enrol.py",
+        "            wider = grants.narrows(requested, template)\n",
+        "            wider = []\n",
+        "tests/test_enrol.py::test_the_request_must_narrow_the_template",
+    ),
+    (
+        "ENRL-003",
+        "a claim code is single-use",
+        "datum_sync/enrol.py",
+        "            if row is None or row[\"claimed_at\"] is not None or \\\n",
+        "            if row is None or \\\n",
+        "tests/test_enrol.py::test_a_claim_code_is_single_use_and_expires",
+    ),
+    (
+        "ENRL-004",
+        "enrolment is rate-limited per code",
+        "datum_sync/enrol.py",
+        "                auth._record_failure(_lockout_key(code_hash), now)\n",
+        "                pass\n",
+        "tests/test_enrol.py::test_enrol_is_rate_limited_per_code",
+    ),
+    (
+        "ENRL-005",
+        "auto-approving codes need tier 4 to mint",
+        "datum_sync/enrol.py",
+        "    if auto_approve:\n"
+        "        auth.require_tier(caller, 4, \"minting an auto-approving enrolment code\")\n",
+        "    if False:\n"
+        "        auth.require_tier(caller, 4, \"minting an auto-approving enrolment code\")\n",
+        "tests/test_enrol.py::test_auto_approve_codes_need_tier_4",
     ),
 ]
 
