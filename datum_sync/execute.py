@@ -129,6 +129,7 @@ async def run_sync(
     params: dict[str, Any],
     service: str,
     submitted_by: str | None = None,
+    principal_id: int | None = None,
 ) -> tuple[asyncpg.Record, Manifest]:
     """Submit and wait. Shared by /stream, /download and MCP tools/call."""
     async with db.pool().acquire() as conn:
@@ -139,7 +140,7 @@ async def run_sync(
                 "NO_WORKER",
                 "no worker is running; the job would queue indefinitely",
             )
-        job_id = await jobs.submit(conn, repo, ws, params, submitted_by=submitted_by)
+        job_id = await jobs.submit(conn, repo, ws, params, submitted_by=submitted_by, principal_id=principal_id)
 
     row = await await_job(job_id, manifest.timeout_seconds + SYNC_MARGIN_SECONDS)
     if row["status"] != "complete":

@@ -502,12 +502,16 @@ async def _collect(generator) -> list[str]:
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_the_job_listing_returns_a_submitted_job(client, workspace):
+async def test_the_job_listing_returns_a_submitted_job(client, workspace, db):
     repo, ws = workspace
     submit = await client.post(
         f"/rest/v1/transformations/submit/{repo}/{ws}", json={"params": {"WHO": "x"}}
     )
     job_id = submit.json()["id"]
+    # Guard: JOB-006. Authenticated submissions persist a stable owner id.
+    owner=await db.fetchrow("""SELECT j.submitted_by,j.portal_principal_id,s.id AS expected
+        FROM jobs j JOIN service_accounts s ON s.name=j.submitted_by WHERE j.id=$1""",job_id)
+    assert owner["portal_principal_id"]==owner["expected"]
 
     r = await client.get("/rest/v1/transformations/jobs")
     assert r.status_code == 200

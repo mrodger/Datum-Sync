@@ -1,0 +1,53 @@
+/* Auth-only components layered on the supplied static-v2/style.css.
+   Desktop shell, typography, controls, tables and nav geometry remain source-owned. */
+@font-face{font-family:'DM Sans';src:url('/assets/body.woff2') format('woff2');font-display:swap}
+@font-face{font-family:'Space Grotesk';src:url('/assets/heading.woff2') format('woff2');font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('/assets/code.woff2') format('woff2');font-display:swap}
+.view,.dash-main,.dash-rail,.lab-grid>div{min-width:0}
+.view small{display:block;color:var(--muted);font-size:.75rem}
+.muted{color:var(--muted)}
+.auth-panel{margin-bottom:1.25rem}
+.card-header,.dialog-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.8rem}
+.card-header h3{margin:0}
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:.35rem;max-width:100%}
+.table-wrap table{margin:0}
+.row-title{display:flex;align-items:center;gap:.65rem}
+.agent-icon{display:inline-flex;color:var(--link);flex:none}
+.scope-chips,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:.45rem}
+.scope-chips code{background:var(--surface);border:1px solid var(--border);padding:.1rem .4rem;border-radius:.2rem}
+.auth-counters{display:grid;gap:.5rem}
+.gateway-address{display:block;overflow-wrap:anywhere;margin:.75rem 0}
+.empty{padding:1.5rem;text-align:center;color:var(--muted)}
+.empty p{margin:.5rem 0}
+.empty-symbol{font-size:1.5rem}
+.lab-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1.25rem}
+.field input,.field select,.field textarea{display:block;width:100%;margin-top:.3rem}
+.field label{font-size:.82rem}
+.notice{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--navy);padding:.75rem;margin:.85rem 0;font-size:.82rem}
+.notice.amber{border-left-color:var(--amber)}
+.approval-card{display:flex;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border)}
+.approval-card:last-child{border-bottom:0}
+.approval-main{min-width:0;flex:1}
+.approval-main p{font-size:.85rem;color:var(--muted)}
+.approval-main pre{max-height:18rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.approval-main .actions{margin-top:1rem}
+.result,.token-box{background:var(--surface);border:1px solid var(--border);padding:.8rem;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:.78rem;max-height:30rem;overflow:auto}
+.error-result{border-color:var(--failed)}
+.result-label{display:flex;justify-content:space-between;gap:.5rem;font-size:.85rem;margin:.6rem 0}
+.settings-list{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:.8rem;font-size:.85rem}
+.settings-list dt{color:var(--muted)}
+.settings-list dd{margin:0;overflow-wrap:anywhere}
+button.quiet{background:transparent;color:var(--link);border-color:var(--border)}
+button.tile{height:50px}
+button.small{font-size:.78rem}
+button:disabled{opacity:1}
+.dialog-footer{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:.5rem;margin-top:1.5rem}
+dialog{--bg:#f5f5f5;--panel:#fff;--surface:#f9f9f9;--border:#e2e2e2;--text:#0d0d0c;--muted:#5e5e5e;--link:#1D3A5C;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:.4rem;padding:1.5rem;width:min(38rem,calc(100vw - 2rem));max-height:90vh;overflow:auto}
+dialog::backdrop{background:rgba(15,25,35,.6)}
+.dialog-head button{background:transparent;border-color:var(--border);color:var(--text)}
+dialog .muted{font-size:.85rem}
+dialog .field select,dialog textarea{width:100%}
+#toast{position:fixed;bottom:1.5rem;right:1.5rem;max-width:min(28rem,calc(100vw - 3rem));background:var(--panel);color:var(--text);border:1px solid var(--border);border-left:4px solid var(--complete);padding:.8rem 1rem;border-radius:.35rem;font-size:.85rem;z-index:100}
+#toast.bad{border-left-color:var(--failed)}
+@media(max-width:1000px){.lab-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:700px){.view{padding:16px}.topbar{padding:0 .5rem}.engines{font-size:.65rem}.tb-right{gap:.2rem}.tb-icon[aria-label=Help]{display:none}.page-head{flex-wrap:wrap}.settings-list{grid-template-columns:minmax(0,1fr)}.settings-list dd{margin-bottom:.5rem}.toolbar{flex-wrap:wrap}.table-wrap{max-width:100%}h1{overflow-wrap:anywhere}}

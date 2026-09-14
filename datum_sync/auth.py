@@ -656,7 +656,10 @@ async def authenticate_password(
         # verify_password is called even when the name is unknown, so a wrong
         # name and a wrong password cost the same and the form does not
         # enumerate accounts.
-        ok = verify_password(stored, password)
+        retry_after = _locked_for(name, time.monotonic())
+        if retry_after:
+            raise TooManyAttempts(retry_after)
+        ok = await asyncio.to_thread(verify_password, stored, password)
 
     if not ok or row["disabled"]:
         # A disabled account counts as a failure: it is still a name whose

@@ -265,11 +265,27 @@ async def only_test_automations(db):
 
 @pytest_asyncio.fixture
 async def automation(db, only_test_automations):
+    # The automation targets Testing/slow. A clean test DB must not depend on
+    # someone having published that workspace during an earlier manual demo.
+    from datum_sync import config
+    repo_id = await db.fetchval("SELECT id FROM repositories WHERE name='Testing'")
+    created_repo = repo_id is None
+    if created_repo:
+        repo_id = await db.fetchval("INSERT INTO repositories(name,path) VALUES('Testing',$1) RETURNING id", str(config.REPOSITORIES_PATH / 'Testing'))
+    existing = await db.fetchval("SELECT id FROM workspaces WHERE repository_id=$1 AND name='slow'", repo_id)
+    fixture_workspace = None
+    if existing is None:
+        manifest = (config.REPOSITORIES_PATH / 'Testing/slow/manifest.json').read_text()
+        fixture_workspace = await db.fetchval("INSERT INTO workspaces(repository_id,name,manifest) VALUES($1,'slow',$2) RETURNING id", repo_id, manifest)
     await db.execute("DELETE FROM automations WHERE name = '_pytest-auto'")
     row = await automations.create(db, GOOD, created_by="_pytest")
     yield row
     await db.execute("DELETE FROM jobs WHERE triggered_by = 'automation:_pytest-auto'")
     await db.execute("DELETE FROM automations WHERE id = $1", row["id"])
+    if fixture_workspace:
+        await db.execute("DELETE FROM workspaces WHERE id=$1", fixture_workspace)
+    if created_repo:
+        await db.execute("DELETE FROM repositories WHERE id=$1", repo_id)
 
 
 async def _finished(db, *, workspace="chatty", status="complete", triggered_by=None,

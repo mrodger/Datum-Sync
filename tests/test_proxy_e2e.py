@@ -175,9 +175,10 @@ async def test_full_proxy_via_mcp(client, setup, db, monkeypatch):
     # Patch httpx.AsyncClient only inside the proxy module
     fake = _FakeUpstreamClient()
 
-    monkeypatch.setattr(proxy, "httpx", type("_httpx", (), {
-        "AsyncClient": lambda *a, **kw: fake,
-    }))
+    async def fake_fetch(method, url, **kwargs):
+        result = await fake.request(method, url, **kwargs)
+        return result.status_code, dict(result.headers), result.content, False
+    monkeypatch.setattr(proxy.egress, "fetch", fake_fetch)
 
     # Bypass DNS resolution (api.example.com won't resolve in CI).
     # The SSRF guard is tested thoroughly in test_proxy.py — here we

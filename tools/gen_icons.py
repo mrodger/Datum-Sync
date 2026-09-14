@@ -49,6 +49,16 @@ NAV = [
     ('migration',      'Backup & Restore',        'floppy-disk',            ['archive', 'arrows-clockwise']),
 ]
 
+PERSONAS = [
+    ('kanban',                  'Manager agent',      'kanban',                  []),
+    ('terminal-window',         'Developer agent',    'terminal-window',         []),
+    ('magnifying-glass',        'Researcher agent',   'magnifying-glass',        []),
+    ('pen-nib',                 'Designer agent',     'pen-nib',                 []),
+    ('shield-check',            'Security agent',     'shield-check',            []),
+    ('globe-hemisphere-west',   'GIS Analyst agent',  'globe-hemisphere-west',   []),
+    ('flow-arrow',              'Data Enginer agent', 'flow-arrow',              []),
+]
+
 CHROME = [
     ('search',      'Search field',        'magnifying-glass',    []),
     ('columns',     'Column chooser',      'columns',             ['table', 'sliders-horizontal']),
@@ -100,7 +110,7 @@ def path_of(name, weight):
 def main():
     ensure_src()
     missing = []
-    for _, _, prim, alts in NAV + CHROME:
+    for _, _, prim, alts in NAV + CHROME + PERSONAS:
         for n in [prim] + alts:
             for w in WEIGHTS:
                 if path_of(n, w) is None:
@@ -110,7 +120,7 @@ def main():
 
     # ---- vendored map (regular weight) -----------------------------------
     icons = {}
-    for role, _, prim, _ in NAV + CHROME:
+    for role, _, prim, _ in NAV + CHROME + PERSONAS:
         icons[role] = path_of(prim, 'regular')
     OUT.joinpath('icons.js').write_text(
         '/* Phosphor Icons (MIT) — @phosphor-icons/core 2.1.1, "regular" weight.\n'
@@ -161,6 +171,7 @@ def main():
 
     section('Sidebar sections (21)', NAV)
     section('UI chrome (30)', CHROME)
+    section('Persona agent labels (7)', PERSONAS)
 
     html = f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

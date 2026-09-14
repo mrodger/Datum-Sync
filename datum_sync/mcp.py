@@ -560,7 +560,7 @@ async def _tools_call(
     submitted = {k: _as_param(v) for k, v in arguments.items()}
 
     try:
-        row, _ = await execute.run_sync(repo, ws, submitted, MCP_SERVICE)
+        row, _ = await execute.run_sync(repo, ws, submitted, MCP_SERVICE, principal.name, principal.account_id)
     except ApiError as exc:
         # A workspace that fails is a *tool* error, not a protocol error: the
         # call was well-formed and the model is the one that needs to read the

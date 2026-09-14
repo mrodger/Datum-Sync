@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from datum_sync import audit, connections, crypto, db
+from datum_sync import audit, connections, crypto, db, egress
 from datum_sync.auth import Principal
 from datum_sync.errors import ApiError
 
@@ -238,70 +238,29 @@ async def proxy_request(
         out_params = dict(query_params or {})
         inject_auth(config_data, secret_data, out_headers, out_params)
 
-        # 7. Execute with manual redirect handling (SSRF re-validation).
-        content_body = (
-            json.dumps(body).encode() if body is not None else None
+    # Release the database lease before waiting on the upstream. Egress pins
+    # the actual socket address and refuses redirects before forwarding secrets.
+    out_headers = {k: v for k, v in out_headers.items() if k.lower() not in
+                   ("host", "cookie", "connection", "proxy-authorization", "transfer-encoding", "content-length")}
+    content_body = json.dumps(body).encode() if body is not None else None
+    try:
+        status, response_headers, raw, truncated = await egress.fetch(
+            method, upstream_url, headers=out_headers, params=out_params,
+            content=content_body, limit=MAX_RESPONSE_BYTES, timeout=PROXY_TIMEOUT_SECONDS,
         )
-        current_url = upstream_url
-        current_method = method
-        response = None
-
-        async with httpx.AsyncClient(
-            timeout=PROXY_TIMEOUT_SECONDS,
-            follow_redirects=False,
-            max_redirects=0,
-        ) as client:
-            for hop in range(MAX_REDIRECTS + 1):
-                response = await client.request(
-                    current_method,
-                    current_url,
-                    headers=out_headers if hop == 0 else _strip_auth(out_headers),
-                    params=out_params if hop == 0 else None,
-                    content=content_body if hop == 0 else None,
-                )
-                if not response.is_redirect:
-                    break
-                location = response.headers.get("location")
-                if not location:
-                    raise ApiError(
-                        502, "REDIRECT_NO_LOCATION",
-                        "upstream redirect without Location header",
-                    )
-                current_url = validate_upstream_url(
-                    str(response.url.join(location))
-                )
-                current_method = "GET"
-            else:
-                raise ApiError(502, "TOO_MANY_REDIRECTS", "upstream redirect loop")
-
-        # 8. Audit log.
-        await _audit_log(
-            conn, principal, connection_name, method, path,
-            response.status_code, trace,
-        )
-
-    # 9. Build MCP result.
-    content_type = response.headers.get("content-type", "")
-    is_text = any(
-        t in content_type
-        for t in ("text/", "application/json", "application/xml", "application/javascript")
-    )
-
-    raw = response.content
-    truncated = len(raw) > MAX_RESPONSE_BYTES
-    if truncated:
-        raw = raw[:MAX_RESPONSE_BYTES]
-
-    if is_text:
-        text = raw.decode("utf-8", "replace")
-    else:
-        text = f"[binary response: {content_type}, {len(response.content)} bytes]"
+    except (httpx.HTTPError, TimeoutError) as exc:
+        raise ApiError(502, "UPSTREAM_FAILED", "upstream connection failed or timed out") from exc
+    async with db.pool().acquire() as conn:
+        await _audit_log(conn, principal, connection_name, method, path, status, trace)
+    content_type = response_headers.get("content-type", "")
+    is_text = any(t in content_type for t in ("text/", "application/json", "application/xml", "application/javascript"))
+    text = raw.decode("utf-8", "replace") if is_text else f"[binary response: {content_type}, {len(raw)} bytes]"
 
     return {
         "content": [{"type": "text", "text": text}],
-        "isError": response.status_code >= 400,
+        "isError": status >= 400,
         "_meta": {
-            "upstream_status": response.status_code,
+            "upstream_status": status,
             "upstream_content_type": content_type,
             "truncated": truncated,
         },
@@ -310,7 +269,7 @@ async def proxy_request(
 
 def _strip_auth(headers: dict[str, str]) -> dict[str, str]:
     """Headers without auth, for redirect hops."""
-    return {k: v for k, v in headers.items() if k.lower() != "authorization"}
+    return {k: v for k, v in headers.items() if k.lower() in {"accept", "accept-language", "user-agent"}}
 
 
 async def _audit_log(

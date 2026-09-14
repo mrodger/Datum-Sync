@@ -477,7 +477,7 @@ async def consider(conn: asyncpg.Connection, job_id) -> list[dict]:
     # -- webhooks posted and jobs submitted for work finished hours ago, which
     # is a surprise nobody can undo.
     for automation in await conn.fetch(
-        "SELECT id, name, config FROM automations "
+        "SELECT id, name, config, created_by FROM automations "
         "WHERE enabled AND created_at <= $1",
         job["completed_at"],
     ):
@@ -527,10 +527,11 @@ async def _fire(
     results = []
     ok = True
 
+    owner_id = await conn.fetchval("SELECT id FROM service_accounts WHERE name=$1", automation["created_by"])
     for action in config["actions"]:
         try:
             results.append(
-                await _perform(conn, action, context, automation["name"], job["id"])
+                await _perform(conn, action, context, automation["name"], job["id"], owner_id)
             )
         except Exception as exc:  # noqa: BLE001 - recorded per action
             # One action failing does not cancel the ones after it. A chain is
@@ -564,7 +565,7 @@ async def _fire(
 
 async def _perform(
     conn: asyncpg.Connection, action: dict, context: dict, automation_name: str,
-    trigger_job,
+    trigger_job, owner_id,
 ) -> dict:
     if action["type"] == "run_workspace":
         params = {k: render(str(v), context) for k, v in action["params"].items()}
@@ -579,6 +580,7 @@ async def _perform(
             # is what decided to create it, and is what stops the loop.
             parent_job=trigger_job,
             triggered_by=f"automation:{automation_name}",
+            principal_id=owner_id,
         )
         return {"type": "run_workspace", "ok": True, "job_id": str(new_job)}
 
