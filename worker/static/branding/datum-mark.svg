@@ -1,0 +1,14 @@
+<svg width="512" height="512" viewBox="0 0 216 216" xmlns="http://www.w3.org/2000/svg">
+<g transform="translate(108 108)">
+<circle cx="0" cy="0" r="90" fill="none" stroke="#1d3a5c" stroke-width="2.5"/>
+<ellipse cx="0" cy="0" rx="55" ry="90" fill="none" stroke="#1d3a5c" stroke-width="2" opacity="0.55"/>
+<ellipse cx="0" cy="0" rx="22" ry="90" fill="none" stroke="#1d3a5c" stroke-width="1.6" opacity="0.4"/>
+<line x1="-90" y1="0" x2="-14" y2="0" stroke="#1d3a5c" stroke-width="1.3" opacity="0.4"/>
+<line x1="14" y1="0" x2="90" y2="0" stroke="#1d3a5c" stroke-width="1.3" opacity="0.4"/>
+<circle cx="0" cy="0" r="5.5" fill="#1d3a5c"/>
+<line x1="0" y1="-90" x2="0" y2="-108" stroke="#1d3a5c" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="0" y1="90" x2="0" y2="108" stroke="#1d3a5c" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="-90" y1="0" x2="-108" y2="0" stroke="#1d3a5c" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="90" y1="0" x2="108" y2="0" stroke="#1d3a5c" stroke-width="2.5" stroke-linecap="round"/>
+</g>
+</svg>
