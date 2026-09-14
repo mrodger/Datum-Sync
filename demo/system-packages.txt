@@ -1,0 +1,13 @@
+# Private packages installed on this Ubuntu 24.04 amd64 machine.
+# Package | Version | SHA256 of cached .deb
+Package: git | Version: 1:2.43.0-1ubuntu7.3 | 099bb129f543adc4c14203334b0fa0a909f8bf038c4d56bc9cc7c774ebf78f87
+Package: libgeos-c1t64 | Version: 3.12.1-3build1 | a44761e42d8434c6140759629739148f2d6dd34de74af809404fd9becbba3b1d
+Package: libgeos3.12.1t64 | Version: 3.12.1-3build1 | 3040bab330cb02bfad385b47a448d4c4165669a928fbe19921548d33112350d7
+Package: libllvm17t64 | Version: 1:17.0.6-9ubuntu1 | 1863b5459ca4a6691f5e039e76157f074ee08b48176267642ee4dfea065f5db4
+Package: libpq5 | Version: 16.15-0ubuntu0.24.04.1 | 3f96dd36bcd7841172c1ead4965da20a193bb9ccf9a93a3f5a3ac7f56369dbb1
+Package: libproj25 | Version: 9.4.0-1build2 | d98af14c3b9db02e4216437005a36f4ecdf52b2935038f380f63969164216410
+Package: postgresql-16-postgis-3-scripts | Version: 3.4.2+dfsg-1ubuntu3 | 2aacc0cb65d24b5d68edb508981f3a6b9e8fe7fe2958dd1e3497b57171f2e3f5
+Package: postgresql-16-postgis-3 | Version: 3.4.2+dfsg-1ubuntu3 | 87228559922483be17abbe6245c736d6f6aceeaa48877b803382c32b91e324ba
+Package: postgresql-16 | Version: 16.15-0ubuntu0.24.04.1 | d60ae76fb862cd4cca7bfdcdcdcc271c5e1d75f6b7915305ce2d962735a4b666
+Package: postgresql-client-16 | Version: 16.15-0ubuntu0.24.04.1 | 4796f72e1a7270ad8c17b1ecb025cd453f692b42c10aaf89f6b476da61761eac
+Package: proj-data | Version: 9.4.0-1build2 | ea98bac78c370af5658893d6db003838e73543bec894d6d6b48047291963f213
