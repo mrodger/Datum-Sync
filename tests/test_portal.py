@@ -22,7 +22,7 @@ HASH=auth.hash_password(PASSWORD)
 
 @pytest_asyncio.fixture
 async def portal():
-    assert config.DATABASE_URL.endswith('/datum_portal_test'), 'Use local/manage.py test; never the live database.'
+    assert config.DATABASE_URL.endswith('/datum_portal_test'), 'Use demo/manage.py test; never the live database.'
     await database.init_pool()
     _attempts.clear()
     async with database.pool().acquire() as conn:
