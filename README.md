@@ -66,3 +66,17 @@ uvicorn datum_sync.api:app --host 0.0.0.0 --port 8200
 worker and has no `__main__`.
 
 Database: PostgreSQL + PostGIS on `:5435`. Apply migrations in order: `migrations/001_*.sql` → `migrations/006_*.sql`.
+
+## Agent auth plane (this branch)
+
+`prototype/agent-auth-plane` adds a loopback auth portal alongside the API:
+agent principals with enrolment and lifecycle, OAuth consent with 15-minute to
+8-hour sessions, governed MCP server registration with per-tool control,
+write-only managed upstream credentials with explicit agent grants, payload-free
+MCP flow evidence, and governed shared resources.
+
+- `datum_sync/portal.py` — the portal app (`uvicorn datum_sync.portal:app`, `:8210`); helpers in `portal_core`, `federation`, `credential_access`, `mcp_observe`, `resources`, `legacy_mcp`, `demo_mcp`, `egress`, `persona_profiles`
+- `migrations/016`–`023` — additive schema for the above
+- `worker/` — a Datum-branded federated Codex worker whose only tool route is the portal's MCP endpoint
+- `demo/` — `manage.py start` runs portal, worker, providers and a private PostgreSQL; `provision_personas.py` seeds the persona fleet
+- `docs/prototype/` — how to run and demo it; `docs/walkthrough/` — five-page product overview; `docs/review/` — the security review record

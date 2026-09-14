@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
 .venv/
 venv/
 *.egg-info/
@@ -11,6 +12,10 @@ build/
 # Environment
 .env
 *.env
+
+# Local demo stack (demo/manage.py): private PostgreSQL cluster, generated
+# provider tokens, operator sign-in, logs, pids, worker workspaces
+.runtime/
 
 # Database
 *.db
