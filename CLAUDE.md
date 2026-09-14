@@ -17,6 +17,16 @@ the Stratum VM (192.168.88.112:8201). Build order is in `spec/overview.md`.
 Four gates, all of which must pass before a step is called done:
 `pytest -q` · `python tests/break_the_guard.py` · `python tests/browser_smoke.py`
 · `python tests/flow_geometry.py` (the last two need a running server).
+
+On `prototype/agent-auth-plane` the suite also carries the portal tests
+(`tests/test_portal.py`, `test_mcp_federation*.py`, `test_credential_access.py`,
+`test_mcp_observability.py`, `test_mcp_server_registry.py`,
+`test_governed_resources.py`, `test_security_repairs.py`,
+`test_persona_profiles.py`) and the worker has its own: `pytest worker/tests`.
+`demo/manage.py test` runs both groups against a disposable database. The
+portal is a second app (`datum_sync.portal:app`, `:8210`); `demo/manage.py
+start` brings up portal, worker and the demo MCP providers together. The
+prototype's last full run on its Ubuntu host was 728 passed, 1 skipped.
 Stop the worker before running the suite — a live worker claims the tests' jobs,
 and a job left queued afterwards silently *skips* the UI tests rather than
 failing them, which looks like a clean run.

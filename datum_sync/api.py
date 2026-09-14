@@ -668,6 +668,7 @@ async def submit(
             params,
             submitted_by=caller.name,
             idempotency_key=idempotency_key,
+            principal_id=caller.account_id,
         )
     response.headers["Location"] = f"/rest/v1/transformations/jobs/id/{job_id}"
     return {"id": str(job_id), "status": "queued"}
@@ -831,6 +832,7 @@ async def resubmit_job(
             # should name the account that caused this execution.
             submitted_by=caller.name,
             parent_job=job_id,
+            principal_id=caller.account_id,
         )
     response.headers["Location"] = f"/rest/v1/transformations/jobs/id/{new_id}"
     return {"id": str(new_id), "status": "queued", "parent_job": raw_id}
@@ -1765,7 +1767,8 @@ async def data_streaming(
     """Run and return the primary output inline. Parameters come from the query."""
     auth.require_repo(caller, repo)
     row, manifest = await execute.run_sync(
-        repo, ws, dict(request.query_params), "data_streaming", caller.name
+        repo, ws, dict(request.query_params), "data_streaming", caller.name,
+        caller.account_id
     )
     primary = manifest.primary_output
     artifacts = json.loads(row["artifacts"])
@@ -1792,7 +1795,8 @@ async def data_download(
     a zip if there are several."""
     auth.require_repo(caller, repo)
     row, _ = await execute.run_sync(
-        repo, ws, dict(request.query_params), "data_download", caller.name
+        repo, ws, dict(request.query_params), "data_download", caller.name,
+        caller.account_id
     )
     artifacts = json.loads(row["artifacts"])
     if not artifacts:
@@ -1873,6 +1877,7 @@ async def data_upload(
             params,
             submitted_by=caller.name,
             idempotency_key=idempotency_key,
+            principal_id=caller.account_id,
         )
     response.headers["Location"] = f"/rest/v1/transformations/jobs/id/{job_id}"
     return {"id": str(job_id), "status": "queued", "files": received}

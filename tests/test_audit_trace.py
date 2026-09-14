@@ -196,6 +196,10 @@ class _FakeUpstream:
     async def __aexit__(self, *args):
         pass
 
+    async def fetch(self, method, url, **kwargs):
+        result = await self.request(method, url, **kwargs)
+        return result.status_code, dict(result.headers), result.content, False
+
     async def request(self, method, url, **kwargs):
         return httpx.Response(
             self.status,
@@ -208,7 +212,7 @@ class _FakeUpstream:
 @pytest_asyncio.fixture
 async def client(db, setup, monkeypatch):
     fake = _FakeUpstream()
-    monkeypatch.setattr(proxy, "httpx", type("_httpx", (), {"AsyncClient": fake}))
+    monkeypatch.setattr(proxy.egress, "fetch", fake.fetch)
     # api.example.com does not resolve; the SSRF guard has its own tests.
     monkeypatch.setattr(proxy, "validate_upstream_url", lambda url: url)
 
@@ -296,7 +300,7 @@ async def test_an_upstream_failure_is_recorded_as_an_error(client, setup, db, mo
     """A 500 from upstream is outcome='error' with the status as error_code."""
     agent_token, _ = setup
     monkeypatch.setattr(
-        proxy, "httpx", type("_httpx", (), {"AsyncClient": _FakeUpstream(500)})
+        proxy.egress, "fetch", _FakeUpstream(500).fetch
     )
     await client.post(
         "/mcp", json=_proxy_call(),

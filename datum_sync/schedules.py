@@ -286,7 +286,7 @@ async def _fire(
         row = await conn.fetchrow(
             """
             SELECT id, name, repository, workspace, params, cron, interval_s,
-                   timezone, next_run
+                   timezone, next_run, created_by
             FROM schedules
             WHERE id = $1 AND enabled AND next_run <= $2
             FOR UPDATE SKIP LOCKED
@@ -301,6 +301,7 @@ async def _fire(
         job_id = None
         error = None
         try:
+            owner_id = await conn.fetchval("SELECT id FROM service_accounts WHERE name=$1", row["created_by"])
             job_id = await jobs.submit(
                 conn,
                 row["repository"],
@@ -308,6 +309,7 @@ async def _fire(
                 json.loads(row["params"]),
                 submitted_by=f"schedule:{row['name']}",
                 triggered_by=f"schedule:{row['name']}",
+                principal_id=owner_id,
             )
         except Exception as exc:  # noqa: BLE001 - recorded, never raised onward
             # A schedule pointing at an unpublished workspace is a normal

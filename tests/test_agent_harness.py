@@ -1,6 +1,6 @@
 """Synthetic agent harness.
 
-Runs 8 concurrent synthetic agents — each a real service account with a
+Runs 7 concurrent synthetic agents — each a real service account with a
 scoped vault — and verifies five correctness properties:
 
 1. Log completeness   — every call the harness makes appears in mcp_call_log.
@@ -82,15 +82,9 @@ CHARACTERS: list[dict[str, Any]] = [
         "governance": True,
     },
     {
-        "name": "fme",
-        "persona": "fme-user",
+        "name": "data",
+        "persona": "data-enginer",
         "weights": {"vault_read": 6, "vault_write": 3, "vault_list": 1},
-        "governance": False,
-    },
-    {
-        "name": "ent",
-        "persona": "entrepreneur",
-        "weights": {"vault_read": 7, "vault_write": 2, "vault_list": 1},
         "governance": False,
     },
 ]

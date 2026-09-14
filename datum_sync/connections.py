@@ -40,7 +40,7 @@ import asyncpg
 
 from datum_sync import crypto
 
-TYPES = ("database", "http", "email_smtp", "email_imap", "file", "oauth_client")
+TYPES = ("database", "http", "email_smtp", "email_imap", "file", "oauth_client", "mcp")
 SCOPES = ("global", "repository", "workspace")
 _AUTH_INJECT_TYPES = frozenset({"bearer", "basic", "header", "query_param"})
 ACCESS = ("read", "write")
@@ -63,6 +63,7 @@ _REQUIRED_CONFIG = {
     "email_imap": ("host",),
     "file": ("root",),
     "oauth_client": ("token_url", "client_id"),
+    "mcp": ("url", "tool_prefix"),
 }
 
 
@@ -125,9 +126,9 @@ def validate(
 
     auth_inject = config.get("auth_inject")
     if auth_inject is not None:
-        if type_ != "http":
+        if type_ not in ("http", "mcp"):
             raise ConnectionStoreError(
-                "auth_inject is only valid for http connections"
+                "auth_inject is only valid for http and mcp connections"
             )
         if not isinstance(auth_inject, dict):
             raise ConnectionStoreError("auth_inject must be an object")

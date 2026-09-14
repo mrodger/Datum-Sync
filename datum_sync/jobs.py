@@ -6,10 +6,9 @@ payloads are dropped if no session is listening and are capped at 8000 bytes,
 so anything that must survive a restart is written to a table first and
 announced second.
 
-Progress is the one deliberate exception: it is announced but not stored. A
-run that reports every percent would otherwise write hundreds of job_log rows
-per job to say nothing durable. A client that reconnects mid-run recovers
-`jobs.status` and the full `job_log`, not the progress bar.
+Status, progress and log notifications are also appended to `job_events` so
+MCP clients can page a durable timeline after reconnecting. `job_log` remains
+the detailed log system of record; the event row stores its bounded notification.
 """
 from __future__ import annotations
 
@@ -50,9 +49,17 @@ def _truncate(text: str) -> str:
 
 
 async def notify(conn: asyncpg.Connection, job_id: uuid.UUID, **payload: Any) -> None:
-    body = {"job_id": str(job_id), **payload}
-    if isinstance(body.get("message"), str):
-        body["message"] = _truncate(body["message"])
+    for field in ("message", "error"):
+        if isinstance(payload.get(field), str):
+            payload[field] = _truncate(payload[field])
+    kind = payload.get("event")
+    if kind not in ("status", "progress", "log"):
+        raise ValueError(f"unknown job event kind: {kind}")
+    event_id = await conn.fetchval(
+        "INSERT INTO job_events(job_id,kind,payload) VALUES($1,$2,$3) RETURNING id",
+        job_id, kind, json.dumps(payload),
+    )
+    body = {"job_id": str(job_id), "event_id": event_id, **payload}
     await conn.execute("SELECT pg_notify($1, $2)", CHANNEL, json.dumps(body))
 
 
@@ -87,6 +94,7 @@ async def submit(
     idempotency_key: str | None = None,
     parent_job: uuid.UUID | None = None,
     triggered_by: str | None = None,
+    principal_id: int | None = None,
 ) -> uuid.UUID:
     """Queue a job. Returns its id.
 
@@ -109,8 +117,8 @@ async def submit(
         job_id = await conn.fetchval(
             """
             INSERT INTO jobs (repository, workspace, params, submitted_by,
-                              parent_job, triggered_by)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                              parent_job, triggered_by, portal_principal_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
             """,
             repository,
@@ -119,6 +127,7 @@ async def submit(
             submitted_by,
             parent_job,
             triggered_by,
+            principal_id,
         )
         if idempotency_key is not None:
             # ON CONFLICT blocks on a concurrent uncommitted insert of the same
@@ -137,8 +146,7 @@ async def submit(
             )
             if claimed is None:
                 raise _KeyRace()
-
-    await notify(conn, job_id, event="status", status="queued")
+        await notify(conn, job_id, event="status", status="queued")
     return job_id
 
 
@@ -223,22 +231,24 @@ async def log(
     # it must LISTEN before reading history (or it loses whatever lands in
     # between), which means the first notifications it sees are usually ones
     # the history read also returns.
-    log_id = await conn.fetchval(
-        """
-        INSERT INTO job_log (job_id, level, message)
-        VALUES ($1, $2, $3) RETURNING id
-        """,
-        job_id,
-        level,
-        message,
-    )
-    await notify(conn, job_id, event="log", id=log_id, level=level, message=message)
+    async with conn.transaction():
+        log_id = await conn.fetchval(
+            """
+            INSERT INTO job_log (job_id, level, message)
+            VALUES ($1, $2, $3) RETURNING id
+            """,
+            job_id,
+            level,
+            message,
+        )
+        await notify(conn, job_id, event="log", id=log_id, level=level, message=message)
 
 
 async def progress(
     conn: asyncpg.Connection, job_id: uuid.UUID, pct: float, message: str = ""
 ) -> None:
-    await notify(conn, job_id, event="progress", pct=pct, message=message)
+    async with conn.transaction():
+        await notify(conn, job_id, event="progress", pct=pct, message=message)
 
 
 async def finish(
@@ -250,18 +260,19 @@ async def finish(
 ) -> None:
     if status not in TERMINAL:
         raise ValueError(f"not a terminal status: {status}")
-    await conn.execute(
-        """
-        UPDATE jobs
-        SET status = $2, completed_at = now(), artifacts = $3, error = $4
-        WHERE id = $1
-        """,
-        job_id,
-        status,
-        json.dumps(artifacts or []),
-        error,
-    )
-    await notify(conn, job_id, event="status", status=status, error=error)
+    async with conn.transaction():
+        await conn.execute(
+            """
+            UPDATE jobs
+            SET status = $2, completed_at = now(), artifacts = $3, error = $4
+            WHERE id = $1
+            """,
+            job_id,
+            status,
+            json.dumps(artifacts or []),
+            error,
+        )
+        await notify(conn, job_id, event="status", status=status, error=error)
 
 
 async def cancel(conn: asyncpg.Connection, job_id: uuid.UUID) -> str:
@@ -272,34 +283,33 @@ async def cancel(conn: asyncpg.Connection, job_id: uuid.UUID) -> str:
     worker process that holds the child's handle, so all this can do is ask:
     the worker listening on job_control does the killing.
     """
-    row = await conn.fetchrow("SELECT status FROM jobs WHERE id = $1", job_id)
-    if row is None:
-        raise JobError(f"no such job {job_id}")
-
-    if row["status"] == "queued":
-        updated = await conn.fetchval(
-            """
-            UPDATE jobs SET status = 'cancelled', completed_at = now()
-            WHERE id = $1 AND status = 'queued'
-            RETURNING id
-            """,
-            job_id,
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT status FROM jobs WHERE id = $1 FOR UPDATE", job_id
         )
-        if updated is not None:
+        if row is None:
+            raise JobError(f"no such job {job_id}")
+
+        if row["status"] == "queued":
+            await conn.execute(
+                """
+                UPDATE jobs SET status = 'cancelled', completed_at = now()
+                WHERE id = $1
+                """,
+                job_id,
+            )
             await notify(conn, job_id, event="status", status="cancelled")
             return "cancelled"
-        # Lost the race to a worker; fall through and signal instead.
-        row = await conn.fetchrow("SELECT status FROM jobs WHERE id = $1", job_id)
 
-    if row["status"] == "running":
-        await conn.execute(
-            "SELECT pg_notify($1, $2)",
-            CONTROL_CHANNEL,
-            json.dumps({"job_id": str(job_id), "action": "cancel"}),
-        )
-        return "signalled"
+        if row["status"] == "running":
+            await conn.execute(
+                "SELECT pg_notify($1, $2)",
+                CONTROL_CHANNEL,
+                json.dumps({"job_id": str(job_id), "action": "cancel"}),
+            )
+            return "signalled"
 
-    return row["status"]
+        return row["status"]
 
 
 async def get(conn: asyncpg.Connection, job_id: uuid.UUID) -> asyncpg.Record | None:
@@ -332,13 +342,14 @@ async def requeue_orphans(conn: asyncpg.Connection) -> int:
     per-worker query keyed on a claimed_by column, or a starting worker will
     requeue a live worker's jobs out from under it.
     """
-    rows = await conn.fetch(
-        """
-        UPDATE jobs SET status = 'queued', started_at = NULL
-        WHERE status = 'running'
-        RETURNING id
-        """
-    )
-    for r in rows:
-        await log(conn, r["id"], "worker restarted; job requeued", level="warn")
+    async with conn.transaction():
+        rows = await conn.fetch(
+            """
+            UPDATE jobs SET status = 'queued', started_at = NULL
+            WHERE status = 'running'
+            RETURNING id
+            """
+        )
+        for r in rows:
+            await log(conn, r["id"], "worker restarted; job requeued", level="warn")
     return len(rows)

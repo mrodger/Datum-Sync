@@ -1,0 +1,1947 @@
+[
+  {
+    "op": "set",
+    "path": "/",
+    "props": {
+      "docDefaults.font": "Aptos",
+      "docDefaults.fontSize": "10pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/section[1]",
+    "props": {
+      "pageWidth": "29.7cm",
+      "pageHeight": "21cm",
+      "marginTop": "0.8cm",
+      "marginBottom": "0.8cm",
+      "marginLeft": "1cm",
+      "marginRight": "1cm",
+      "titlePage": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "",
+      "size": "1pt",
+      "font": "Aptos",
+      "color": "233746",
+      "spaceBefore": "0pt",
+      "spaceAfter": "2pt"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[1]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/datum-mark.png",
+      "width": "0.62in",
+      "alt": "Datum mark"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "DATUM SYNC · PRODUCT OVERVIEW",
+      "size": "8.5pt",
+      "font": "Aptos",
+      "color": "C99A35",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Govern every agent.",
+      "size": "27pt",
+      "font": "Aptos",
+      "color": "172633",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Keep every worker lightweight.",
+      "size": "27pt",
+      "font": "Aptos",
+      "color": "244B6B",
+      "spaceBefore": "0pt",
+      "spaceAfter": "4pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "A single authority plane for agent identity, MCP access, managed credentials, deterministic evidence and reusable artifacts.",
+      "size": "11pt",
+      "font": "Aptos",
+      "color": "667085",
+      "spaceBefore": "0pt",
+      "spaceAfter": "5pt"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "",
+      "size": "1pt",
+      "font": "Aptos",
+      "color": "233746",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[6]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/06-worker-connected.png",
+      "width": "7.55in",
+      "alt": "Connected Datum worker showing the Researcher agent, ready chat composer, governed tools and inspection pane"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 4,
+      "width": "100%",
+      "colWidths": "2700,2700,2700,2700",
+      "caption": "Datum Sync brochure panel"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]",
+    "props": {
+      "c1": "AGENTS\nPermission-bound personas",
+      "c2": "MCP\nOne governed route",
+      "c3": "SECRETS\nNever exposed to workers",
+      "c4": "ARTIFACTS\nDurable and shareable"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[1]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[2]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[3]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[4]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[4]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[1]/tr[1]/tc[4]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "pagebreak",
+    "props": {
+      "type": "page"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "01 · AGENT FLEET",
+      "size": "8.5pt",
+      "font": "Aptos",
+      "color": "C99A35",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "An agent is a governed bundle",
+      "size": "23pt",
+      "font": "Aptos",
+      "color": "172633",
+      "spaceBefore": "0pt",
+      "spaceAfter": "2pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Users connect to a ready persona. Datum Sync supplies the identity, prompt, tools, credentials and limits behind it.",
+      "size": "10.5pt",
+      "font": "Aptos",
+      "color": "667085",
+      "spaceBefore": "0pt",
+      "spaceAfter": "7pt"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "",
+      "size": "1pt",
+      "font": "Aptos",
+      "color": "233746",
+      "spaceBefore": "0pt",
+      "spaceAfter": "4pt",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[11]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/02-principals.png",
+      "width": "8.65in",
+      "alt": "Principals screen showing Manager, Developer, Researcher, Designer, Security, GIS Analyst and Data Enginer"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 4,
+      "width": "100%",
+      "colWidths": "2700,2700,2700,2700",
+      "caption": "Datum Sync brochure panel"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]",
+    "props": {
+      "c1": "CONNECT\nChoose an approved persona in the worker",
+      "c2": "AUTHORIZE\nIssue a short-lived principal session",
+      "c3": "EVALUATE\nRecheck tool and credential policy on every call",
+      "c4": "OPERATE\nReview, restrict or revoke from one portal"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[1]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[2]",
+    "props": {
+      "fill": "244B6B",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[3]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[4]",
+    "props": {
+      "fill": "244B6B",
+      "verticalAlign": "center",
+      "marginTop": "90",
+      "marginBottom": "90",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[4]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[2]/tr[1]/tc[4]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Seven demo personas prove the single-user fleet model today; the existing parent-owner boundary provides the path to separate user fleets.",
+      "size": "9pt",
+      "font": "Aptos",
+      "color": "244B6B",
+      "spaceBefore": "3pt",
+      "spaceAfter": "0pt",
+      "bold": "true",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "pagebreak",
+    "props": {
+      "type": "page"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "02 · GOVERNED ACCESS",
+      "size": "8.5pt",
+      "font": "Aptos",
+      "color": "C99A35",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "One route for MCP and credentials",
+      "size": "23pt",
+      "font": "Aptos",
+      "color": "172633",
+      "spaceBefore": "0pt",
+      "spaceAfter": "2pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "OfficeCLI, PostgreSQL and Datum Harness capabilities are registered once, then exposed per agent through the Datum Sync gateway.",
+      "size": "10.5pt",
+      "font": "Aptos",
+      "color": "667085",
+      "spaceBefore": "0pt",
+      "spaceAfter": "7pt"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "",
+      "size": "1pt",
+      "font": "Aptos",
+      "color": "233746",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[17]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/03-secrets-proxies.png",
+      "width": "5.22in",
+      "alt": "Secrets and Proxies registry with MCP servers, tools and managed service identities"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[17]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/04-mcp-activity.png",
+      "width": "5.22in",
+      "alt": "MCP Activity view with deterministic connection, authorization, dispatch and completion records"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 4,
+      "width": "100%",
+      "colWidths": "2500,2900,3000,2400",
+      "caption": "Datum Sync brochure panel"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]",
+    "props": {
+      "c1": "REGISTER\nAdd endpoints and discover tools",
+      "c2": "GRANT\nBind selected tools and service identities to an agent",
+      "c3": "TRACE\nRecord the endpoint flow without prompts, arguments or results",
+      "c4": "REVOKE\nDisable a tool, server or grant before the next call"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[1]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[2]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[3]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[4]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[4]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[3]/tr[1]/tc[4]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 2,
+      "width": "100%",
+      "colWidths": "5400,5400",
+      "caption": "Visible and protected MCP data"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[4]/tr[1]",
+    "props": {
+      "c1": "OPERATOR VISIBILITY\nServer and tool state · auth type · credential fingerprint and version · effective agents · decision timing",
+      "c2": "PROTECTED BY DESIGN\nNo secret values · no prompts · no tool arguments · no database rows · no returned document text"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[4]/tr[1]/tc[1]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "150",
+      "marginBottom": "150",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[4]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[4]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[4]/tr[1]/tc[2]",
+    "props": {
+      "fill": "244B6B",
+      "verticalAlign": "center",
+      "marginTop": "150",
+      "marginBottom": "150",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[4]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[4]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Operators see labels, fingerprints, versions, effective agents and use state. Upstream credential values never enter the browser, model context or worker process.",
+      "size": "9pt",
+      "font": "Aptos",
+      "color": "244B6B",
+      "spaceBefore": "3pt",
+      "spaceAfter": "0pt",
+      "bold": "true",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "pagebreak",
+    "props": {
+      "type": "page"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "03 · GOVERNED OUTPUTS",
+      "size": "8.5pt",
+      "font": "Aptos",
+      "color": "C99A35",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Artifacts become shared resources",
+      "size": "23pt",
+      "font": "Aptos",
+      "color": "172633",
+      "spaceBefore": "0pt",
+      "spaceAfter": "2pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "A worker can place generated output in a pane, save it through Datum Sync and share it with another named agent without copying files through chat.",
+      "size": "10.5pt",
+      "font": "Aptos",
+      "color": "667085",
+      "spaceBefore": "0pt",
+      "spaceAfter": "7pt"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "",
+      "size": "1pt",
+      "font": "Aptos",
+      "color": "233746",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[23]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/07-artifact-split.png",
+      "width": "5.22in",
+      "alt": "Datum worker split pane showing a governed HTML artifact beside the conversation"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[23]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/05-resources.png",
+      "width": "5.22in",
+      "alt": "Datum Sync resource inventory showing ownership, metadata and a Designer share"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 4,
+      "width": "100%",
+      "colWidths": "2700,2700,2700,2700",
+      "caption": "Datum Sync brochure panel"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]",
+    "props": {
+      "c1": "1 · CREATE\nPrivate to the producing agent",
+      "c2": "2 · INSPECT\nPreview in split or focused pane",
+      "c3": "3 · SHARE\nNamed, time-bounded read access",
+      "c4": "4 · REVOKE\nEffective on the next list or read"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[1]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[2]",
+    "props": {
+      "fill": "244B6B",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[3]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[4]",
+    "props": {
+      "fill": "244B6B",
+      "verticalAlign": "center",
+      "marginTop": "175",
+      "marginBottom": "175",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[4]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[5]/tr[1]/tc[4]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 2,
+      "width": "100%",
+      "colWidths": "5400,5400",
+      "caption": "Governed resource properties"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[6]/tr[1]",
+    "props": {
+      "c1": "DURABLE BY DESIGN\nImmutable versions retain ownership, logical path, content hash, MIME type, source trace and expiry.",
+      "c2": "SAFE BY DEFAULT\nResources start private. Named shares are read-only and HTML previews run inside a restricted sandbox."
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[6]/tr[1]/tc[1]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "150",
+      "marginBottom": "150",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[6]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[6]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[6]/tr[1]/tc[2]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "150",
+      "marginBottom": "150",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[6]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[6]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "true",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Each immutable version carries an owner, logical path, content hash, MIME type, source trace and expiry. HTML previews run in a restricted sandbox.",
+      "size": "9pt",
+      "font": "Aptos",
+      "color": "244B6B",
+      "spaceBefore": "3pt",
+      "spaceAfter": "0pt",
+      "bold": "true",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "pagebreak",
+    "props": {
+      "type": "page"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "04 · DEMONSTRATION",
+      "size": "8.5pt",
+      "font": "Aptos",
+      "color": "C99A35",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Show the complete control loop in ten minutes",
+      "size": "23pt",
+      "font": "Aptos",
+      "color": "172633",
+      "spaceBefore": "0pt",
+      "spaceAfter": "2pt",
+      "bold": "true"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "Move between the operator portal and federated worker to make each policy decision visible and immediate.",
+      "size": "10.5pt",
+      "font": "Aptos",
+      "color": "667085",
+      "spaceBefore": "0pt",
+      "spaceAfter": "7pt"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "paragraph",
+    "props": {
+      "text": "",
+      "size": "1pt",
+      "font": "Aptos",
+      "color": "233746",
+      "spaceBefore": "0pt",
+      "spaceAfter": "3pt",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[29]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/01-portal-overview.png",
+      "width": "3.45in",
+      "alt": "Datum Sync operator overview"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[29]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/06-worker-connected.png",
+      "width": "3.45in",
+      "alt": "Connected Researcher worker"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body/p[29]",
+    "type": "picture",
+    "props": {
+      "src": "/home/spatial-partners/Desktop/Datum-sync/docs/walkthrough/assets/08-artifact-focused.png",
+      "width": "3.45in",
+      "alt": "Focused governed artifact pane"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 5,
+      "cols": 3,
+      "width": "100%",
+      "colWidths": "650,2500,7650",
+      "caption": "Ten-minute Datum Sync demonstration sequence"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]",
+    "props": {
+      "c1": "01",
+      "c2": "Connect Researcher",
+      "c3": "Choose a 15-minute demo or 2, 4, or 8-hour session; the composer is ready immediately."
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[1]",
+    "props": {
+      "fill": "C99A35",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[2]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[3]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[1]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]",
+    "props": {
+      "c1": "02",
+      "c2": "Call a real MCP tool",
+      "c3": "Ask for an Auckland PostgreSQL summary or an OfficeCLI document listing."
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[1]",
+    "props": {
+      "fill": "C99A35",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[2]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[3]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[2]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]",
+    "props": {
+      "c1": "03",
+      "c2": "Inspect the evidence",
+      "c3": "Open MCP Activity and follow authentication, policy, dispatch and completion."
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[1]",
+    "props": {
+      "fill": "C99A35",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[2]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[3]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[3]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]",
+    "props": {
+      "c1": "04",
+      "c2": "Prove control",
+      "c3": "Disable a tool or revoke a credential grant, repeat the request, then restore it."
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[1]",
+    "props": {
+      "fill": "C99A35",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[2]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[3]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[4]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]",
+    "props": {
+      "c1": "05",
+      "c2": "Create and share",
+      "c3": "Save an HTML artifact, focus its pane, share it with Designer, then revoke access."
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[1]",
+    "props": {
+      "fill": "C99A35",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[2]",
+    "props": {
+      "fill": "F5F2E9",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[3]",
+    "props": {
+      "fill": "E8EEF2",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[3]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[7]/tr[5]/tc[3]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "9pt",
+      "bold": "false",
+      "color": "233746"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 1,
+      "width": "100%",
+      "colWidths": "10800",
+      "caption": "Local demonstration start command"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[8]/tr[1]",
+    "props": {
+      "c1": "START · cd /home/spatial-partners/Desktop/Datum-sync · .venv/bin/python local/manage.py start · Portal 127.0.0.1:8210 · Worker 127.0.0.1:8220"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[8]/tr[1]/tc[1]",
+    "props": {
+      "fill": "172633",
+      "verticalAlign": "center",
+      "marginTop": "130",
+      "marginBottom": "130",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[8]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[8]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "8.5pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/body",
+    "type": "table",
+    "props": {
+      "rows": 1,
+      "cols": 2,
+      "width": "100%",
+      "colWidths": "2200,8600",
+      "caption": "Datum Sync product statement"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[9]/tr[1]",
+    "props": {
+      "c1": "DATUM SYNC",
+      "c2": "Connect to a useful agent while identity, MCP access, credentials, evidence and artifacts remain governed in one place."
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[9]/tr[1]/tc[1]",
+    "props": {
+      "fill": "C99A35",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[9]/tr[1]/tc[1]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[9]/tr[1]/tc[1]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "11pt",
+      "bold": "true",
+      "color": "172633"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[9]/tr[1]/tc[2]",
+    "props": {
+      "fill": "244B6B",
+      "verticalAlign": "center",
+      "marginTop": "165",
+      "marginBottom": "165",
+      "marginLeft": "120",
+      "marginRight": "120"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[9]/tr[1]/tc[2]/p[1]",
+    "props": {
+      "align": "left",
+      "spaceBefore": "0pt",
+      "spaceAfter": "0pt"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/body/tbl[9]/tr[1]/tc[2]/p[1]/r[1]",
+    "props": {
+      "font": "Aptos",
+      "size": "11pt",
+      "bold": "true",
+      "color": "FFFFFF"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/",
+    "type": "header",
+    "props": {
+      "type": "default",
+      "text": "DATUM SYNC  /  GOVERNED AGENT FLEET",
+      "size": "7.5pt",
+      "color": "667085"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/",
+    "type": "footer",
+    "props": {
+      "type": "first",
+      "text": "Product overview  ·  September 2026",
+      "size": "7pt",
+      "color": "667085",
+      "align": "center"
+    }
+  },
+  {
+    "op": "add",
+    "parent": "/",
+    "type": "footer",
+    "props": {
+      "type": "default",
+      "text": "Datum Sync product overview  ·  Page ",
+      "field": "page",
+      "size": "7pt",
+      "color": "667085",
+      "align": "center"
+    }
+  },
+  {
+    "op": "set",
+    "path": "/settings",
+    "props": {
+      "updateFields": "true"
+    }
+  }
+]

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f0f1f0">
+  <title>Datum · Federated Worker</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/datum-mark.svg">
+  <link rel="stylesheet" href="/assets/harness.css">
+  <link rel="stylesheet" href="/static/vendor/phosphor/regular/style.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar-backdrop"></div>
+    <div id="app-body">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <a class="sidebar-logo" href="/" aria-label="Datum federated worker">
+            <img class="logo-svg" src="/assets/datum-mark.svg" alt="">
+            <span class="logo-text">Datum</span>
+            <span class="brand-subtitle">Sync worker</span>
+          </a>
+        </div>
+
+        <div class="sidebar-search worker-context">
+          <span class="context-label">Federated agent</span>
+          <span class="agent-label"><i id="sidebar-persona-icon" class="ph ph-user-circle persona-icon" aria-hidden="true"></i><strong id="sidebar-agent">Not connected</strong></span>
+          <span id="sidebar-role">Choose an approved Datum Sync persona.</span>
+        </div>
+
+        <nav class="sidebar-conversations worker-nav" aria-label="Worker information cards">
+          <button class="conv-item active" type="button" data-card="session">
+            <i class="ph ph-user-circle nav-icon" aria-hidden="true"></i>
+            <span><span class="conv-title">Agent session</span><span class="conv-meta">Connection and worker state</span></span>
+          </button>
+          <button class="conv-item" type="button" data-card="activity">
+            <i class="ph ph-chart-bar nav-icon" aria-hidden="true"></i>
+            <span><span class="conv-title">MCP activity</span><span class="conv-meta">This browser session</span></span>
+          </button>
+          <button class="conv-item" type="button" data-card="proxies">
+            <i class="ph ph-plugs nav-icon" aria-hidden="true"></i>
+            <span><span class="conv-title">Secrets &amp; proxies</span><span class="conv-meta">Visible managed access</span></span>
+          </button>
+          <button class="conv-item" type="button" data-card="principal">
+            <i class="ph ph-shield-check nav-icon" aria-hidden="true"></i>
+            <span><span class="conv-title">Principal</span><span class="conv-meta">Current agent bundle</span></span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="footer-kicker">Authority boundary</div>
+          <div><span>Model loop</span><b>Codex</b></div>
+          <div><span>Tool route</span><b>Datum Sync</b></div>
+          <div><span>Local tools</span><b>Disabled</b></div>
+        </div>
+      </aside>
+
+      <div id="content">
+        <header id="header">
+          <div class="header-left">
+            <button id="btn-menu" class="header-btn" aria-label="Toggle navigation">
+              <i class="ph ph-list" aria-hidden="true"></i>
+            </button>
+            <div class="header-persona">
+              <div class="header-icon-box"><img src="/assets/datum-mark.svg" alt=""></div>
+              <i id="header-persona-icon" class="ph ph-user-circle persona-icon" aria-hidden="true"></i>
+              <span id="header-persona-name">Federated worker</span>
+            </div>
+          </div>
+          <div class="header-right">
+            <div id="connection-pill" class="gov-pill gov-off" aria-live="polite">
+              <span class="gov-dot"></span>
+              <span id="connection-label">NOT CONNECTED</span>
+            </div>
+            <div class="gov-pill route-pill" title="Available governed tools">
+              <span class="route-label">TOOLS</span>
+              <span class="gov-count" id="tool-count">0</span>
+            </div>
+            <button id="btn-trace" class="header-btn active" aria-label="Toggle run trace" title="Toggle run trace">
+              <i class="ph ph-list-dashes" aria-hidden="true"></i>
+            </button>
+            <a id="connect" class="worker-connect" href="/connect">Connect agent</a>
+            <button id="disconnect" class="worker-disconnect hidden">Disconnect</button>
+          </div>
+        </header>
+
+        <section class="runtime-strip" aria-label="Worker status">
+          <div><span>Agent</span><strong id="agent">Not connected</strong></div>
+          <div><span>Model</span><strong id="model-card">gpt-5.6-luna</strong></div>
+          <div><span>MCP route</span><strong>Datum Sync</strong></div>
+          <div><span>Local execution</span><strong>Disabled</strong></div>
+        </section>
+
+        <div id="body" class="artifacts-open">
+          <main id="chat-col">
+            <section id="welcome">
+              <div class="welcome-card">
+                <div class="welcome-watermark"><img src="/assets/datum-mark.svg" alt=""></div>
+                <i id="welcome-persona-icon" class="ph ph-user-circle welcome-persona-icon persona-icon" aria-hidden="true"></i>
+                <p class="welcome-kicker">Governed agent runtime</p>
+                <h1 id="welcome-name">Connect a Datum Sync agent</h1>
+                <p id="welcome-role">Choose an approved persona. Its tools and service credentials stay behind the Datum Sync MCP gateway.</p>
+                <div id="welcome-prompts" class="welcome-prompts"></div>
+                <a id="welcome-connect" class="send-btn welcome-connect" href="/connect">Connect agent</a>
+              </div>
+            </section>
+
+            <div id="messages" aria-live="polite"></div>
+
+            <form id="input-area">
+              <div class="input-row">
+                <textarea id="input" rows="1" placeholder="Connect an agent to begin" disabled></textarea>
+                <button id="btn-send" class="send-btn" type="submit" disabled>Send</button>
+              </div>
+              <p class="composer-note">Model requests cross one governed MCP route. Credentials remain in Datum Sync.</p>
+            </form>
+          </main>
+
+          <aside id="artifact-pane" class="open" aria-label="Worker inspection pane">
+            <div class="pane-header">
+              <div class="pane-modes">
+                <button class="pane-mode" data-mode="artifacts"><i class="ph ph-files" aria-hidden="true"></i> Artifacts</button>
+                <button class="pane-mode active" data-mode="trace">Run trace</button>
+                <button class="pane-mode" data-mode="authority">Authority</button>
+              </div>
+              <div class="pane-actions">
+                <span class="pane-title" id="run-state">Idle</span>
+                <button id="btn-pane-focus" class="pane-btn" type="button" aria-label="Expand pane" aria-pressed="false" title="Expand pane">
+                  <i class="ph ph-corners-out" aria-hidden="true"></i>
+                </button>
+                <button id="btn-pane-close" class="pane-btn" aria-label="Close pane"><i class="ph ph-x" aria-hidden="true"></i></button>
+              </div>
+            </div>
+            <div class="pane-content">
+              <section class="pane-view" data-view="artifacts">
+                <div class="artifact-workspace">
+                  <aside class="artifact-catalogue">
+                    <div class="artifact-catalogue-head"><span>Governed resources</span><b id="artifact-count">0</b></div>
+                    <div id="artifact-list" class="artifact-list"><p class="artifact-empty">No resources visible to this agent.</p></div>
+                  </aside>
+                  <article class="artifact-preview">
+                    <div id="artifact-empty" class="artifact-preview-empty"><i class="ph ph-file-dashed" aria-hidden="true"></i><strong>Select an artifact</strong><p>Agent output stays private until it is explicitly shared.</p></div>
+                    <header id="artifact-meta" class="artifact-meta hidden"><div><span id="artifact-owner"></span><h3 id="artifact-title"></h3><code id="artifact-path"></code></div><span id="artifact-access" class="artifact-access"></span></header>
+                    <iframe id="artifact-frame" class="artifact-frame hidden" sandbox="allow-scripts" title="Artifact preview"></iframe>
+                    <pre id="artifact-text" class="artifact-text hidden"></pre>
+                  </article>
+                </div>
+              </section>
+              <section class="pane-view active" data-view="trace">
+                <div id="trace" class="worker-trace">
+                  <div class="trace-entry">
+                    <span class="trace-node"></span>
+                    <div><strong>Worker ready</strong><p>Waiting for an agent session</p></div>
+                  </div>
+                </div>
+              </section>
+              <section class="pane-view" data-view="authority">
+                <div class="authority-panel">
+                  <p class="authority-intro">The worker holds a short-lived agent token. Upstream identities and policy decisions stay in Datum Sync.</p>
+                  <div><span>Conversation loop</span><b>Codex CLI</b></div>
+                  <div><span>Business tools</span><b>Datum Sync MCP</b></div>
+                  <div><span>Service credentials</span><b>Brokered</b></div>
+                  <div><span>Authorization</span><b>Per agent and tool</b></div>
+                  <div><span>Operational log</span><b>Payload-free</b></div>
+                  <div><span>Revocation</span><b>Next catalogue or call</b></div>
+                </div>
+              </section>
+            </div>
+          </aside>
+          <div id="pane-focus-backdrop" class="pane-focus-backdrop" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="worker-card-overlay" class="overlay" aria-hidden="true">
+    <section class="worker-popout" role="dialog" aria-modal="true" aria-labelledby="worker-card-title">
+      <header class="worker-popout-head">
+        <div><p id="worker-card-kicker" class="welcome-kicker">Worker view</p><h2 id="worker-card-title">Agent session</h2></div>
+        <button id="worker-card-close" class="pane-btn" type="button" aria-label="Close card"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </header>
+      <div id="worker-card-body" class="worker-popout-body"></div>
+      <footer class="worker-popout-foot">Read-only worker view. Use the Datum Sync portal for governance changes.</footer>
+    </section>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

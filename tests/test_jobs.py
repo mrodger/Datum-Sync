@@ -214,6 +214,10 @@ async def test_oversized_notify_payload_does_not_raise(db, workspace):
     await jobs.log(db, job_id, "x" * 20000)
     stored = (await jobs.get_log(db, job_id))[0]["message"]
     assert len(stored) == 20000, "the log row keeps the full message"
+    # Guard: JOB-007. The durable event is bounded even though job_log is not.
+    event = await db.fetchrow("SELECT kind,payload FROM job_events WHERE job_id=$1 ORDER BY id DESC LIMIT 1",job_id)
+    payload=json.loads(event["payload"])
+    assert event["kind"]=="log" and len(payload["message"]) < 2100
 
 
 # -- orphan recovery -------------------------------------------------------
