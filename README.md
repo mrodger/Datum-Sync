@@ -1,82 +1,132 @@
-# Datum-Sync
+# Datum Sync
 
-Multi-tenant agent gateway. Human operators and AI agents authenticate the same way, get tiered access to workspaces, credentials, and vault paths, and execute jobs through a single orchestration layer.
+Datum Sync is an authority plane for a fleet of AI agents. Agents get an identity, a
+permission bundle and a governed route to tools; they never get the credentials
+behind those tools. **Datum Sync contains no LLM and calls no model.** The model runs
+in a small, replaceable worker. Datum Sync decides what that worker may do, injects
+the secrets server-side, records every call as payload-free evidence, and can revoke
+any of it without restarting anything.
 
-**Datum-Sync contains no LLM and calls no model.** It runs subprocesses (FME, Python, shell), enforces auth via bearer tokens and glob-matched vault scopes, and logs everything. The intelligence is in the agents. The gateway enforces rules.
+```
+worker (Codex, no secrets)  ──consent──▶  Datum Sync  ──governed MCP──▶  OfficeCLI · PostgreSQL · harness tools
+        :8220                             :8210 portal                    upstream secrets stay here
+                                          :8200 API / jobs / vault
+```
 
-## Status
-
-**Built — 10 implementation steps complete, 406+ tests, 112 guards.** Running on VM112 at `:8200`.
-
-Three registered principals: `Marcus` (tier 4 admin), `superuser` (tier 5), `harness-researcher` (tier 2 agent). Agents register the same way humans do — just a different tier of auth.
+Read [docs/architecture.md](docs/architecture.md) for the trust boundary, the request
+path, the four revocation controls and the production gap list. The six-page
+product overview is at [docs/walkthrough/output/Datum-Sync-Walkthrough.pdf](docs/walkthrough/output/Datum-Sync-Walkthrough.pdf).
 
 ## What it does
 
-Datum-Sync publishes Python workspaces as MCP-callable tools — accessible via REST API, MCP Streamable HTTP, or a web UI. Workspaces declare their inputs, outputs, and connection requirements in a manifest. The platform handles auth, scheduling, automation, delivery, and hosted service proxying.
+| Surface | What you get |
+|---|---|
+| **Agent principals** | Every agent is a first-class principal with an owner, lifecycle state, grant and audit trail. Enrolment is single-use and needs human approval. |
+| **Consent and sessions** | A worker connects through OAuth consent. The operator picks the agent and a 15-minute, 2-, 4- or 8-hour session; the deadline is absolute. |
+| **Governed MCP** | Operators register MCP servers once. Tools are discovered, enabled per tool with a minimum tier, and granted to agents by name. One `/mcp` endpoint serves everything. |
+| **Managed credentials** | Upstream secrets are write-only, versioned, rotated only after a live probe, and injected at dispatch. Agents receive explicit, revocable use grants — never the value. |
+| **Evidence** | Every MCP call leaves a deterministic timeline — receipt, authentication, session, authorization, dispatch, completion or denial — with no prompts, arguments or results. |
+| **Governed resources** | Agents save versioned, private artifacts and share them with one named agent for a bounded time. Operators see ownership and shares and can revoke. |
+| **Workspaces and jobs** | The original gateway: Python workspaces published as REST, MCP and web tools, with schedules, automations, hosted services and a path-scoped vault. |
 
-## Auth model
+## Quickstart
 
-Five tiers control what a principal (human or agent) can access:
-
-| Tier | Role | Access |
-|------|------|--------|
-| 1 | Read-only | Can authenticate, read public state |
-| 2 | Internal | Read internal connections and vault paths |
-| 3 | Read/write | Execute workspaces, write to scoped vault paths |
-| 4 | Admin | Manage accounts, connections, automations |
-| 5 | Superuser | Full platform access, no scope restrictions |
-
-Accounts and agents are managed via the Admin panel or REST API. Revoke drops a principal to tier 1 (reversible); Delete removes permanently.
-
-## Key concepts
-
-- **Workspaces** — Python modules with a typed parameter interface and structured output
-- **Connections** — scoped, tiered credential store (database, HTTP, email, file) with AES-GCM encryption bound to connection name as AAD
-- **Automations** — YAML-configured triggers and actions (schedule, webhook, email)
-- **Hosted services** — publish a workspace output as a persistent web service at `/serve/{name}/`
-- **MCP endpoint** — expose workspaces as tools callable from any MCP-compatible AI client
-- **Vault gate** — path-scoped NFS vault access with full audit log, pySHACL coherence validation
-- **MCP call log** — uniform audit spine for all MCP requests across all principals
-- **Credential proxy** — two-level identity with auth injection and SSRF guard
-
-## Architecture
-
-- FastAPI backend, PostgreSQL + PostGIS (`:5435`)
-- MCP Streamable HTTP transport with OAuth 2.0 PKCE
-- APScheduler for cron-based triggers
-- `pg_notify` for durable SSE streaming
-- Vanilla JS web UI with account/agent management
-- pySHACL for vault_scope coherence validation at account write time
-
-## Holonic design
-
-Datum-Sync is the **Head holon** in a Moderated Group holarchy. Each agent VM is a Member holon with full local autonomy for operations that don't cross the boundary. The `service_accounts` table is the membership registry; `vault_scope` is the boundary graph.
-
-See [`PROPOSAL.md §4`](PROPOSAL.md) and [`spec/holonic-shacl-analysis.md`](spec/holonic-shacl-analysis.md) for the full framing.
-
-## Running
+Requirements: Python 3.11+, PostgreSQL 16 with PostGIS and pgcrypto (the included
+`docker-compose.yml` starts one on `:5435`).
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn datum_sync.api:app --host 0.0.0.0 --port 8200
+cp .env.example .env                      # set PUBLIC_URL; DATABASE_URL matches docker-compose
+docker compose up -d db
+export DATUM_SYNC_SECRET_KEY_01=$(python -m datum_sync.crypto)   # seals managed credentials
+export LEGACY_MCP_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')
+python -m datum_sync.migrate              # applies migrations 001–023
+python -m datum_sync.portal_seed          # creates the operator; password goes to .runtime/operator.txt
+uvicorn datum_sync.portal:app --host 127.0.0.1 --port 8210
 ```
 
-`datum_sync.runner` is the job runner, not the server — it is imported by the
-worker and has no `__main__`.
+`demo/manage.py start` generates these values for you and keeps them in
+`.runtime/config.json`; set them by hand only when running the portal directly.
 
-Database: PostgreSQL + PostGIS on `:5435`. Apply migrations in order: `migrations/001_*.sql` → `migrations/006_*.sql`.
+Sign in at `http://127.0.0.1:8210` as `operator`. For the full demonstration stack —
+portal, worker, the legacy adapter and the demo MCP providers on a private
+PostgreSQL cluster — use the launcher instead:
 
-## Agent auth plane (this branch)
+```bash
+python demo/manage.py start
+python demo/provision_personas.py --register     # seven persona agents with their grants
+```
 
-`prototype/agent-auth-plane` adds a loopback auth portal alongside the API:
-agent principals with enrolment and lifecycle, OAuth consent with 15-minute to
-8-hour sessions, governed MCP server registration with per-tool control,
-write-only managed upstream credentials with explicit agent grants, payload-free
-MCP flow evidence, and governed shared resources.
+Then open the worker at `http://127.0.0.1:8220`, choose **Connect agent**, pick
+**researcher** and a session length, and ask it to list the Office documents it can
+access. `docs/prototype/INSTRUCTIONS.md` is the step-by-step demo runbook.
 
-- `datum_sync/portal.py` — the portal app (`uvicorn datum_sync.portal:app`, `:8210`); helpers in `portal_core`, `federation`, `credential_access`, `mcp_observe`, `resources`, `legacy_mcp`, `demo_mcp`, `egress`, `persona_profiles`
-- `migrations/016`–`023` — additive schema for the above
-- `worker/` — a Datum-branded federated Codex worker whose only tool route is the portal's MCP endpoint
-- `demo/` — `manage.py start` runs portal, worker, providers and a private PostgreSQL; `provision_personas.py` seeds the persona fleet
-- `docs/prototype/` — how to run and demo it; `docs/walkthrough/` — five-page product overview; `docs/review/` — the security review record
+## Repository layout
+
+```
+datum_sync/          the service: API (api.py), portal (portal.py), MCP gateway (mcp.py, federation.py),
+                     credentials (credential_access.py), evidence (mcp_observe.py), resources (resources.py),
+                     jobs, schedules, automations, vault, hosted services; static-v2/ and portal_static/ UIs
+migrations/          001–015 original schema · 016–023 agent auth plane (all additive)
+tests/               pytest suite plus the standalone gates break_the_guard.py, browser_smoke.py, flow_geometry.py
+worker/              the federated Codex worker: app.py, codex_bridge.py, datum_sync_client.py, vendored branding
+demo/                manage.py (start/stop/test the local stack), provision_personas.py, personas.py, verify.py
+docs/architecture.md Datum Sync vs the worker; production considerations
+docs/walkthrough/    brochure build (OfficeCLI), demo video recorder (Playwright), screenshots, outputs
+docs/prototype/      runbooks: INSTRUCTIONS, PERSONAS, WALKTHROUGH narration, INTEGRATIONS, IMPLEMENTATION
+docs/review/         security review record and delivery summary
+spec/                original design documents and the holonic framing
+repositories/        sample workspaces (Hermes, SCIMAC, Testing)
+deploy/              systemd units for the API and worker
+```
+
+## Auth model
+
+Five tiers control what a principal — human or agent — can do:
+
+| Tier | Role | Access |
+|------|------|--------|
+| 1 | Read-only | Authenticate, read public state |
+| 2 | Internal | Read internal connections and vault paths; MCP catalogue |
+| 3 | Read/write | Execute workspaces, write to scoped vault paths; `mcp:operate` |
+| 4 | Admin | Manage accounts, connections, automations, MCP servers |
+| 5 | Superuser | Full platform access, no scope restrictions |
+
+A grant can only narrow what a tier allows. Elevation is a separate, time-boxed
+OAuth device-flow request that a human approves; refresh cannot extend its deadline.
+
+## Testing
+
+```bash
+pytest -q                                   # service suite (needs the database)
+python tests/break_the_guard.py             # proves each guard is load-bearing
+python tests/browser_smoke.py               # Playwright, needs a running server
+python tests/flow_geometry.py               # layout parity with the reference UI
+pytest worker/tests                         # the worker, no database needed
+python demo/manage.py test                  # portal + worker suites on a disposable database
+```
+
+Stop the worker before running the service suite; a live worker claims the tests'
+jobs. `CLAUDE.md` explains the gates and what a skipped test means.
+
+## Design principles
+
+- **The gateway enforces, the agents think.** No model inside Datum Sync; no
+  credentials inside the worker.
+- **Everything is a principal.** Humans and agents register the same way and are
+  governed by the same tier, grant, session and audit records.
+- **Deny by default, revoke immediately.** Tools, servers, grants and agents are
+  separate controls; each takes effect on the next call.
+- **Evidence without payloads.** The audit trail proves what happened without
+  storing what was said.
+- **Holonic.** Datum Sync is the head holon of a moderated group; each agent runtime
+  is a member with local autonomy inside the boundary it was granted. See
+  [`PROPOSAL.md`](PROPOSAL.md) and [`spec/holonic-shacl-analysis.md`](spec/holonic-shacl-analysis.md).
+
+## Architecture
+
+FastAPI, PostgreSQL + PostGIS, `asyncpg` with no ORM. MCP Streamable HTTP with OAuth
+2.1 PKCE and device flow. `pg_notify` for durable SSE and job events. Hand-written
+vanilla-JS UIs. AES-256-GCM sealed secrets with key-id prefixes. Subprocess-isolated
+workspace execution. Pinned-IP egress for every credentialed outbound call.
